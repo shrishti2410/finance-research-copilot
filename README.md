@@ -4,8 +4,9 @@ An LLM-powered research agent that answers questions about public companies by
 combining **RAG over SEC filings** with **live tools** (stock price, ratio
 calculation, news search).
 
-> **Status:** early. The inference proxy and the persistence/auth layer are
-> implemented; ingestion, RAG, tools, and the agent are still stubs.
+> **Status:** early. The inference proxy, the persistence/auth layer, and SEC
+> filing ingestion (fetch → parse → chunk) are implemented; RAG, tools, and the
+> agent are still stubs. See [docs/PROJECT.md](docs/PROJECT.md#6-status).
 
 ## Architecture
 

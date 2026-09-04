@@ -25,6 +25,17 @@ class Settings(BaseSettings):
     db_pool_size: int = 5
     db_max_overflow: int = 10
 
+    # --- SEC EDGAR ---
+    # EDGAR rejects requests without a descriptive User-Agent carrying a real
+    # contact address. See https://www.sec.gov/os/webmaster-faq#developers
+    sec_edgar_user_agent: str = "finance-research-copilot (contact: set SEC_EDGAR_USER_AGENT)"
+    # SEC's published ceiling is 10 requests/second. Staying under it is the
+    # difference between being a good citizen and being IP-blocked.
+    sec_requests_per_second: float = 5.0
+    # Downloaded filings are cached here so reruns cost SEC nothing. `data/` is
+    # gitignored.
+    edgar_cache_dir: str = "data/edgar"
+
     # --- Inference ---
     # Any OpenAI-compatible server: vLLM, Ollama, or llama.cpp.
     inference_base_url: str = "http://127.0.0.1:8001/v1"

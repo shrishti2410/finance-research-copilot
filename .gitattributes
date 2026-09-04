@@ -1,0 +1,7 @@
+# Normalise line endings. Without this, checking out on Windows rewrites every
+# file to CRLF and `git add` warns on all 60+ of them; a Linux clone would then
+# see the whole tree as modified.
+* text=auto eol=lf
+
+# Cached filings are binary-ish fixtures; never touch their bytes.
+*.html -text

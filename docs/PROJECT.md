@@ -140,13 +140,44 @@ history; Redis sliding-window rate limiting as ASGI middleware. Cross-user
 isolation is enforced and tested — `tests/test_user_isolation.py`. See
 `docs/DATABASE.md` and `docs/RATE_LIMITING.md`.
 
-### Milestones 4+ — not started
+### Milestone 4 — ingestion: in progress
 
-`ingestion/`, `rag/`, `tools/`, `agent/`, `eval/`, and `api/routes.py` are still
-docstring-only stubs (23 modules). **There is no `/ask` endpoint** — the copilot's
-actual product surface, and everything in sections 1-3 above that describes
-retrieval and tool use, remains unimplemented. What exists today is the platform
-the agent will sit on, not the agent.
+Implemented, for two tickers (NVDA, AAPL) and their most recent 10-K each:
+
+**`ingestion/edgar_client.py`** — ticker → CIK via SEC's ticker map, latest
+filing via `data.sec.gov/submissions/`, document download from `/Archives/`.
+Rate limited below SEC's published 10 req/s ceiling; filings cached under
+`data/edgar/` (gitignored) so reruns cost SEC nothing. Exact form matching, so a
+`10-K/A` amendment is never returned in place of the 10-K.
+
+**`ingestion/parser.py`** — sections located by document structure, not by regex
+over flattened text. The real Item heading is a body-level block with no
+`<table>` ancestor; the table-of-contents copy is always inside a table. Extracts
+Item 1A, Item 7, and the consolidated income statement as separate structured
+objects. Page furniture (bare page numbers, "Table of Contents", running
+footers, and any short line repeated ≥5×) is stripped, and sentences the filing
+split across a page boundary are stitched back together.
+
+**`ingestion/chunker.py`** — prose packed to ~500 tokens with ~50 token overlap
+using the real Qwen2.5-1.5B-Instruct tokenizer, on paragraph/sentence
+boundaries. Financial tables are emitted as exactly one chunk each and never
+split. Every chunk carries `company`, `filing_type`, `fiscal_period`, `section`,
+`chunk_index`, plus provenance back to the sec.gov URL.
+
+Current output: **NVDA 72 chunks, AAPL 41**, zero mid-sentence splits.
+
+Not yet done in this milestone: `ingestion/pipeline.py` is still a stub. It is
+the orchestrator that writes chunks to the vector store, and there is no vector
+store yet — it belongs with `rag/`, not ahead of it. Multi-year and multi-ticker
+coverage is also deferred; the current scope is deliberately two filings.
+
+### Milestones 5+ — not started
+
+`rag/`, `tools/`, `agent/`, `eval/`, and `api/routes.py` are still
+docstring-only stubs. **There is no `/ask` endpoint** — the copilot's actual
+product surface, and everything in sections 1-3 above that describes retrieval
+and tool use, remains unimplemented. What exists today is the platform the agent
+will sit on, plus the front half of its document pipeline.
 
 ### Inference backend: Ollama, not vLLM
 
