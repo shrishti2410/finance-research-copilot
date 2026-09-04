@@ -108,7 +108,7 @@ All credentials come from environment variables — see `.env.example`.
 
 ## 6. Status
 
-Last updated 2026-09-04, after an evidence-based audit of milestones 0-3.
+Last updated 2026-09-04, after milestone 5's retrieval layer landed.
 
 ### Milestones 0-3 — complete
 
@@ -166,18 +166,78 @@ split. Every chunk carries `company`, `filing_type`, `fiscal_period`, `section`,
 
 Current output: **NVDA 72 chunks, AAPL 41**, zero mid-sentence splits.
 
-Not yet done in this milestone: `ingestion/pipeline.py` is still a stub. It is
-the orchestrator that writes chunks to the vector store, and there is no vector
-store yet — it belongs with `rag/`, not ahead of it. Multi-year and multi-ticker
-coverage is also deferred; the current scope is deliberately two filings.
+**`ingestion/pipeline.py`** — fetch → parse → chunk → embed → store, for one
+ticker. Idempotent: chunk ids derive from the accession number and the store
+upserts on them, so re-running after a chunker change updates rows in place
+instead of leaving two generations competing for the top-k.
 
-### Milestones 5+ — not started
+Multi-year and multi-ticker coverage is deferred; the current scope is
+deliberately two filings.
 
-`rag/`, `tools/`, `agent/`, `eval/`, and `api/routes.py` are still
-docstring-only stubs. **There is no `/ask` endpoint** — the copilot's actual
-product surface, and everything in sections 1-3 above that describes retrieval
-and tool use, remains unimplemented. What exists today is the platform the agent
-will sit on, plus the front half of its document pipeline.
+### Milestone 5 — retrieval: embeddings, vector store, retriever
+
+**`rag/embeddings.py`** — `BAAI/bge-small-en-v1.5`, 384 dimensions, 33M
+parameters, on CPU. No `sentence-transformers` dependency: for this model that
+library's forward pass is CLS pooling plus an L2 norm. Two entry points, because
+BGE is asymmetric — queries take the retrieval instruction prefix, passages do
+not, and getting it backwards costs recall without erroring.
+
+Chunks are sized in *Qwen* tokens and BGE's tokenizer disagrees, so ~13% of them
+overflow its 512-token limit (longest measured: 560). Rather than let the
+tokenizer drop the tail, an over-long passage is embedded in overlapping windows
+and pooled into one renormalized vector.
+
+**`rag/vector_store.py`** — one `filing_chunks` table in the existing Postgres.
+No separate vector service: at this size it would be pure operational cost, and
+co-locating vectors with metadata makes a filter a WHERE clause the planner
+applies *before* the top-k rather than a post-filter over an approximate result
+set.
+
+**`rag/retriever.py`** — `search_filings(query, company=None, section=None)`.
+Filters push into SQL; `company` accepts a ticker or a name substring and
+`section` accepts shorthand (`"risk"`, `"mdna"`, `"income"`).
+
+Measured on this machine, 113 chunks from the two filings:
+
+| stage | measurement |
+|---|---|
+| embedding, 113 chunks | **19.9 s** — 176 ms/chunk, 5.7 chunks/s, CPU |
+| encoder load (once per process) | 11.7 s |
+| query latency, warm | 33-36 ms (embed + search) |
+| first query after load | ~2.0 s (torch's first forward pass) |
+
+**Retrieval quality is good on prose and weak on tables.** "What are the main
+competitive risks?" returns three on-topic Risk Factors passages (0.719-0.722),
+and the same query filtered to NVDA returns NVDA's risk-factor summary first
+(0.690). But "What was total revenue?" ranks the income statement **5th**
+(0.646) behind MD&A prose *about* revenue (0.740) — a rendered table is mostly
+digits, and a conversational question embeds close to sentences, not to numbers.
+`content_type="table"` reaches it directly, and a hybrid keyword/vector retrieval
+or a table-aware summary line is the real fix. Not done yet.
+
+### pgvector, and the fallback this machine runs
+
+The intended column type is `vector(384)` with an HNSW index, and that is what
+`alembic upgrade head --sql` emits. **The development host cannot install
+pgvector** — it is a C extension, the portable Postgres 16.9 here has no
+`vector.control`, there is no MSVC toolchain to build it, and no Docker. So
+migration `0002` probes `pg_available_extensions` and falls back to a plain
+`real[]` column, over which `rag/vector_store.py` computes the dot product in
+SQL.
+
+Because embeddings are L2-normalized, cosine similarity equals the inner
+product, and **both backends return identical scores** — the fallback changes
+how fast a search runs, not what it returns, which is what makes the numbers
+above worth reporting. What it does not have is an ANN index: every search is a
+sequential scan. Fine at 113 rows, useless at a million. **HNSW is therefore
+unverified**, exactly like continuous batching below.
+
+### Milestones 6+ — not started
+
+`tools/`, `agent/`, `eval/`, and `api/routes.py` are still docstring-only stubs.
+**There is no `/ask` endpoint** — the copilot's actual product surface. Retrieval
+now works end to end from the command line, but nothing serves it over HTTP and
+no agent reasons over what it returns.
 
 ### Inference backend: Ollama, not vLLM
 

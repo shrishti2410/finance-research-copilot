@@ -24,7 +24,18 @@ email-validator
 
 # Ingestion (SEC EDGAR -> parsed sections -> chunks)
 lxml                 # 10-K HTML/inline-XBRL parsing
-transformers         # tokenizer only; AutoTokenizer needs no torch
+transformers         # Qwen tokenizer for chunk sizing; bge-small for embeddings
+
+# Retrieval (chunks -> embeddings -> pgvector -> ranked passages)
+# torch is CPU-only here. On Windows the default PyPI wheel already is; on
+# Linux, install from https://download.pytorch.org/whl/cpu to avoid pulling
+# ~2.5GB of CUDA that nothing on this machine can use.
+torch                # bge-small forward pass
+numpy                # vector arithmetic in rag/
+# No sentence-transformers: for bge-small it is CLS pooling plus an L2 norm,
+# which rag/embeddings.py does in thirty lines.
+# No pgvector python package: rag/vector_store.py binds vectors as text and
+# casts in SQL, so the extension needs no client-side codec.
 
 # Rate limiting
 redis>=5.0

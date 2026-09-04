@@ -27,8 +27,13 @@ from db.base import Base  # noqa: E402
 
 DIALECT = postgresql.dialect()
 
-# Alembic's own bookkeeping table has no model, so it is not drift.
-IGNORED = {"alembic_version"}
+# Tables with no ORM model, so their absence from Base.metadata is not drift.
+#   alembic_version   Alembic's own bookkeeping.
+#   filing_chunks     raw DDL in migration 0002. Its embedding column is
+#                     vector(384) or real[] depending on whether pgvector is
+#                     installed on the target server, which is not something
+#                     Base.metadata can express.
+IGNORED = {"alembic_version", "filing_chunks"}
 
 
 def normalize(statement: str) -> str:
