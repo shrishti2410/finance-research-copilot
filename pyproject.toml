@@ -1,0 +1,12 @@
+[project]
+name = "finance-research-copilot"
+version = "0.0.1"
+description = "LLM agent that answers questions about public companies using SEC filings (RAG) and live tools."
+requires-python = ">=3.11"
+readme = "README.md"
+
+[tool.pytest.ini_options]
+testpaths = ["eval", "tests"]
+
+[tool.ruff]
+line-length = 100

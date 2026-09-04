@@ -1,0 +1,41 @@
+# vLLM serving Qwen2.5-7B-Instruct with an OpenAI-compatible API.
+# Requires an NVIDIA GPU + nvidia-container-toolkit. See docs/INFERENCE.md.
+#
+#   docker compose -f docker-compose.vllm.yml up
+#
+# Then set in .env:
+#   INFERENCE_BASE_URL=http://127.0.0.1:8001/v1
+#   INFERENCE_MODEL=qwen2.5-7b-instruct
+
+services:
+  vllm:
+    image: vllm/vllm-openai:latest
+    ports:
+      - "8001:8000"
+    volumes:
+      # Reuse the host HuggingFace cache so weights download only once.
+      - ${HOME:-~}/.cache/huggingface:/root/.cache/huggingface
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
+    # vLLM workers communicate over shared memory; Docker's 64MB default
+    # for /dev/shm is far too small and fails in non-obvious ways.
+    ipc: host
+    command:
+      - --model=Qwen/Qwen2.5-7B-Instruct
+      - --served-model-name=qwen2.5-7b-instruct
+      - --max-model-len=8192
+      - --gpu-memory-utilization=0.90
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      # /health returns 200 only once weights are loaded and the engine is live.
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 40          # generous: a cold 7B download can take a while
+      start_period: 60s

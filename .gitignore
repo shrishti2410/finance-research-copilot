@@ -1,0 +1,31 @@
+# Environment
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Local data / indexes
+data/
+*.sqlite
+*.duckdb
+chroma/
+.chroma/
+index/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

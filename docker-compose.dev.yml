@@ -1,0 +1,53 @@
+# Local development infrastructure: Postgres and Redis.
+#
+#   docker compose -f docker-compose.dev.yml up -d
+#   python -m alembic upgrade head
+#
+# Matches the DATABASE_URL and REDIS_URL defaults in .env.example.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: copilot-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: finance_copilot
+    ports:
+      # Bound to loopback, not 0.0.0.0: a dev database with a password of
+      # "postgres" should not be reachable from the local network.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # `alembic upgrade` immediately after `up -d` otherwise races the first
+      # boot, which initializes the cluster before it accepts queries.
+      test: ["CMD-SHELL", "pg_isready -U postgres -d finance_copilot"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: copilot-redis
+    ports:
+      - "127.0.0.1:6379:6379"
+    # No volume, and no persistence flags. Rate-limit counters are worth less
+    # than the window they cover; losing them on restart costs one window of
+    # enforcement, while fsyncing them would put a disk write in front of every
+    # request. maxmemory-policy is the safety net: if the keyspace ever grows
+    # unexpectedly, evict old counters rather than start refusing writes.
+    command: >
+      redis-server
+      --save ""
+      --appendonly no
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pgdata:
