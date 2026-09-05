@@ -6,15 +6,13 @@ Mounted so far:
   /health                 process liveness (no upstream dependency)
   /auth/*                 signup, login, current user
   /conversations/*        threads and their messages
+  /ask                    put a question to the agent loop
   /v1/health              readiness, including the inference server
   /v1/models              what the inference server is serving
   /v1/chat/completions    proxied chat, streaming or buffered
 
 `/v1` is reserved for the OpenAI-compatible passthrough, because that is where a
 client SDK expects to find it. This app's own API lives at the root.
-
-Agent-facing routes (`/ask`) live in api/routes.py and are wired in once
-`agent/` exists.
 """
 
 import logging
@@ -24,7 +22,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
-from api import inference_proxy, routes_auth, routes_chat
+from api import inference_proxy, routes, routes_auth, routes_chat
 from api.rate_limit import RateLimiter, RateLimitMiddleware
 from core.config import settings
 from db.base import DatabaseUnavailable, SessionLocal, dispose_engine
@@ -63,6 +61,7 @@ app.add_middleware(RateLimitMiddleware, limiter=limiter)
 
 app.include_router(routes_auth.router)
 app.include_router(routes_chat.router)
+app.include_router(routes.router)
 app.include_router(inference_proxy.router, prefix="/v1")
 
 

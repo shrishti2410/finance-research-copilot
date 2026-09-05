@@ -106,3 +106,46 @@ class MessagePage(BaseModel):
 
     messages: list[MessageOut]
     next_cursor: int | None
+
+
+# ── the agent surface ────────────────────────────────────────────────────────
+
+class AskRequest(BaseModel):
+    """A question put to the agent, in the context of an existing conversation."""
+
+    conversation_id: uuid.UUID
+    message: str = Field(min_length=1, max_length=8000)
+    # Off by default: a trace is a debugging artifact, sometimes larger than the
+    # answer, and most callers want the answer. It is stored on the assistant
+    # message either way, so declining it here loses nothing.
+    include_trace: bool = False
+
+
+class AskStep(BaseModel):
+    """One row of the agent's trace."""
+
+    iteration: int
+    tool: str
+    arguments: dict
+    result: object
+    latency_ms: float
+    model_latency_ms: float
+    ok: bool
+
+
+class AskResponse(BaseModel):
+    conversation_id: uuid.UUID
+    # Ids of the two messages this call persisted, so a client can fetch or
+    # render them without re-reading the thread.
+    user_message_id: int
+    assistant_message_id: int
+    answer: str
+    # False when the loop hit its iteration limit or the model was unreachable.
+    # The answer field still holds a written explanation in that case, never an
+    # empty string -- but a caller must be able to tell the two apart.
+    completed: bool
+    stop_reason: str
+    iterations: int
+    model: str
+    total_ms: float
+    steps: list[AskStep] | None = None

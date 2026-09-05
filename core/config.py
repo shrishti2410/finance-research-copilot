@@ -5,9 +5,10 @@ code goes through here instead: secrets and DSNs deserve to fail loudly at boot
 rather than silently at the first request.
 """
 
+import secrets
 from functools import lru_cache
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Sentinel default so the app still boots for `alembic --sql` and unit tests,
@@ -51,6 +52,29 @@ class Settings(BaseSettings):
     def strip_trailing_slash(cls, v: str) -> str:
         # httpx joins base_url and path with exactly one separator; a trailing
         # slash here produces "/v1//models".
+        return v.rstrip("/")
+
+    # --- Agent ---
+    # The loop calls the app's own OpenAI-compatible proxy rather than Ollama
+    # directly, so agent traffic goes through the same timeouts, logging and
+    # upstream config as every other client.
+    agent_inference_base_url: str = "http://127.0.0.1:8000/v1"
+    # Tool calling is the whole mechanism here, and a 1.5B model picks tools
+    # unreliably. 7B is the smallest that holds a four-tool schema and a
+    # two-company comparison together.
+    agent_model: str = "qwen2.5:7b"
+    agent_max_iterations: int = 5
+
+    # Lets the process recognise its own loopback calls and skip rate limiting
+    # on them. Random per process and never written down: it is not a
+    # credential anyone provisions, and a restart invalidates it. Without it a
+    # single /ask would spend five of the caller's twenty anonymous requests a
+    # minute on the app talking to itself.
+    internal_token: str = Field(default_factory=lambda: secrets.token_urlsafe(32))
+
+    @field_validator("agent_inference_base_url")
+    @classmethod
+    def strip_agent_trailing_slash(cls, v: str) -> str:
         return v.rstrip("/")
 
     # --- Auth ---

@@ -5,7 +5,8 @@
     POST /conversations/{id}/messages      append a message
     GET  /conversations/{id}/messages      read history (keyset paginated)
 
-Every handler is scoped to the authenticated user by `_owned_conversation`.
+Every handler is scoped to the authenticated user by `owned_conversation`,
+which POST /ask reuses.
 There is no route that reads a conversation without that check.
 """
 
@@ -32,7 +33,7 @@ router = APIRouter(prefix="/conversations", tags=["conversations"])
 TITLE_MAX = 200
 
 
-async def _owned_conversation(
+async def owned_conversation(
     conversation_id: uuid.UUID, user: User, session: AsyncSession
 ) -> Conversation:
     """Fetch a conversation, or 404.
@@ -50,6 +51,34 @@ async def _owned_conversation(
     if conversation is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found.")
     return conversation
+
+
+def append_message(
+    session: AsyncSession,
+    conversation: Conversation,
+    role: str,
+    content: str,
+    meta: dict | None = None,
+) -> Message:
+    """Add a message and bump the thread's activity. Does not commit.
+
+    Shared with POST /ask, which writes two messages around an agent run and
+    must land them in one transaction -- a user message persisted without the
+    answer that followed it is a thread that looks unanswered.
+
+    updated_at is set explicitly rather than left to `onupdate`, which fires
+    only when the ORM emits an UPDATE for the conversation row, and adding a
+    child row is not one.
+    """
+    message = Message(
+        conversation_id=conversation.id, role=role, content=content, meta=meta
+    )
+    session.add(message)
+
+    conversation.updated_at = datetime.now(timezone.utc)
+    if conversation.title is None and role == "user":
+        conversation.title = _derive_title(content)
+    return message
 
 
 def _derive_title(content: str) -> str:
@@ -97,21 +126,9 @@ async def post_message(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> Message:
-    conversation = await _owned_conversation(conversation_id, user, session)
+    conversation = await owned_conversation(conversation_id, user, session)
 
-    message = Message(
-        conversation_id=conversation.id,
-        role=body.role,
-        content=body.content,
-        meta=body.meta,
-    )
-    session.add(message)
-
-    # Set explicitly rather than relying on `onupdate`: that fires only when the
-    # ORM emits an UPDATE for this row, and adding a child row is not one.
-    conversation.updated_at = datetime.now(timezone.utc)
-    if conversation.title is None and body.role == "user":
-        conversation.title = _derive_title(body.content)
+    message = append_message(session, conversation, body.role, body.content, body.meta)
 
     # One commit, so the message and the activity bump land in the same
     # transaction -- a thread can never sort as active without the message that
@@ -129,7 +146,7 @@ async def get_history(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> MessagePage:
-    await _owned_conversation(conversation_id, user, session)
+    await owned_conversation(conversation_id, user, session)
 
     stmt = select(Message).where(Message.conversation_id == conversation_id)
     if after_id is not None:

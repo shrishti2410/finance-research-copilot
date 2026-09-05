@@ -23,6 +23,7 @@ interleaved.
 
 from __future__ import annotations
 
+import hmac
 import logging
 import math
 import time
@@ -189,6 +190,18 @@ class RateLimiter:
         )
 
 
+def _is_internal(scope) -> bool:
+    """Whether this request carries this process's own internal token."""
+    expected = settings.internal_token
+    if not expected:
+        return False
+    for name, value in scope.get("headers", []):
+        if name == b"x-internal-token":
+            # Constant-time: this is a secret comparison on an untrusted input.
+            return hmac.compare_digest(value.decode("latin-1"), expected)
+    return False
+
+
 def _client_ip(scope: Scope) -> str:
     """Best available caller address.
 
@@ -279,6 +292,14 @@ class RateLimitMiddleware:
 
         path = scope.get("path", "")
         if path in EXEMPT_PATHS or path.startswith(EXEMPT_PREFIXES):
+            return await self.app(scope, receive, send)
+
+        # The agent loop calls this app's own /v1 proxy. Those calls are this
+        # process talking to itself, not a client consuming quota, and counting
+        # them would let one /ask exhaust the caller's whole minute. The token
+        # is random per process and never persisted, so it cannot be replayed
+        # against a restarted server or guessed from configuration.
+        if _is_internal(scope):
             return await self.app(scope, receive, send)
 
         identity, kind = _identify(scope)
