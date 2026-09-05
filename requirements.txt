@@ -37,6 +37,12 @@ numpy                # vector arithmetic in rag/
 # No pgvector python package: rag/vector_store.py binds vectors as text and
 # casts in SQL, so the extension needs no client-side codec.
 
+# Tools (market data, ratios, news)
+yfinance             # Yahoo Finance market data and fundamentals; pulls pandas
+requests             # RSS fetches in tools/news_search.py
+# No news API client: tools/news_search.py reads Google News RSS, which needs
+# no key. See that module's docstring for why not NewsAPI, Reuters or Yahoo.
+
 # Rate limiting
 redis>=5.0
 
