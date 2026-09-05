@@ -11,6 +11,13 @@ from pathlib import Path
 import pytest
 
 from ingestion.parser import (
+    ROW_AMOUNT,
+    ROW_HEADING,
+    ROW_PER_SHARE,
+    ROW_SHARE_COUNT,
+    TableRow,
+    classify_rows,
+    parse_units_scale,
     _parse_number,
     _stitch_fragments,
     find_boilerplate,
@@ -178,7 +185,10 @@ def test_income_statement_detected(parsed):
     assert table is not None
     assert table.periods == ["2026", "2025", "2024"]
     assert table.units == "In millions, except per share data"
-    assert table.scale == 1_000_000
+    # `default_scale` is the multiplier for ordinary money rows only. It used to
+    # be `scale`, a single value applied to every row, which is how a $4.93 EPS
+    # became $4,930,000. Per-row scale is asserted below.
+    assert table.default_scale == 1_000_000
 
 
 def test_income_statement_rows_keep_label_to_value_association(parsed):
@@ -232,3 +242,159 @@ def test_real_filing_parses(path):
     labels = {r.label.lower().rstrip(":") for r in table.rows}
     assert "net income" in labels
     assert any(term in labels for term in ("revenue", "total net sales"))
+
+
+# ── units notes and per-row scale ────────────────────────────────────────────
+
+# Apple's real FY2025 note. Three different scales in one sentence.
+AAPL_UNITS = ("In millions, except number of shares, which are reflected in "
+              "thousands, and per-share amounts")
+NVDA_UNITS = "In millions, except per share data"
+
+
+def test_apple_units_note_yields_three_different_scales():
+    scales = parse_units_scale(AAPL_UNITS)
+    assert scales.amount == 1_000_000
+    assert scales.share_count == 1_000
+    assert scales.per_share == 1
+
+
+def test_an_unnamed_share_scale_falls_back_to_the_amount_scale():
+    """NVIDIA names no separate share scale, and its share counts really are in
+    millions -- 24,359 is 24.36 billion shares, which is what NVIDIA has.
+    Defaulting shares to thousands would be wrong by a thousand here."""
+    scales = parse_units_scale(NVDA_UNITS)
+    assert scales.amount == 1_000_000
+    assert scales.share_count == 1_000_000
+    assert scales.per_share == 1
+
+
+@pytest.mark.parametrize(
+    "units,amount",
+    [
+        ("In thousands, except per share amounts", 1_000),
+        ("In billions", 1_000_000_000),
+        ("(In millions)", 1_000_000),
+        ("", 1),
+        ("no scale stated here", 1),
+    ],
+)
+def test_amount_scale_from_assorted_units_notes(units, amount):
+    assert parse_units_scale(units).amount == amount
+
+
+def test_per_share_is_never_scaled():
+    """$7.49 per share is already the figure. Scaling it by the table's amount
+    scale produces $7,490,000 per share."""
+    for units in (AAPL_UNITS, NVDA_UNITS, "In thousands", ""):
+        assert parse_units_scale(units).per_share == 1
+
+
+# ── row classification ───────────────────────────────────────────────────────
+
+def rows(*pairs) -> list[TableRow]:
+    return [TableRow(label=label, values=values) for label, values in pairs]
+
+
+def test_identical_labels_are_told_apart_by_the_heading_above_them():
+    """'Basic' appears twice in every statement of operations, once as an EPS
+    and once as a share count, with a factor of a billion between them. The
+    grouping row above is the only thing that distinguishes them."""
+    classified = classify_rows(rows(
+        ("Net income", [112_010.0]),
+        ("Earnings per share:", []),
+        ("Basic", [7.49]),
+        ("Diluted", [7.46]),
+        ("Shares used in computing earnings per share:", []),
+        ("Basic", [14_948_500.0]),
+        ("Diluted", [15_004_697.0]),
+    ))
+    assert [r.kind for r in classified] == [
+        ROW_AMOUNT, ROW_HEADING, ROW_PER_SHARE, ROW_PER_SHARE,
+        ROW_HEADING, ROW_SHARE_COUNT, ROW_SHARE_COUNT,
+    ]
+
+
+def test_share_count_wins_over_per_share_in_a_label_containing_both():
+    """NVIDIA's heading is 'Weighted average shares used in per share
+    computation:' -- it matches both patterns, and the share reading is right."""
+    classified = classify_rows(rows(
+        ("Weighted average shares used in per share computation:", []),
+        ("Basic", [24_359.0]),
+    ))
+    assert classified[0].kind == ROW_HEADING
+    assert classified[1].kind == ROW_SHARE_COUNT
+
+
+def test_a_plain_money_heading_clears_a_stale_share_context():
+    classified = classify_rows(rows(
+        ("Net income per share:", []),
+        ("Basic", [4.93]),
+        ("Operating expenses", []),
+        ("Research and development", [18_497.0]),
+    ))
+    assert classified[1].kind == ROW_PER_SHARE
+    assert classified[3].kind == ROW_AMOUNT
+
+
+def test_rows_without_any_context_are_amounts():
+    assert classify_rows(rows(("Revenue", [215_938.0])))[0].kind == ROW_AMOUNT
+
+
+# ── the AAPL case, end to end ────────────────────────────────────────────────
+
+AAPL_TABLE_HTML = SYNTHETIC.replace(
+    "(In millions, except per share data)", f"({AAPL_UNITS})"
+).replace(
+    "<tr><td>Net income</td><td></td><td>120,067</td><td>72,880</td><td>29,760</td></tr>",
+    "<tr><td>Net income</td><td></td><td>112,010</td><td>112,010</td><td>112,010</td></tr>"
+    "<tr><td>Earnings per share:</td></tr>"
+    "<tr><td>Basic</td><td></td><td>7.49</td><td>6.11</td><td>6.13</td></tr>"
+    "<tr><td>Shares used in computing earnings per share:</td></tr>"
+    "<tr><td>Basic</td><td></td><td>14,948,500</td><td>15,343,783</td><td>15,744,231</td></tr>",
+)
+
+
+@pytest.fixture(scope="module")
+def aapl_style():
+    return parse_10k(AAPL_TABLE_HTML).income_statement
+
+
+def test_aapl_eps_is_not_scaled(aapl_style):
+    """The bug this fixes: 7.49 x 1e6 = 7,490,000 dollars per share."""
+    eps = next(r for r in aapl_style.rows if r.kind == ROW_PER_SHARE)
+    assert eps.values[0] == 7.49
+    assert aapl_style.scale_for(eps) == 1
+    assert aapl_style.absolute_values(eps)[0] == 7.49
+
+
+def test_aapl_share_count_is_billions_not_trillions(aapl_style):
+    """14,948,500 thousand is 14.9 billion shares. Under the old single scale it
+    came out as 14.9 trillion, which is a thousand times every share in the
+    S&P 500."""
+    shares = next(r for r in aapl_style.rows if r.kind == ROW_SHARE_COUNT)
+    assert shares.values[0] == 14_948_500.0
+    assert aapl_style.scale_for(shares) == 1_000
+
+    absolute = aapl_style.absolute_values(shares)[0]
+    assert absolute == 14_948_500_000
+    assert 14e9 < absolute < 15e9, f"{absolute:,.0f} is not ~14.9 billion"
+
+
+def test_aapl_money_rows_still_scale_by_millions(aapl_style):
+    revenue = next(r for r in aapl_style.rows if r.label == "Revenue")
+    assert aapl_style.scale_for(revenue) == 1_000_000
+    assert aapl_style.absolute_values(revenue)[0] == 215_938 * 1_000_000
+
+
+def test_eps_times_shares_reconciles_to_net_income(aapl_style):
+    """The check that ties all three scales together: if any one of them is
+    wrong, this is off by orders of magnitude."""
+    eps = aapl_style.absolute_values(
+        next(r for r in aapl_style.rows if r.kind == ROW_PER_SHARE))[0]
+    shares = aapl_style.absolute_values(
+        next(r for r in aapl_style.rows if r.kind == ROW_SHARE_COUNT))[0]
+    net_income = aapl_style.absolute_values(
+        next(r for r in aapl_style.rows if r.label == "Net income"))[0]
+
+    assert eps * shares == pytest.approx(net_income, rel=0.01)

@@ -86,11 +86,133 @@ class Section:
         return self.text[:n]
 
 
+# What a row's numbers *are*, which decides the multiplier that applies to them.
+# A statement of operations mixes three kinds under one units note, and treating
+# them alike is wrong by a factor of a thousand or a million.
+ROW_AMOUNT = "amount"            # money: revenue, cost, net income
+ROW_PER_SHARE = "per_share"      # already dollars per share; never scaled
+ROW_SHARE_COUNT = "share_count"  # a count of shares, often scaled differently
+ROW_HEADING = "heading"          # a grouping label with no numbers of its own
+
+
 @dataclass(frozen=True)
 class TableRow:
     label: str
     values: list[float | None]
     raw_cells: list[str] = field(default_factory=list)
+    kind: str = ROW_AMOUNT
+
+
+_SCALE_WORDS = {"thousand": 1_000, "million": 1_000_000, "billion": 1_000_000_000}
+_SCALE_WORD = re.compile(r"\b(thousand|million|billion)s?\b", re.I)
+# "number of shares", "shares in thousands", "share data" -- the point in the
+# units note where it stops talking about money and starts talking about shares.
+_SHARE_MENTION = re.compile(r"\bshares?\b", re.I)
+
+
+@dataclass(frozen=True)
+class UnitsScale:
+    """The multipliers one units note implies, per kind of row.
+
+    Apple's note is the case that forces this apart:
+
+        "In millions, except number of shares, which are reflected in
+         thousands, and per-share amounts"
+
+    Three different scales in one sentence -- amounts at 1e6, share counts at
+    1e3, and per-share figures at 1. NVIDIA's shorter note, "In millions, except
+    per share data", names no separate share scale, and its share counts really
+    are in millions (24,359 -> 24.36 billion shares, which is what NVIDIA has).
+    So an unnamed share scale must fall back to the amount scale, not to
+    thousands.
+    """
+
+    amount: int = 1
+    share_count: int = 1
+    # Never scaled. "$7.49 per share" is already the figure; multiplying it by
+    # the table's amount scale produces $7,490,000 per share.
+    per_share: int = 1
+
+    def for_kind(self, kind: str) -> int:
+        if kind == ROW_PER_SHARE:
+            return self.per_share
+        if kind == ROW_SHARE_COUNT:
+            return self.share_count
+        return self.amount
+
+
+def parse_units_scale(units: str) -> UnitsScale:
+    """Read a units note into per-kind multipliers.
+
+    The leading scale word governs money. A scale word appearing *after* the
+    first mention of shares governs share counts; without one, share counts
+    inherit the money scale.
+    """
+    if not units:
+        return UnitsScale()
+
+    first = _SCALE_WORD.search(units)
+    amount = _SCALE_WORDS[first.group(1).lower()] if first else 1
+
+    share_count = amount
+    mention = _SHARE_MENTION.search(units, first.end() if first else 0)
+    if mention:
+        after = _SCALE_WORD.search(units, mention.end())
+        if after:
+            share_count = _SCALE_WORDS[after.group(1).lower()]
+
+    return UnitsScale(amount=amount, share_count=share_count)
+
+
+# Checked in this order: the share-count phrasing usually contains "per share"
+# too ("Weighted average shares used in per share computation"), so the more
+# specific pattern has to win.
+_SHARE_COUNT_LABEL = re.compile(
+    r"shares?\s+(used|outstanding)|weighted[- ]average\s+(number\s+of\s+)?shares"
+    r"|number\s+of\s+shares|shares?\s+used\s+in", re.I
+)
+_PER_SHARE_LABEL = re.compile(r"per[- ]share|per\s+common\s+share|earnings\s+per", re.I)
+
+
+def _row_kind(label: str) -> str | None:
+    """What this label says about itself, if anything."""
+    if _SHARE_COUNT_LABEL.search(label):
+        return ROW_SHARE_COUNT
+    if _PER_SHARE_LABEL.search(label):
+        return ROW_PER_SHARE
+    return None
+
+
+def classify_rows(rows: list[TableRow]) -> list[TableRow]:
+    """Tag each row with what its numbers are.
+
+    Most rows do not say. "Basic" appears twice in every statement of
+    operations -- once under "Net income per share:" and once under "Weighted
+    average shares used in per share computation:" -- with identical labels and
+    a factor of a billion between them. The only thing separating them is the
+    grouping row above, so that heading is carried down as context until the
+    next one replaces it.
+    """
+    classified: list[TableRow] = []
+    context: str | None = None
+
+    for row in rows:
+        declared = _row_kind(row.label)
+        has_numbers = any(v is not None for v in row.values)
+
+        if not has_numbers:
+            # A grouping label. It sets the context for the rows beneath it, and
+            # a heading that says nothing about shares clears a stale context.
+            context = declared
+            kind = ROW_HEADING
+        else:
+            kind = declared or context or ROW_AMOUNT
+
+        classified.append(
+            TableRow(label=row.label, values=row.values, raw_cells=row.raw_cells, kind=kind)
+        )
+
+    return classified
 
 
 @dataclass(frozen=True)
@@ -106,16 +228,31 @@ class FinancialTable:
     match_score: int              # how strongly it matched income-statement terms
 
     @property
-    def scale(self) -> int:
-        """Multiplier implied by `units`, so callers get absolute figures."""
-        lowered = self.units.lower()
-        if "billion" in lowered:
-            return 1_000_000_000
-        if "million" in lowered:
-            return 1_000_000
-        if "thousand" in lowered:
-            return 1_000
-        return 1
+    def scales(self) -> "UnitsScale":
+        """The multipliers this table's units note implies, by row kind."""
+        return parse_units_scale(self.units)
+
+    @property
+    def default_scale(self) -> int:
+        """Multiplier for ordinary money rows.
+
+        Named `default_scale`, not `scale`, on purpose. A statement of
+        operations has no single scale: Apple states amounts in millions, share
+        counts in thousands and earnings per share in dollars, all under one
+        units note. A property called `scale` invites `row.values * table.scale`,
+        which is how 14.9 billion shares becomes 14.9 trillion. Use
+        `scale_for(row)` or `absolute_values(row)`.
+        """
+        return self.scales.amount
+
+    def scale_for(self, row: TableRow) -> int:
+        """The multiplier that applies to this specific row."""
+        return self.scales.for_kind(row.kind)
+
+    def absolute_values(self, row: TableRow) -> list[float | None]:
+        """This row's figures in absolute units -- dollars, or shares."""
+        factor = self.scale_for(row)
+        return [None if v is None else v * factor for v in row.values]
 
     def as_records(self) -> list[dict]:
         return [{"label": r.label, **{p: v for p, v in zip(self.periods, r.values)}}
@@ -476,7 +613,7 @@ def extract_income_statement(
                 continue
 
             periods = _table_periods(table, rows)
-            data_rows = _strip_header_rows(rows, periods)
+            data_rows = classify_rows(_strip_header_rows(rows, periods))
 
             candidate = FinancialTable(
                 title=caption if _STATEMENT_CAPTION.search(caption)

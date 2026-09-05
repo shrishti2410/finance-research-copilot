@@ -362,10 +362,26 @@ def chunk_table(
         structured={
             "title": table.title,
             "units": table.units,
-            "scale": table.scale,
+            # Per row, not per table. One statement mixes money, share counts
+            # and per-share figures under a single units note, so a table-wide
+            # "scale" key is an invitation to multiply an EPS by a million.
+            "scales": {
+                "amount": table.scales.amount,
+                "share_count": table.scales.share_count,
+                "per_share": table.scales.per_share,
+            },
             "periods": table.periods,
             "rows": [
-                {"label": row.label, "values": row.values} for row in table.rows
+                {
+                    "label": row.label,
+                    "values": row.values,          # as printed in the filing
+                    "kind": row.kind,
+                    "scale": table.scale_for(row),
+                    # Absolute dollars or absolute share counts, so a tool can
+                    # compute without having to know the convention.
+                    "values_absolute": table.absolute_values(row),
+                }
+                for row in table.rows
             ],
         },
     )

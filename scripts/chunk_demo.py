@@ -104,7 +104,8 @@ def main() -> int:
                 print_chunk(chunk, f"STRUCTURED TABLE CHUNK  [{ticker}]")
                 print("structured payload (as stored alongside the text):")
                 print(f"  title   {chunk.structured['title']!r}")
-                print(f"  units   {chunk.structured['units']!r}  scale=x{chunk.structured['scale']:,}")
+                print(f"  units   {chunk.structured['units']!r}")
+                print(f"  scales  {chunk.structured['scales']}")
                 print(f"  periods {chunk.structured['periods']}")
                 print(f"  rows    {len(chunk.structured['rows'])}")
                 for row in chunk.structured["rows"]:

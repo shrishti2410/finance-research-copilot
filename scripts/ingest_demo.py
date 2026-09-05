@@ -54,7 +54,9 @@ def show_income_statement(table, preview_rows: int = 14) -> None:
     numeric_rows = sum(1 for r in table.rows if r.values)
 
     print(f"  title            {table.title!r}")
-    print(f"  units            {table.units!r}  (scale x{table.scale:,})")
+    print(f"  units            {table.units!r}")
+    print(f"  scales           amount x{table.scales.amount:,}  "
+          f"share_count x{table.scales.share_count:,}  per_share x{table.scales.per_share}")
     print(f"  match score      {table.match_score} income-statement terms matched")
     print(f"  periods          {table.periods}")
     print(f"  rows             {table.row_count}  ({labelled} labelled, {numeric_rows} with numbers)")
