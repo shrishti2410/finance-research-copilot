@@ -15,7 +15,15 @@ import pytest
 
 from ingestion.chunker import Chunk, ChunkMetadata
 from rag import vector_store as vs
-from rag.retriever import resolve_section, search_filings
+from rag.vector_store import SearchHit
+from rag.retriever import (
+    LEXICAL_WEIGHT,
+    TABLE_BOOST,
+    query_intent,
+    rerank,
+    resolve_section,
+    search_filings,
+)
 
 TEST_ACCESSION = "TEST-0000000000-00-000000"
 
@@ -296,3 +304,87 @@ def test_chunk_and_vector_count_mismatch_is_rejected(indexed):
 
     with pytest.raises(ValueError):
         run(go())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Hybrid re-ranking -- intent detection and scoring, no database
+# ─────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize(
+    "query,wants_figure",
+    [
+        ("What was total revenue?", True),
+        ("How much net income did they report?", True),
+        ("What were earnings per share?", True),
+        # Explanatory: the answer is in MD&A prose, not in the grid. The grid
+        # states the number and says nothing about why it moved.
+        ("Why did gross margin decline?", False),
+        ("What did management say about revenue growth?", False),
+        ("Explain the drop in operating income", False),
+        # No statement term at all.
+        ("What are the main competitive risks?", False),
+        ("Describe the supply chain", False),
+    ],
+)
+def test_query_intent_decides_whether_to_prefer_a_table(query, wants_figure):
+    assert query_intent(query).wants_a_figure is wants_figure
+
+
+def hit(content, content_type="text", score=0.70, ticker="NVDA"):
+    return SearchHit(
+        score=score, vector_score=score, chunk_id=f"x:{content[:8]}", content=content,
+        company="c", ticker=ticker, section="s", fiscal_period="FY2026",
+        chunk_index=0, content_type=content_type, filing_type="10-K",
+        source_url="https://example.invalid", token_count=10,
+    )
+
+
+def test_a_table_is_boosted_only_when_the_query_wants_a_figure():
+    table = hit("Revenue 215,938", "table", score=0.60)
+    prose = hit("Revenue grew because demand grew.", "text", score=0.65)
+
+    figure = rerank([prose, table], query_intent("What was total revenue?"), k=2)
+    assert figure[0].content_type == "table"
+    assert figure[0].boost == TABLE_BOOST
+
+    why = rerank([prose, table], query_intent("Why did revenue grow?"), k=2)
+    assert why[0].content_type == "text"
+    assert all(h.boost == 0.0 for h in why)
+
+
+def test_no_statement_term_means_no_reordering():
+    """A risk-factors query must come back exactly as the encoder ranked it."""
+    hits = [hit("first", score=0.80), hit("second", score=0.70), hit("third", score=0.60)]
+    ranked = rerank(hits, query_intent("What are the main competitive risks?"), k=3)
+
+    assert [h.content for h in ranked] == ["first", "second", "third"]
+    assert [h.score for h in ranked] == [0.80, 0.70, 0.60]
+
+
+def test_lexical_score_is_the_share_of_query_terms_present():
+    intent = query_intent("What were net income, gross profit and revenue?")
+    both = hit("net income and gross profit and revenue all appear")
+    one = hit("only revenue appears here")
+
+    ranked = {h.content: h for h in rerank([both, one], intent, k=2)}
+    assert ranked[both.content].lexical_score == 1.0
+    assert 0 < ranked[one.content].lexical_score < 1.0
+
+
+def test_the_breakdown_adds_up_to_the_reported_score():
+    """The ranking has to be explainable, not just produced."""
+    for h in rerank([hit("Revenue 215,938", "table", score=0.6)],
+                    query_intent("What was total revenue?"), k=1):
+        assert h.score == pytest.approx(
+            h.vector_score + LEXICAL_WEIGHT * h.lexical_score + h.boost
+        )
+
+
+def test_weights_are_small_enough_not_to_overrule_the_encoder():
+    """A boost that can leapfrog any gap makes the vector score decorative."""
+    assert LEXICAL_WEIGHT + TABLE_BOOST < 0.20
+
+
+def test_rerank_returns_at_most_k():
+    hits = [hit(f"passage {i}", score=0.9 - i / 100) for i in range(20)]
+    assert len(rerank(hits, query_intent("What was revenue?"), k=3)) == 3

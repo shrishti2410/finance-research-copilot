@@ -336,6 +336,99 @@ def chunk_section(
     return chunks
 
 
+# Query vocabulary that does not appear in a filing's own line-item labels.
+# A statement says "Revenue" and "Net income"; people ask about "sales", "the
+# top line", "EPS", "profitability". The caption bridges the two, which is the
+# whole reason a table needs one -- a grid of digits has almost no surface for a
+# natural-language query to match on.
+#
+# Each entry is (labels that trigger it, the phrase to emit). Triggers are a
+# *list* because companies name the same line differently and the caption has to
+# read the same either way: Apple's statement says "Total net sales" and "Gross
+# margin" where NVIDIA's says "Revenue" and "Gross profit". Keying only on
+# NVIDIA's wording left Apple's caption with no mention of revenue at all --
+# which is precisely the query this exists to serve.
+_CAPTION_SYNONYMS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("revenue", "net sales", "total net sales", "sales"),
+     "total revenue, net sales, turnover, the top line"),
+    (("cost of revenue", "cost of sales", "cost of goods"),
+     "cost of revenue, cost of sales, cost of goods sold, COGS"),
+    (("gross profit", "gross margin"),
+     "gross profit, gross margin, gross profitability"),
+    (("operating income", "income from operations", "operating expenses"),
+     "operating income, operating profit, income from operations, operating margin"),
+    (("net income", "net earnings", "net profit"),
+     "net income, net profit, earnings, the bottom line, profit after tax"),
+    (("per share",),
+     "earnings per share, EPS, basic and diluted EPS"),
+    (("shares",),
+     "share count, weighted average shares outstanding"),
+    (("income tax", "provision for income"),
+     "income tax expense, provision for income taxes, effective tax rate"),
+    (("research and development",),
+     "research and development, R&D spending"),
+)
+
+# Line items worth naming with their actual figure. A caption carrying
+# "total revenue of 215,938 million" gives a numeric query something to match
+# that the bare grid does not.
+_HEADLINE_LABELS = ("revenue", "net sales", "total net sales", "gross profit",
+                    "gross margin", "operating income", "net income")
+
+
+def table_caption(table: "FinancialTable", base_metadata: dict) -> str:
+    """A natural-language description of what a table contains.
+
+    Prepended to the rendered grid before embedding. Without it a table chunk is
+    almost pure digits, and a conversational question -- "what was total
+    revenue?" -- embeds close to prose *about* revenue and far from the
+    statement that actually holds the number. This is the sentence a person
+    would write above the table if they were introducing it.
+
+    Built from the table's own row labels, not a fixed template, so a statement
+    with different line items describes itself accordingly.
+    """
+    company = base_metadata.get("company", "")
+    ticker = base_metadata.get("ticker", "")
+    period = base_metadata.get("fiscal_period", "")
+    who = f"{company} ({ticker})" if company and ticker else (company or ticker)
+
+    title = table.title if "detected by row labels" not in table.title else         "Consolidated income statement"
+
+    parts = [
+        f"{title} for {who}, {period}."
+        if who else f"{title}, {period}."
+    ]
+    if table.periods:
+        parts.append(
+            f"Annual financial results for the periods ending "
+            f"{', '.join(table.periods)}."
+        )
+
+    labels = [row.label for row in table.rows if row.label]
+    lowered = " ".join(labels).lower()
+
+    # Only claim the concepts this table actually reports.
+    present = [
+        phrase for triggers, phrase in _CAPTION_SYNONYMS
+        if any(trigger in lowered for trigger in triggers)
+    ]
+    if present:
+        parts.append("Line items include " + "; ".join(present) + ".")
+
+    headline = []
+    for row in table.rows:
+        if row.label.lower().strip(":") in _HEADLINE_LABELS and row.values:
+            value = row.values[0]
+            if value is not None:
+                headline.append(f"{row.label} {value:,.0f}")
+    if headline:
+        unit = table.units or "as reported"
+        parts.append(f"Most recent period: {'; '.join(headline[:5])} ({unit}).")
+
+    return " ".join(parts)
+
+
 def chunk_table(
     table: "FinancialTable",
     base_metadata: dict,
@@ -348,7 +441,12 @@ def chunk_table(
     other, and `structured` carries the parsed rows so a tool can compute on the
     numbers without re-parsing the rendering.
     """
-    content = render_table(table)
+    # The caption goes into `content`, not into a separate embedding-only field.
+    # It is genuinely useful to whoever reads the chunk -- a bare grid does not
+    # say whose statement it is or what period it covers -- so there is no
+    # reason to hide it from the model and show it only to the encoder.
+    caption = table_caption(table, base_metadata)
+    content = f"{caption}\n\n{render_table(table)}"
     return Chunk(
         chunk_id=f"{base_metadata['accession']}:income_statement:{index}",
         content=content,

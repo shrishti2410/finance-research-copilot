@@ -13,6 +13,7 @@ import pytest
 
 from ingestion.chunker import (
     OVERLAP_TOKENS,
+    table_caption,
     TARGET_TOKENS,
     Chunk,
     ChunkMetadata,
@@ -287,3 +288,68 @@ def test_chunk_repr_is_useful():
         company="c", filing_type="10-K", fiscal_period="FY2026", section="Item 1A", chunk_index=2
     )
     assert "Item 1A" in repr(Chunk(chunk_id="x", content="y", metadata=meta, token_count=7))
+
+
+# ── table captions ───────────────────────────────────────────────────────────
+
+BASE_META = {"company": "NVIDIA CORP", "ticker": "NVDA", "fiscal_period": "FY2026"}
+
+# Apple names the same lines differently: "Total net sales" where NVIDIA says
+# "Revenue", "Gross margin" where NVIDIA says "Gross profit".
+APPLE_STYLE = FinancialTable(
+    title="CONSOLIDATED STATEMENTS OF OPERATIONS",
+    units="In millions, except number of shares, which are reflected in thousands",
+    periods=["September 27,2025", "September 28,2024"],
+    rows=[
+        TableRow(label="Total net sales", values=[416161.0, 391035.0]),
+        TableRow(label="Total cost of sales", values=[220960.0, 210352.0]),
+        TableRow(label="Gross margin", values=[195201.0, 180683.0]),
+        TableRow(label="Net income", values=[112010.0, 93736.0]),
+    ],
+    row_count=4, numeric_cell_count=8, match_score=9,
+)
+
+
+def test_caption_names_the_company_and_period():
+    caption = table_caption(TABLE, BASE_META)
+    assert "NVIDIA CORP" in caption and "NVDA" in caption and "FY2026" in caption
+
+
+def test_caption_says_revenue_even_when_the_filing_says_net_sales():
+    """The vocabulary gap this exists to close. Apple's statement never uses the
+    word 'revenue', so a caption keyed only on its own labels would leave the
+    most common query term absent from the chunk entirely."""
+    caption = table_caption(APPLE_STYLE, {"company": "Apple Inc.", "ticker": "AAPL",
+                                          "fiscal_period": "FY2025"}).lower()
+    assert "revenue" in caption
+    assert "net sales" in caption
+
+
+def test_caption_carries_headline_figures():
+    """A numeric query needs a number to match on; the bare grid gives it none."""
+    caption = table_caption(TABLE, BASE_META)
+    assert "215,938" in caption
+
+
+def test_caption_only_claims_line_items_the_table_has():
+    """A fixed template would assert every concept for every statement, which
+    makes each table look like every other one to the encoder."""
+    sparse = FinancialTable(
+        title="Consolidated Statements of Income", units="In millions",
+        periods=["2026"], rows=[TableRow(label="Revenue", values=[100.0])],
+        row_count=1, numeric_cell_count=1, match_score=5,
+    )
+    caption = table_caption(sparse, BASE_META).lower()
+    assert "revenue" in caption
+    assert "earnings per share" not in caption
+    assert "research and development" not in caption
+
+
+def test_table_chunk_content_starts_with_the_caption(tokenizer_available):
+    parsed = ParsedFiling(risk_factors=None, mdna=None, income_statement=TABLE)
+    chunk = chunk_filing(parsed, FILING)[0]
+
+    assert chunk.content.startswith("Consolidated Statements of Income for NVIDIA CORP")
+    # ...and the grid is still there underneath it.
+    assert "215,938" in chunk.content
+    assert "Gross profit" in chunk.content

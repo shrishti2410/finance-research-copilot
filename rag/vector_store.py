@@ -219,9 +219,15 @@ async def delete_accession(conn, accession: str) -> int:
 
 @dataclass(frozen=True)
 class SearchHit:
-    """One retrieved passage, with enough provenance to cite it."""
+    """One retrieved passage, with enough provenance to cite it.
 
-    score: float                # cosine similarity in [-1, 1]; 1 is identical
+    `score` is the value results are ordered by. When the retriever re-ranks
+    (see rag/retriever.py) it is the vector score plus the lexical and
+    table-affinity components, and each part is reported separately below so a
+    ranking can be explained rather than trusted.
+    """
+
+    score: float                # the value ranked on
     chunk_id: str
     content: str
     company: str
@@ -235,6 +241,12 @@ class SearchHit:
     token_count: int
     structured: dict | None = None
 
+    # Score breakdown. On a plain vector search `vector_score == score` and the
+    # other two are zero.
+    vector_score: float = 0.0   # cosine similarity in [-1, 1]; 1 is identical
+    lexical_score: float = 0.0  # share of the query's financial terms present
+    boost: float = 0.0          # table affinity, when the query wants a figure
+
     @property
     def citation(self) -> str:
         return (f"{self.ticker} {self.filing_type} {self.fiscal_period} - "
@@ -246,6 +258,7 @@ def _row_to_hit(row) -> SearchHit:
     raw = mapping["structured"]
     return SearchHit(
         score=float(mapping["score"]),
+        vector_score=float(mapping["score"]),
         chunk_id=mapping["chunk_id"],
         content=mapping["content"],
         company=mapping["company"],
