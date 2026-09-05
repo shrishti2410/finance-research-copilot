@@ -42,7 +42,136 @@ TICKER_MAP_URL = "https://www.sec.gov/files/company_tickers.json"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 ARCHIVE_URL = "https://www.sec.gov/Archives/edgar/data/{cik_int}/{accession_nodash}/{document}"
 
-PLACEHOLDER_UA_MARKER = "set SEC_EDGAR_USER_AGENT"
+# ─────────────────────────────────────────────────────────────────────────────
+# User-Agent validation
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# SEC asks every automated caller to identify itself with a name and a reachable
+# contact address, and throttles or blocks callers that do not. Their documented
+# sample is "Sample Company Name AdminContact@sample-company.com".
+#
+# This used to be a substring test for one known placeholder, and it failed
+# exactly as that design implies: the shipped default said "set
+# SEC_EDGAR_USER_AGENT", the .env said "set a real address", and the check
+# matched neither, so requests went out with a fake contact and no warning.
+# Testing for one bad string only ever catches that string.
+#
+# So the check is structural: there must be a contact that could actually be
+# reached, and it must not be one of the well-known stand-ins for one.
+
+_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+# Non-greedy up to the TLD, then an optional path. Greedy matching backtracks to
+# the last dot and drops the path, turning a project URL into a bare domain --
+# "https://github.com/you/repo" is a contact, "https://github.com" is not.
+_URL = re.compile(r"https?://[^\s()<>]+?\.[A-Za-z]{2,}(?:/[^\s()<>]*)?")
+
+# Reserved TLDs. RFC 2606 and RFC 6761 set these aside so that nothing sent to
+# them is ever delivered, which is exactly what makes them useless as a contact.
+# Matched as a suffix, not a substring: "my.test.co" is somebody's real domain,
+# while "my.test" is not.
+_RESERVED_TLDS = (".invalid", ".test", ".local", ".localhost", ".example")
+
+# Conventional stand-in domains. These are ordinary registrable names, so a
+# substring match is right -- there is no legitimate "example.com" contact.
+_FAKE_DOMAINS = (
+    "example.com", "example.org", "example.net", "example.edu",
+    "localhost", "domain.com", "email.com", "company.com",
+    "yourcompany", "mycompany", "sample-company", "somewhere.com",
+)
+
+# Phrases that appear in an address nobody checks. "noreply" is deliberately in
+# here: it is a real deliverable address and still not a contact, because the
+# whole point of it is that replies go nowhere.
+_FAKE_MARKERS = (
+    "your@", "youremail", "your-email", "your_email", "you@",
+    "changeme", "change-me", "change_me", "replaceme", "placeholder",
+    "todo", "fixme", "tbd", "xxx@", "test@test", "a@a.",
+    "noreply", "no-reply", "donotreply", "do-not-reply",
+    "set a real", "set_a_real", "set-a-real", "set sec_edgar_user_agent",
+    "admin@admin", "none@none", "user@user", "foo@bar",
+)
+
+
+@dataclass(frozen=True)
+class UserAgentCheck:
+    """Whether a User-Agent is usable against EDGAR, and why not if it is not."""
+
+    ok: bool
+    reason: str = ""
+    contact: str = ""
+
+    def __bool__(self) -> bool:
+        return self.ok
+
+
+def validate_user_agent(user_agent: str) -> UserAgentCheck:
+    """Check that a User-Agent carries a contact SEC could actually reach.
+
+    Accepts an email address or an http(s) URL, since either is a real channel.
+    Rejects the reserved and conventional stand-ins for one -- an address at
+    example.com parses as an email and reaches nobody, which is the failure this
+    is here to catch.
+    """
+    value = (user_agent or "").strip()
+    if not value:
+        return UserAgentCheck(False, "SEC_EDGAR_USER_AGENT is empty.")
+
+    lowered = value.lower()
+
+    email = _EMAIL.search(value)
+    url = _URL.search(value)
+    if not email and not url:
+        return UserAgentCheck(
+            False,
+            "SEC_EDGAR_USER_AGENT carries no contact address. SEC asks for a name "
+            "and a way to reach you, e.g. "
+            "'finance-research-copilot/0.1 (you@yourdomain.com)'.",
+        )
+
+    contact = (email or url).group(0)
+
+    for marker in _FAKE_MARKERS:
+        if marker in lowered:
+            return UserAgentCheck(
+                False,
+                f"SEC_EDGAR_USER_AGENT contains {marker!r}, which is a placeholder, "
+                f"not a contact. Set a real address you monitor.",
+                contact,
+            )
+
+    # The host part only: a path or a local part may legitimately contain any of
+    # these words ("ops+test@realdomain.io" is a real address).
+    host = contact.lower().split("@")[-1].split("//")[-1].split("/")[0].rstrip(".")
+
+    for tld in _RESERVED_TLDS:
+        if host.endswith(tld):
+            return UserAgentCheck(
+                False,
+                f"SEC_EDGAR_USER_AGENT's contact {contact!r} uses the reserved TLD "
+                f"{tld!r}, which is defined never to resolve. Set a real address "
+                f"you monitor.",
+                contact,
+            )
+
+    for domain in _FAKE_DOMAINS:
+        if domain in host:
+            return UserAgentCheck(
+                False,
+                f"SEC_EDGAR_USER_AGENT's contact {contact!r} uses {domain!r}, a "
+                f"stand-in domain that reaches nobody. Set a real address you "
+                f"monitor.",
+                contact,
+            )
+
+    # A bare address satisfies the letter of SEC's request but not its intent:
+    # their sample leads with who you are. Worth saying, not worth refusing.
+    if value.replace(contact, "").strip(" ()<>[],;:") == "":
+        log.warning(
+            "SEC_EDGAR_USER_AGENT is just a contact address with no identifying "
+            "name. SEC's documented format is '<name> <contact>'."
+        )
+
+    return UserAgentCheck(True, contact=contact)
 
 
 @dataclass(frozen=True)
@@ -98,13 +227,31 @@ class EdgarClient:
         user_agent: str | None = None,
         cache_dir: str | Path | None = None,
         requests_per_second: float | None = None,
+        require_contact: bool = True,
     ) -> None:
         self.user_agent = user_agent or settings.sec_edgar_user_agent
-        if PLACEHOLDER_UA_MARKER in self.user_agent:
-            log.warning(
-                "SEC_EDGAR_USER_AGENT is unset, using a placeholder. EDGAR asks for "
-                "a real contact address and may throttle or block anonymous callers."
+
+        # Raise, not warn. The previous version logged and carried on, and the
+        # result was months of requests to sec.gov carrying a fake contact that
+        # nobody noticed -- a warning in a batch job's output is a warning
+        # nobody reads. A bad User-Agent risks the whole IP being blocked, so it
+        # is worth failing at construction, where the message is unmissable and
+        # names the fix.
+        check = validate_user_agent(self.user_agent)
+        if require_contact and not check:
+            raise ValueError(
+                f"{check.reason}\n"
+                f"  Currently: {self.user_agent!r}\n"
+                f"  Set SEC_EDGAR_USER_AGENT in .env, e.g.\n"
+                f"    SEC_EDGAR_USER_AGENT=finance-research-copilot/0.1 "
+                f"(you@yourdomain.com)\n"
+                f"  See https://www.sec.gov/os/webmaster-faq#developers"
             )
+        if not require_contact and not check:
+            # Offline callers -- the test suite, a parser run over cached files
+            # -- never reach sec.gov, so there is nobody to identify to.
+            log.debug("User-Agent not validated (require_contact=False): %s", check.reason)
+
         self.cache_dir = Path(cache_dir or settings.edgar_cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._limiter = EdgarRateLimiter(
