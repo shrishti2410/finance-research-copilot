@@ -74,7 +74,10 @@ def stub_agent(monkeypatch):
     state = {"result": fake_result(), "calls": []}
 
     async def fake_run_agent(question, history=None, **kwargs):
-        state["calls"].append({"question": question, **kwargs})
+        # history is captured by name, so it has to be recorded explicitly --
+        # it would otherwise vanish from **kwargs and the memory assertions
+        # would pass against an endpoint that never loaded any.
+        state["calls"].append({"question": question, "history": history, **kwargs})
         return state["result"]
 
     monkeypatch.setattr(routes, "run_agent", fake_run_agent)
@@ -287,3 +290,105 @@ def test_a_malformed_conversation_id_is_422(client, stub_agent):
         "/ask", json={"conversation_id": "not-a-uuid", "message": "hi"}, headers=headers
     )
     assert response.status_code == 422
+
+
+# ── conversation memory ──────────────────────────────────────────────────────
+
+def test_the_first_turn_gets_no_history(client, stub_agent):
+    """Nothing has been said yet, so the window is empty -- not a stray copy of
+    the question the agent is about to be asked."""
+    headers = make_user(client)
+    conversation_id = make_conversation(client, headers)
+
+    client.post(
+        "/ask",
+        json={"conversation_id": conversation_id, "message": "What is NVIDIA's gross margin?"},
+        headers=headers,
+    )
+
+    assert stub_agent["calls"][-1]["history"] == []
+
+
+def test_the_second_turn_sees_the_first(client, stub_agent):
+    """The whole point: 'What about Apple's?' arrives with the antecedent."""
+    headers = make_user(client)
+    conversation_id = make_conversation(client, headers)
+
+    client.post(
+        "/ask",
+        json={"conversation_id": conversation_id, "message": "What is NVIDIA's gross margin?"},
+        headers=headers,
+    )
+    client.post(
+        "/ask",
+        json={"conversation_id": conversation_id, "message": "What about Apple's?"},
+        headers=headers,
+    )
+
+    history = stub_agent["calls"][-1]["history"]
+    assert [m["role"] for m in history] == ["user", "assistant"]
+    assert history[0]["content"] == "What is NVIDIA's gross margin?"
+    assert history[1]["content"] == ANSWER
+    # The current question is appended by run_agent, so it must not be in here
+    # as well -- a duplicated question changes what the model is answering.
+    assert "What about Apple's?" not in [m["content"] for m in history]
+
+
+def test_history_does_not_leak_between_conversations(client, stub_agent):
+    """Same user, two threads. The second must start clean."""
+    headers = make_user(client)
+    first = make_conversation(client, headers)
+    second = make_conversation(client, headers)
+
+    client.post("/ask", json={"conversation_id": first, "message": "about NVDA"}, headers=headers)
+    client.post("/ask", json={"conversation_id": second, "message": "about AAPL"}, headers=headers)
+
+    assert stub_agent["calls"][-1]["history"] == []
+
+
+def test_the_window_is_capped_at_the_configured_size(client, stub_agent, monkeypatch):
+    monkeypatch.setattr(settings, "agent_history_messages", 4)
+    headers = make_user(client)
+    conversation_id = make_conversation(client, headers)
+
+    for i in range(5):
+        client.post(
+            "/ask",
+            json={"conversation_id": conversation_id, "message": f"question {i}"},
+            headers=headers,
+        )
+
+    history = stub_agent["calls"][-1]["history"]
+    assert len(history) == 4
+    # The newest four, so the most recent exchange is always present.
+    assert history[-2]["content"] == "question 3"
+
+
+def test_memory_can_be_turned_off(client, stub_agent, monkeypatch):
+    """agent_history_messages=0 restores the single-turn behaviour exactly."""
+    monkeypatch.setattr(settings, "agent_history_messages", 0)
+    headers = make_user(client)
+    conversation_id = make_conversation(client, headers)
+
+    client.post("/ask", json={"conversation_id": conversation_id, "message": "one"}, headers=headers)
+    client.post("/ask", json={"conversation_id": conversation_id, "message": "two"}, headers=headers)
+
+    assert stub_agent["calls"][-1]["history"] == []
+
+
+def test_the_stored_answer_records_how_much_history_it_saw(client, stub_agent):
+    """An answer that resolved a reference is unexplainable later without it."""
+    headers = make_user(client)
+    conversation_id = make_conversation(client, headers)
+
+    client.post("/ask", json={"conversation_id": conversation_id, "message": "one"}, headers=headers)
+    body = client.post(
+        "/ask", json={"conversation_id": conversation_id, "message": "two"}, headers=headers
+    ).json()
+
+    messages = client.get(
+        f"/conversations/{conversation_id}/messages", headers=headers
+    ).json()["messages"]
+    stored = next(m for m in messages if m["id"] == body["assistant_message_id"])
+
+    assert stored["meta"]["agent"]["history_messages"] == 2

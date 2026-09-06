@@ -14,6 +14,13 @@ rather than "this corpus does not have that filing", and says so to the user.
 **A budget it can see.** The loop stops at five iterations whether or not the
 model is finished. Telling it the limit turns a truncation into a plan: gather
 first, answer while there is still a turn left to answer in.
+
+**What prior turns are for.** Once `agent/memory.py` started replaying history,
+"What about Apple's?" resolved correctly -- and then the model answered it from
+parametric memory, with a figure that was wrong by nine points, having called no
+tool at all. Seeing a similar question answered a moment ago reads as licence to
+answer this one the same way. The rule that history supplies the *subject* of a
+follow-up and never its *figures* is what closes that.
 """
 
 from __future__ import annotations
@@ -45,6 +52,14 @@ than one after the other.
 tool did not return.
 3. When you have enough, answer in prose. Give the figures you used and say \
 which company and period each belongs to.
+
+Earlier turns in this conversation tell you what a follow-up refers to -- \
+"what about Apple's?" after a question about gross margin is a question \
+about Apple's gross margin. Resolve the reference from the conversation, \
+then get the figure the way you would for any other question: by calling a \
+tool in this turn. An earlier answer tells you what is being asked, never \
+what the number is. Do not carry a figure over from a previous turn, and \
+do not answer from memory because the topic is already familiar.
 
 You have at most {max_iterations} turns. Gather what you need early and leave \
 yourself a turn to write the answer. If you cannot get something, say so \

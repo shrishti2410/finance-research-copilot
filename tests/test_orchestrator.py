@@ -95,9 +95,12 @@ def drive(script: list[dict], registry, **kwargs):
 # ── the straightforward paths ────────────────────────────────────────────────
 
 def test_an_immediate_answer_takes_one_iteration(registry):
-    result, _ = drive([responds_with({"content": "71%."})], registry)
+    # Deliberately figure-free. An immediate answer that states a number is a
+    # different case entirely -- the grounding guard rejects it, and that has
+    # its own tests below.
+    result, _ = drive([responds_with({"content": "NVDA and AAPL are indexed."})], registry)
 
-    assert result.answer == "71%."
+    assert result.answer == "NVDA and AAPL are indexed."
     assert result.completed is True
     assert result.stop_reason == "final_answer"
     assert result.iterations == 1
@@ -330,9 +333,9 @@ def test_every_step_records_the_required_columns(registry):
 
 
 def test_the_final_answer_is_its_own_row(registry):
-    result, _ = drive([responds_with({"content": "71%."})], registry)
+    result, _ = drive([responds_with({"content": "Both are indexed."})], registry)
     assert result.steps[-1].tool == "final_answer"
-    assert result.steps[-1].result == "71%."
+    assert result.steps[-1].result == "Both are indexed."
 
 
 def test_the_table_renders_one_row_per_step(registry):
@@ -369,3 +372,113 @@ def test_result_serializes_for_storage(registry):
     ], registry)
 
     assert json.loads(json.dumps(result.to_dict(), default=str))["iterations"] == 2
+
+
+# ── the ungrounded-answer guard ──────────────────────────────────────────────
+#
+# Conversation history made the model answer follow-ups from recall instead of
+# calling a tool. `tool_choice: "required"` is accepted and ignored by Ollama,
+# so the loop catches it after the fact and gives the model one correction.
+
+def test_a_figure_with_no_tool_call_is_rejected_and_retried(registry):
+    result, model = drive([
+        responds_with({"content": "Apple's gross margin was 38.03%."}),
+        responds_with({"tool_calls": [tool_call("get_margin", {"ticker": "AAPL"})]}),
+        responds_with({"content": "Apple's gross margin is 71%, per the tool."}),
+    ], registry, history=[
+        {"role": "user", "content": "What is NVIDIA's gross margin?"},
+        {"role": "assistant", "content": "71.07%."},
+    ])
+
+    assert [s.tool for s in result.steps] == [
+        "ungrounded_answer", "get_margin", "final_answer",
+    ]
+    # The discarded answer is on the trace, not silently dropped: it is the
+    # only evidence of why the run took an extra iteration.
+    assert result.steps[0].ok is False
+    assert result.steps[0].result == "Apple's gross margin was 38.03%."
+    assert result.completed is True
+    assert "38.03" not in result.answer
+
+
+def test_the_correction_reaches_the_model_as_a_user_message(registry):
+    """Measured, not assumed: the same text as a system message left the model
+    answering from recall again; as a user message it called the tool."""
+    from agent.orchestrator import UNGROUNDED_RETRY
+
+    _, model = drive([
+        responds_with({"content": "It was 38.03%."}),
+        responds_with({"tool_calls": [tool_call("get_margin", {"ticker": "AAPL"})]}),
+        responds_with({"content": "done"}),
+    ], registry)
+
+    correction = model.requests[1]["messages"][-1]
+    assert correction["role"] == "user"
+    assert correction["content"] == UNGROUNDED_RETRY
+    # The rejected answer stays in front of it, so the correction has a referent.
+    assert model.requests[1]["messages"][-2] == {
+        "role": "assistant", "content": "It was 38.03%."
+    }
+
+
+def test_an_answer_backed_by_a_successful_tool_call_is_kept(registry):
+    """The guard must not fire on a grounded figure -- that is the normal path."""
+    result, _ = drive([
+        responds_with({"tool_calls": [tool_call("get_margin", {"ticker": "NVDA"})]}),
+        responds_with({"content": "NVIDIA's gross margin is 71.0%."}),
+    ], registry)
+
+    assert [s.tool for s in result.steps] == ["get_margin", "final_answer"]
+    assert result.answer == "NVIDIA's gross margin is 71.0%."
+
+
+def test_an_answer_with_no_figure_is_left_alone(registry):
+    """"What can you do?" is not a claim about a value."""
+    result, _ = drive([
+        responds_with({"content": "I can look up filings, prices, ratios and news."}),
+    ], registry)
+
+    assert [s.tool for s in result.steps] == ["final_answer"]
+    assert result.iterations == 1
+
+
+def test_the_guard_fires_at_most_once(registry):
+    """A model that ignores the correction gets an answer out, not a loop."""
+    result, model = drive([
+        responds_with({"content": "38.03%."}),
+        responds_with({"content": "Still 38.03%."}),
+    ], registry)
+
+    assert [s.tool for s in result.steps] == ["ungrounded_answer", "final_answer"]
+    assert result.answer == "Still 38.03%."
+    assert result.iterations == 2
+    assert len(model.requests) == 2
+
+
+def test_a_failed_tool_call_does_not_count_as_grounding(registry):
+    """The tool returned ok:false, so the figure still came from nowhere."""
+    result, _ = drive([
+        responds_with({"tool_calls": [tool_call("broken", {"ticker": "ZZZZ"})]}),
+        responds_with({"content": "It was 38.03% anyway."}),
+        responds_with({"tool_calls": [tool_call("get_margin", {"ticker": "AAPL"})]}),
+        responds_with({"content": "71%, from the tool."}),
+    ], registry)
+
+    assert [s.tool for s in result.steps] == [
+        "broken", "ungrounded_answer", "get_margin", "final_answer",
+    ]
+
+
+@pytest.mark.parametrize("answer,is_figure", [
+    ("Gross margin was 46.9%.", True),
+    ("Revenue was $416,161 million.", True),
+    ("Revenue was 416.2 billion.", True),
+    ("The ratio is 1.85.", True),
+    ("Revenue was 416,161.", True),
+    ("Its fiscal year 2026 ended in January.", False),
+    ("I could not find that filing.", False),
+    ("Both NVDA and AAPL are indexed.", False),
+])
+def test_what_counts_as_stating_a_figure(answer, is_figure):
+    from agent.orchestrator import states_a_figure
+    assert states_a_figure(answer) is is_figure

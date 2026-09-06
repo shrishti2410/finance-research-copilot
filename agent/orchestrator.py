@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -50,6 +51,60 @@ MAX_ITERATIONS = 5
 # How much of a result is rendered into the trace table. The full value is kept
 # on the step and stored with the message; this is only what fits on a screen.
 TABLE_RESULT_CHARS = 88
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The ungrounded-answer guard
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Conversation history introduced a failure that single-turn runs never had.
+# Asked "What is NVIDIA's gross margin?" the model calls calculate_ratio. Asked
+# "What about Apple's?" with the previous exchange in front of it, it resolves
+# the reference correctly and then answers from recall -- 38.03% for a figure
+# that is actually 46.91%, with no tool call at all. Having just seen a question
+# of that shape answered, it imitates the answer instead of the method.
+#
+# Three fixes were tried, in order:
+#   1. A prompt rule saying history supplies the subject and never the figures.
+#      Measured: the model still answered from recall. Kept anyway -- it is
+#      correct guidance and costs nothing -- but it is not the mechanism.
+#   2. `tool_choice: "required"`. Ollama accepts the field and ignores it:
+#      finish_reason came back "stop" with an empty tool_calls array, same as
+#      "auto". Not available here.
+#   3. Catching it after the fact, below. A user-role correction moved the model
+#      to calculate_ratio on the retry; the same text as a system message did
+#      not, which is why the correction is addressed to it as the user.
+#
+# The check is narrow on purpose. It fires only when the run made no successful
+# tool call *and* the answer states a figure, so "hello" and "what can you do?"
+# are unaffected, and one retry is allowed per run -- a model that ignores the
+# correction produces an answer, not an infinite loop.
+
+MAX_GROUNDING_RETRIES = 1
+
+# What counts as stating a figure: a percentage, an amount of money, a scaled
+# quantity, a decimal, or a thousands-separated integer. Deliberately not "any
+# digit" -- "fiscal 2026" and "the last 30 days" are not claims about a value.
+_FIGURE = re.compile(
+    r"\d+(?:\.\d+)?\s*%"
+    r"|[$€£¥]\s*\d"
+    r"|\d+(?:\.\d+)?\s*(?:billion|million|trillion|bn\b|tn\b)"
+    r"|\d+\.\d+"
+    r"|\d{1,3}(?:,\d{3})+",
+    re.I,
+)
+
+# Addressed to the model as the user, because that is what was measured to work.
+UNGROUNDED_RETRY = (
+    "That answer states a figure, but you did not call a tool in this turn, so "
+    "the number is from memory rather than from data. It cannot be used -- "
+    "discard it. Call the tool that produces the figure now, then answer from "
+    "what it returns."
+)
+
+
+def states_a_figure(answer: str) -> bool:
+    """Whether an answer asserts a numeric value a tool should have produced."""
+    return bool(_FIGURE.search(answer))
 
 
 @dataclass
@@ -192,6 +247,7 @@ async def run_agent(
     messages.append({"role": "user", "content": question})
 
     steps: list[Step] = []
+    grounding_retries = 0
     owns_client = client is None
     client = client or httpx.AsyncClient(
         base_url=settings.agent_inference_base_url,
@@ -244,6 +300,33 @@ async def run_agent(
 
             if not tool_calls:
                 answer = (message.get("content") or "").strip()
+
+                # A figure nothing produced is recall, not a result. Give the
+                # model one chance to go and get it; see the guard's note above.
+                if (
+                    answer
+                    and grounding_retries < MAX_GROUNDING_RETRIES
+                    and states_a_figure(answer)
+                    and not any(s.ok for s in steps if s.tool != "final_answer")
+                ):
+                    grounding_retries += 1
+                    # Recorded as a failed step, not dropped: the discarded
+                    # answer is the evidence that the guard fired, and a trace
+                    # that hides it makes the extra iteration unexplainable.
+                    steps.append(Step(
+                        iteration=iteration, tool="ungrounded_answer", arguments={},
+                        result=answer, latency_ms=model_ms,
+                        model_latency_ms=model_ms, ok=False,
+                    ))
+                    log.warning(
+                        "agent: discarded an ungrounded answer on iteration %d "
+                        "(no tool call, figure stated): %s",
+                        iteration, _one_line(answer, 120),
+                    )
+                    messages.append({"role": "assistant", "content": answer})
+                    messages.append({"role": "user", "content": UNGROUNDED_RETRY})
+                    continue
+
                 steps.append(Step(
                     iteration=iteration, tool="final_answer", arguments={},
                     result=answer, latency_ms=model_ms, model_latency_ms=model_ms,

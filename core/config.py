@@ -64,6 +64,11 @@ class Settings(BaseSettings):
     # two-company comparison together.
     agent_model: str = "qwen2.5:7b"
     agent_max_iterations: int = 5
+    # Prior messages replayed to the model so a follow-up can resolve a
+    # reference ("what about Apple's?"). Set to 0 to make every /ask a
+    # standalone question again. See agent/memory.py for why this is a
+    # window rather than a summary.
+    agent_history_messages: int = 10
 
     # Lets the process recognise its own loopback calls and skip rate limiting
     # on them. Random per process and never written down: it is not a

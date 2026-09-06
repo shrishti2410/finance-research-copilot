@@ -28,6 +28,7 @@ import logging
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from agent.memory import load_history
 from agent.orchestrator import run_agent
 from api.routes_chat import append_message, owned_conversation
 from api.schemas import AskRequest, AskResponse
@@ -60,13 +61,22 @@ async def ask(
     """
     conversation = await owned_conversation(body.conversation_id, user, session)
 
+    # Read before writing this turn, so the window is the prior conversation and
+    # the current question appears exactly once -- run_agent appends it itself.
+    history = await load_history(
+        session, conversation.id, limit=settings.agent_history_messages
+    )
+
     result = await run_agent(
-        body.message, max_iterations=settings.agent_max_iterations
+        body.message,
+        history=history,
+        max_iterations=settings.agent_max_iterations,
     )
 
     log.info(
-        "ask: conversation=%s user=%s iterations=%d completed=%s stop=%s tools=%s",
-        conversation.id, user.id, result.iterations, result.completed,
+        "ask: conversation=%s user=%s history=%d iterations=%d completed=%s "
+        "stop=%s tools=%s",
+        conversation.id, user.id, len(history), result.iterations, result.completed,
         result.stop_reason, [step.tool for step in result.tool_calls],
     )
 
@@ -83,6 +93,9 @@ async def ask(
                 "stop_reason": result.stop_reason,
                 "total_ms": round(result.total_ms, 1),
                 "tools_called": [step.tool for step in result.tool_calls],
+                # How much prior conversation this answer could see. Without it
+                # a reference-resolving answer is unexplainable after the fact.
+                "history_messages": len(history),
             },
             "trace": [step.to_dict() for step in result.steps[:MAX_STORED_STEPS]],
         },
