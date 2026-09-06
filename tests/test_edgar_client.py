@@ -10,6 +10,7 @@ import time
 
 import pytest
 
+from core.config import settings
 from ingestion.edgar_client import (
     ARCHIVE_URL,
     UserAgentCheck,
@@ -257,6 +258,48 @@ def test_client_starts_with_a_real_contact(tmp_path):
         assert client._client.headers["User-Agent"] == "copilot/0.1 (ops@realdomain.io)"
     finally:
         client.close()
+
+
+def test_an_omitted_user_agent_falls_back_to_config(tmp_path, monkeypatch):
+    """None means "not supplied", which is the only case config fills in."""
+    monkeypatch.setattr(
+        settings, "sec_edgar_user_agent", "from-config/0.1 (ops@realdomain.io)"
+    )
+    client = EdgarClient(cache_dir=tmp_path)
+    try:
+        assert client.user_agent == "from-config/0.1 (ops@realdomain.io)"
+    finally:
+        client.close()
+
+
+def test_an_explicitly_empty_user_agent_is_its_own_failure(tmp_path, monkeypatch):
+    """An empty string is a caller bug, not a request to use the configured
+    value. Silently falling back would let a badly computed User-Agent sail
+    through as a request that works -- under somebody else's contact."""
+    monkeypatch.setattr(
+        settings, "sec_edgar_user_agent", "from-config/0.1 (ops@realdomain.io)"
+    )
+    with pytest.raises(ValueError) as excinfo:
+        EdgarClient(user_agent="", cache_dir=tmp_path)
+
+    message = str(excinfo.value)
+    assert "empty string" in message                 # says what was wrong
+    assert "omit the argument" in message            # and how to get the fallback
+    # Distinct from the missing-contact message, so the two are not confusable.
+    assert "no contact address" not in message
+    assert "from-config" not in message              # config was never consulted
+
+
+def test_a_whitespace_only_user_agent_is_treated_as_empty(tmp_path):
+    with pytest.raises(ValueError, match="empty string"):
+        EdgarClient(user_agent="   ", cache_dir=tmp_path)
+
+
+def test_an_empty_user_agent_fails_even_for_offline_callers(tmp_path):
+    """require_contact governs whether a configured contact must be reachable.
+    It does not make a blank argument mean something."""
+    with pytest.raises(ValueError, match="empty string"):
+        EdgarClient(user_agent="", cache_dir=tmp_path, require_contact=False)
 
 
 def test_offline_callers_can_opt_out(tmp_path):

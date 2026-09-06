@@ -229,7 +229,29 @@ class EdgarClient:
         requests_per_second: float | None = None,
         require_contact: bool = True,
     ) -> None:
-        self.user_agent = user_agent or settings.sec_edgar_user_agent
+        # None means "not supplied -- take it from config". An explicit empty
+        # string is a different thing: a caller that meant to pass a User-Agent
+        # and computed one badly. Folding the two together let that bug run as a
+        # successful request under the configured contact, which is the failure
+        # mode this whole guard exists to stop, one layer up.
+        if user_agent is None:
+            self.user_agent = settings.sec_edgar_user_agent
+        elif not user_agent.strip():
+            # Unconditional, unlike the contact check below. require_contact
+            # governs whether a *configured* contact has to be reachable; it
+            # does not make a blank argument mean anything.
+            raise ValueError(
+                "EdgarClient(user_agent=...) was given an empty string.\n"
+                "  Pass a User-Agent carrying a contact, e.g.\n"
+                "    EdgarClient(user_agent='finance-research-copilot/0.1 "
+                "(you@yourdomain.com)')\n"
+                "  or omit the argument to fall back to SEC_EDGAR_USER_AGENT "
+                "from the environment.\n"
+                "  An empty value is not an absent one, so it is not filled in "
+                "from config."
+            )
+        else:
+            self.user_agent = user_agent
 
         # Raise, not warn. The previous version logged and carried on, and the
         # result was months of requests to sec.gov carrying a fake contact that
