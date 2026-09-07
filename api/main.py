@@ -19,6 +19,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
@@ -58,6 +59,18 @@ app = FastAPI(title="Finance Research Copilot", version="0.0.1", lifespan=lifesp
 # Outermost middleware, so a caller over their limit is rejected before routing,
 # authentication, or any database work happens on their behalf.
 app.add_middleware(RateLimitMiddleware, limiter=limiter)
+
+# The browser client runs on its own origin, so preflight has to be answered.
+# An explicit allow-list, never "*": these requests carry a bearer token, and a
+# wildcard origin on a credentialed API is how one site reads another's data.
+if settings.cors_origin_list:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origin_list,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type"],
+    )
 
 app.include_router(routes_auth.router)
 app.include_router(routes_chat.router)

@@ -74,12 +74,23 @@ class Settings(BaseSettings):
     # window rather than a summary.
     agent_history_messages: int = 10
 
+    # --- Browser client ---
+    # Origins allowed to call this API from a browser. The Next.js dev
+    # server is the only one by default. Comma-separated in the env; an
+    # empty value disables CORS entirely rather than defaulting to '*',
+    # because credentials ride on these requests.
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+
     # Lets the process recognise its own loopback calls and skip rate limiting
     # on them. Random per process and never written down: it is not a
     # credential anyone provisions, and a restart invalidates it. Without it a
     # single /ask would spend five of the caller's twenty anonymous requests a
     # minute on the app talking to itself.
     internal_token: str = Field(default_factory=lambda: secrets.token_urlsafe(32))
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     @field_validator("agent_inference_base_url")
     @classmethod

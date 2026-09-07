@@ -35,6 +35,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import date
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
@@ -137,6 +138,95 @@ def states_a_figure(answer: str) -> bool:
     return bool(_FIGURE.search(answer))
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Streaming the model call
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# The loop can take either path per iteration. Buffered is the default and is
+# what every existing caller and test uses. Streaming exists so a UI can show an
+# answer as it is written instead of after 40s of nothing -- and, just as
+# importantly, so it can show *which tool is running* while it runs.
+#
+# Both paths return the same assembled assistant message, so everything
+# downstream -- the grounding guard, the tool-call budget, the trace -- is
+# identical either way. The only difference is that the streaming path calls
+# `on_token` as content arrives.
+
+
+def _merge_tool_call_delta(acc: dict[int, dict], delta: dict) -> None:
+    """Fold one streamed tool_call fragment into the accumulator.
+
+    Tool calls arrive split across chunks and are keyed by `index`, not by id:
+    the id and function name typically come in the first fragment for that
+    index and the arguments dribble in over many more. Appending by index is
+    the only correct way to reassemble them -- concatenating in arrival order
+    interleaves two parallel calls into one unparseable blob.
+    """
+    index = delta.get("index", 0)
+    slot = acc.setdefault(
+        index, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
+    )
+    if delta.get("id"):
+        slot["id"] = delta["id"]
+    function = delta.get("function") or {}
+    if function.get("name"):
+        slot["function"]["name"] = function["name"]
+    if function.get("arguments"):
+        slot["function"]["arguments"] += function["arguments"]
+
+
+async def _stream_message(client, payload, on_token) -> dict:
+    """Run one streaming chat completion and return the assembled message.
+
+    Returns the same shape the buffered path pulls out of `choices[0].message`.
+    """
+    content_parts: list[str] = []
+    tool_calls: dict[int, dict] = {}
+
+    request = client.build_request("POST", "/chat/completions",
+                                   json={**payload, "stream": True})
+    response = await client.send(request, stream=True)
+    try:
+        response.raise_for_status()
+        async for line in response.aiter_lines():
+            if not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if not data or data == "[DONE]":
+                continue
+            try:
+                chunk = json.loads(data)
+            except json.JSONDecodeError:
+                # A malformed chunk is not worth aborting a good answer over.
+                log.warning("agent: skipping unparseable stream chunk: %s", data[:120])
+                continue
+
+            delta = ((chunk.get("choices") or [{}])[0]).get("delta") or {}
+            piece = delta.get("content")
+            if piece:
+                content_parts.append(piece)
+                # Swallowed for the same reason _emit swallows: a consumer that
+                # has gone away is not an inference failure, and the tool
+                # results already gathered are still worth storing. Without
+                # this, a closed browser tab surfaces to the user as "I
+                # couldn't reach the model".
+                if on_token is not None:
+                    try:
+                        await on_token(piece)
+                    except Exception:  # noqa: BLE001
+                        log.debug("agent: token consumer raised, continuing",
+                                  exc_info=True)
+            for call_delta in delta.get("tool_calls") or []:
+                _merge_tool_call_delta(tool_calls, call_delta)
+    finally:
+        await response.aclose()
+
+    message: dict[str, Any] = {"role": "assistant", "content": "".join(content_parts)}
+    if tool_calls:
+        message["tool_calls"] = [tool_calls[i] for i in sorted(tool_calls)]
+    return message
+
+
 @dataclass
 class Step:
     """One row of the trace: a tool call, or the final answer."""
@@ -235,6 +325,21 @@ def _parse_arguments(raw: Any) -> tuple[dict[str, Any], str | None]:
     return parsed, None
 
 
+async def _emit(on_event, event: dict[str, Any]) -> None:
+    """Hand one event to the caller's channel, if there is one.
+
+    Never lets a consumer's failure take down the run: a browser closing its
+    connection mid-answer must not turn into a failed agent call, because the
+    tool results are still worth storing.
+    """
+    if on_event is None:
+        return
+    try:
+        await on_event(event)
+    except Exception:  # noqa: BLE001 - a dead consumer is not a failed run
+        log.debug("agent: event consumer raised, continuing", exc_info=True)
+
+
 def _findings(steps: list[Step]) -> str:
     """What the successful tool calls established, for the exhaustion message."""
     lines = [
@@ -255,6 +360,9 @@ async def run_agent(
     client: httpx.AsyncClient | None = None,
     today: date | None = None,
     temperature: float = 0.0,
+    stream_tokens: bool = False,
+    on_token: Callable[[str], Awaitable[None]] | None = None,
+    on_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
 ) -> AgentResult:
     """Answer `question`, calling tools as needed, within `max_iterations` turns.
 
@@ -271,6 +379,15 @@ async def run_agent(
         client: an httpx client to reuse. One is created and closed if omitted.
         today: overrides the date given to the model, for reproducible tests.
         temperature: 0 by default -- tool selection should not be a dice roll.
+        stream_tokens: request streaming completions so `on_token` fires as the
+            answer is written. Off by default; the assembled message, and so
+            everything the loop decides from it, is identical either way.
+        on_token: awaited with each content fragment. Fragments from a draft the
+            grounding guard later discards are included -- a "discarded" event
+            follows, and a consumer showing text must reset on it.
+        on_event: awaited with progress events: iteration, tool_start,
+            tool_result, discarded, budget. Exceptions from it are swallowed, so
+            a consumer that goes away cannot fail the run.
     """
     if max_tool_calls_per_iteration < 1:
         # A budget of zero would let the model request tools it can never run,
@@ -315,10 +432,15 @@ async def run_agent(
             }
 
             call_started = time.perf_counter()
+            await _emit(on_event, {"type": "iteration", "iteration": iteration})
             try:
-                response = await client.post("/chat/completions", json=payload)
-                response.raise_for_status()
-                body = response.json()
+                if stream_tokens:
+                    message = await _stream_message(client, payload, on_token)
+                else:
+                    response = await client.post("/chat/completions", json=payload)
+                    response.raise_for_status()
+                    body = response.json()
+                    message = ((body.get("choices") or [{}])[0]).get("message") or {}
             except Exception as exc:  # noqa: BLE001 - upstream down, timeout, bad JSON
                 model_ms = (time.perf_counter() - call_started) * 1000
                 log.error("agent: inference call failed on iteration %d: %s", iteration, exc)
@@ -338,9 +460,6 @@ async def run_agent(
                     total_ms=(time.perf_counter() - started) * 1000,
                 )
             model_ms = (time.perf_counter() - call_started) * 1000
-
-            choice = (body.get("choices") or [{}])[0]
-            message = choice.get("message") or {}
             tool_calls = message.get("tool_calls") or []
 
             if not tool_calls:
@@ -368,6 +487,12 @@ async def run_agent(
                         "(no tool call, figure stated): %s",
                         iteration, _one_line(answer, 120),
                     )
+                    await _emit(on_event, {
+                        "type": "discarded",
+                        "iteration": iteration,
+                        "reason": "ungrounded",
+                        "draft": answer,
+                    })
                     messages.append({"role": "assistant", "content": answer})
                     messages.append({"role": "user", "content": UNGROUNDED_RETRY})
                     continue
@@ -416,6 +541,15 @@ async def run_agent(
                     len(executed_calls), ", ".join(skipped),
                 )
 
+            await _emit(on_event, {
+                "type": "tool_start",
+                "iteration": iteration,
+                "tools": [
+                    (c.get("function") or {}).get("name") or "(unnamed)"
+                    for c in executed_calls
+                ],
+            })
+
             for call in executed_calls:
                 function = call.get("function") or {}
                 name = function.get("name") or ""
@@ -437,6 +571,15 @@ async def run_agent(
                     )
 
                 steps.append(step)
+                await _emit(on_event, {
+                    "type": "tool_result",
+                    "iteration": iteration,
+                    "tool": step.tool,
+                    "arguments": step.arguments,
+                    "ok": step.ok,
+                    "latency_ms": round(step.latency_ms, 1),
+                    "result": _one_line(step.result, 400),
+                })
                 log.info("agent: iteration=%d tool=%s ok=%s latency=%.0fms args=%s",
                          iteration, step.tool, step.ok, step.latency_ms,
                          _one_line(step.arguments, 120))
@@ -472,6 +615,13 @@ async def run_agent(
                                "skipped": skipped},
                     result=answer, latency_ms=0.0, model_latency_ms=0.0, ok=False,
                 ))
+                await _emit(on_event, {
+                    "type": "budget",
+                    "iteration": iteration,
+                    "requested": len(tool_calls),
+                    "budget": max_tool_calls_per_iteration,
+                    "skipped": skipped,
+                })
                 return AgentResult(
                     answer=answer, steps=steps, iterations=iteration, completed=False,
                     stop_reason="tool_call_budget", model=model,

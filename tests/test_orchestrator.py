@@ -594,3 +594,181 @@ def test_a_budget_below_one_is_a_misconfiguration(registry):
 def test_the_default_budget_is_eight():
     from agent.orchestrator import MAX_TOOL_CALLS_PER_ITERATION
     assert MAX_TOOL_CALLS_PER_ITERATION == 8
+
+
+# ── streaming the model call ─────────────────────────────────────────────────
+
+def sse_chunks(*deltas: dict) -> str:
+    """An OpenAI-shaped SSE body from a list of deltas."""
+    lines = [
+        "data: " + json.dumps({"choices": [{"delta": d, "index": 0}]})
+        for d in deltas
+    ]
+    return "\n\n".join(lines) + "\n\ndata: [DONE]\n\n"
+
+
+class StreamingModel:
+    """Replays scripted SSE bodies, and records what it was sent."""
+
+    def __init__(self, bodies: list[str]):
+        self.bodies = list(bodies)
+        self.requests: list[dict] = []
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(json.loads(request.content))
+        body = self.bodies.pop(0) if self.bodies else sse_chunks({"content": "done"})
+        return httpx.Response(200, text=body,
+                              headers={"content-type": "text/event-stream"})
+
+    def client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            transport=httpx.MockTransport(self.handler),
+            base_url="http://model.invalid/v1",
+        )
+
+
+def drive_stream(bodies: list[str], registry, **kwargs):
+    model = StreamingModel(bodies)
+    tokens: list[str] = []
+    events: list[dict] = []
+
+    async def on_token(text):
+        tokens.append(text)
+
+    async def on_event(event):
+        events.append(event)
+
+    async def go():
+        async with model.client() as client:
+            return await run_agent(
+                "compare margins", registry=registry, client=client,
+                model="fake-model", stream_tokens=True,
+                on_token=on_token, on_event=on_event, **kwargs
+            )
+
+    return run(go()), model, tokens, events
+
+
+def test_streamed_content_arrives_as_tokens(registry):
+    result, model, tokens, _ = drive_stream(
+        [sse_chunks({"content": "Gross "}, {"content": "margin "}, {"content": "is fine."})],
+        registry,
+    )
+
+    assert tokens == ["Gross ", "margin ", "is fine."]
+    assert result.answer == "Gross margin is fine."
+    assert model.requests[0]["stream"] is True
+
+
+def test_streamed_tool_calls_are_reassembled_by_index(registry):
+    """Arguments arrive in fragments, and two parallel calls interleave. Keying
+    by index is the only thing that keeps them apart."""
+    body = sse_chunks(
+        {"tool_calls": [{"index": 0, "id": "a", "function": {"name": "get_margin"}}]},
+        {"tool_calls": [{"index": 1, "id": "b", "function": {"name": "get_margin"}}]},
+        {"tool_calls": [{"index": 0, "function": {"arguments": '{"ticker":'}}]},
+        {"tool_calls": [{"index": 1, "function": {"arguments": '{"ticker":'}}]},
+        {"tool_calls": [{"index": 0, "function": {"arguments": '"NVDA"}'}}]},
+        {"tool_calls": [{"index": 1, "function": {"arguments": '"AAPL"}'}}]},
+    )
+    result, _, _, _ = drive_stream([body, sse_chunks({"content": "done"})], registry)
+
+    calls = [s for s in result.steps if s.tool == "get_margin"]
+    assert [c.arguments["ticker"] for c in calls] == ["NVDA", "AAPL"]
+
+
+def test_an_unparseable_chunk_does_not_lose_the_answer(registry):
+    body = ('data: {"choices":[{"delta":{"content":"Half "}}]}\n\n'
+            'data: {not json at all\n\n'
+            'data: {"choices":[{"delta":{"content":"an answer."}}]}\n\n'
+            'data: [DONE]\n\n')
+    result, _, tokens, _ = drive_stream([body], registry)
+
+    assert result.answer == "Half an answer."
+    assert tokens == ["Half ", "an answer."]
+
+
+def test_progress_events_describe_the_run(registry):
+    body = sse_chunks(
+        {"tool_calls": [{"index": 0, "id": "a",
+                         "function": {"name": "get_margin",
+                                      "arguments": '{"ticker":"NVDA"}'}}]},
+    )
+    _, _, _, events = drive_stream([body, sse_chunks({"content": "done"})], registry)
+
+    kinds = [e["type"] for e in events]
+    assert kinds == ["iteration", "tool_start", "tool_result", "iteration"]
+    assert events[1]["tools"] == ["get_margin"]
+    assert events[2]["ok"] is True
+    assert events[2]["arguments"] == {"ticker": "NVDA"}
+
+
+def test_a_discarded_draft_is_announced_so_a_ui_can_reset(registry):
+    """Tokens for a rejected answer have already reached the screen."""
+    result, _, tokens, events = drive_stream([
+        sse_chunks({"content": "It was 38.03%."}),
+        sse_chunks({"tool_calls": [{"index": 0, "id": "a",
+                                    "function": {"name": "get_margin",
+                                                 "arguments": '{"ticker":"AAPL"}'}}]}),
+        sse_chunks({"content": "71%, per the tool."}),
+    ], registry)
+
+    discarded = [e for e in events if e["type"] == "discarded"]
+    assert len(discarded) == 1
+    assert discarded[0]["draft"] == "It was 38.03%."
+    assert "It was 38.03%." in "".join(tokens)     # the UI did see it
+    assert result.answer == "71%, per the tool."   # and must not keep it
+
+
+def test_the_budget_event_carries_what_was_skipped(registry):
+    calls = [{"index": i, "id": f"c{i}",
+              "function": {"name": "get_margin", "arguments": '{"ticker":"X"}'}}
+             for i in range(10)]
+    _, _, _, events = drive_stream([sse_chunks({"tool_calls": calls})], registry,
+                                   max_tool_calls_per_iteration=8)
+
+    budget = [e for e in events if e["type"] == "budget"]
+    assert budget and budget[0]["requested"] == 10 and budget[0]["budget"] == 8
+    assert len(budget[0]["skipped"]) == 2
+
+
+def test_a_consumer_that_raises_does_not_fail_the_run(registry):
+    """A browser closing mid-answer must not lose the tool results."""
+    model = StreamingModel([sse_chunks({"content": "still fine"})])
+
+    async def explode(_event):
+        raise RuntimeError("client went away")
+
+    async def go():
+        async with model.client() as client:
+            return await run_agent("q", registry=registry, client=client,
+                                   model="fake-model", stream_tokens=True,
+                                   on_token=explode, on_event=explode)
+
+    result = run(go())
+    assert result.answer == "still fine"
+    assert result.completed is True
+
+
+def test_buffered_runs_emit_events_too(registry):
+    """Progress events are not tied to streaming -- only tokens are."""
+    events: list[dict] = []
+
+    async def on_event(event):
+        events.append(event)
+
+    model = FakeModel([
+        responds_with({"tool_calls": [tool_call("get_margin", {"ticker": "NVDA"})]}),
+        responds_with({"content": "done"}),
+    ])
+
+    async def go():
+        async with model.client() as client:
+            return await run_agent("q", registry=registry, client=client,
+                                   model="fake-model", on_event=on_event)
+
+    run(go())
+    assert [e["type"] for e in events] == [
+        "iteration", "tool_start", "tool_result", "iteration",
+    ]
+    assert model.requests[0].get("stream") is False
