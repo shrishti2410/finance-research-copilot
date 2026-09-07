@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     # two-company comparison together.
     agent_model: str = "qwen2.5:7b"
     agent_max_iterations: int = 5
+    # Bounds work, where agent_max_iterations bounds round-trips: Qwen
+    # emits parallel tool calls, and one iteration held 16 of them in the
+    # M6 audit. See agent/orchestrator.py for why the default is 8.
+    agent_max_tool_calls_per_iteration: int = 8
     # Prior messages replayed to the model so a follow-up can resolve a
     # reference ("what about Apple's?"). Set to 0 to make every /ask a
     # standalone question again. See agent/memory.py for why this is a

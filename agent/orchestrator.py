@@ -39,7 +39,13 @@ from typing import Any
 
 import httpx
 
-from agent.prompts import EXHAUSTED_NO_FINDINGS, EXHAUSTED_TEMPLATE, system_prompt
+from agent.prompts import (
+    EXHAUSTED_NO_FINDINGS,
+    EXHAUSTED_TEMPLATE,
+    EXHAUSTED_TOOL_BUDGET,
+    EXHAUSTED_TOOL_BUDGET_NO_FINDINGS,
+    system_prompt,
+)
 from agent.tools import build_registry, compact_for_model
 from core.config import settings
 from tools.registry import Registry
@@ -47,6 +53,25 @@ from tools.registry import Registry
 log = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 5
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The per-iteration tool-call budget
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# `max_iterations` bounds model round-trips, not work. Qwen issues parallel tool
+# calls, and one iteration holds as many as it decides to emit -- the audit's
+# fan-out query ("for NVDA, AAPL and MSFT: gross margin, debt-to-equity and P/E
+# each, then news, then prices, then what the 10-K says") produced 16 calls
+# inside a single iteration, all executed, against a cap that had counted one.
+# The cap was doing nothing about the cost that actually matters: yfinance and
+# RSS round trips, and the tool output that has to fit back in the context.
+#
+# 8 is the default because it is above what a real comparison needs and below a
+# runaway. Two companies across the four tools is at most 8; the 16-call query
+# is three companies times five things each, which is a research plan, not a
+# turn. A model that wants more can have it in the next iteration -- the budget
+# is per iteration, and iterations are what `max_iterations` is for.
+MAX_TOOL_CALLS_PER_ITERATION = 8
 
 # How much of a result is rendered into the trace table. The full value is kept
 # on the step and stored with the message; this is only what fits on a screen.
@@ -221,6 +246,7 @@ async def run_agent(
     registry: Registry | None = None,
     model: str | None = None,
     max_iterations: int = MAX_ITERATIONS,
+    max_tool_calls_per_iteration: int = MAX_TOOL_CALLS_PER_ITERATION,
     client: httpx.AsyncClient | None = None,
     today: date | None = None,
     temperature: float = 0.0,
@@ -231,11 +257,25 @@ async def run_agent(
         question: the user's message.
         history: prior turns as [{"role", "content"}], oldest first.
         registry: tools to expose. Defaults to the four in `agent.tools`.
+        max_iterations: model round-trips. Bounds turns, not work.
+        max_tool_calls_per_iteration: tool calls run within one iteration. A
+            model that asks for more gets the first `max_tool_calls_per_iteration`
+            executed and then the same honest stop as running out of
+            iterations -- see the note on the constant.
         model: model id. Defaults to `settings.agent_model`.
         client: an httpx client to reuse. One is created and closed if omitted.
         today: overrides the date given to the model, for reproducible tests.
         temperature: 0 by default -- tool selection should not be a dice roll.
     """
+    if max_tool_calls_per_iteration < 1:
+        # A budget of zero would let the model request tools it can never run,
+        # and every question would end on the over-budget path. That is a
+        # misconfiguration, not a policy, so it fails where it is set.
+        raise ValueError(
+            f"max_tool_calls_per_iteration must be at least 1, "
+            f"got {max_tool_calls_per_iteration}"
+        )
+
     registry = registry or build_registry()
     model = model or settings.agent_model
     started = time.perf_counter()
@@ -354,7 +394,24 @@ async def run_agent(
                 "tool_calls": tool_calls,
             })
 
-            for call in tool_calls:
+            # Over-budget calls are dropped here, before any of them run, so
+            # the ones that do run are a prefix of what the model asked for --
+            # not a sample of it.
+            over_budget = len(tool_calls) > max_tool_calls_per_iteration
+            executed_calls = tool_calls[:max_tool_calls_per_iteration]
+            if over_budget:
+                skipped = [
+                    (c.get("function") or {}).get("name") or "(unnamed)"
+                    for c in tool_calls[max_tool_calls_per_iteration:]
+                ]
+                log.warning(
+                    "agent: iteration=%d requested %d tool calls, budget is %d; "
+                    "running the first %d and stopping. skipped: %s",
+                    iteration, len(tool_calls), max_tool_calls_per_iteration,
+                    len(executed_calls), ", ".join(skipped),
+                )
+
+            for call in executed_calls:
                 function = call.get("function") or {}
                 name = function.get("name") or ""
                 arguments, parse_error = _parse_arguments(function.get("arguments"))
@@ -385,6 +442,36 @@ async def run_agent(
                     "name": name,
                     "content": json.dumps(compact_for_model(name, outcome), default=str),
                 })
+
+            if over_budget:
+                # Same ending as running out of iterations: say so, and hand
+                # back what the calls that did run established. Not a silent
+                # truncation -- an answer written from a prefix of the evidence,
+                # with no sign that the rest was dropped, is the thing this is
+                # here to prevent.
+                findings = _findings(steps)
+                fields = dict(
+                    requested=len(tool_calls),
+                    budget=max_tool_calls_per_iteration,
+                    executed=len(executed_calls),
+                )
+                answer = (
+                    EXHAUSTED_TOOL_BUDGET.format(findings=findings, **fields)
+                    if findings else
+                    EXHAUSTED_TOOL_BUDGET_NO_FINDINGS.format(**fields)
+                )
+                steps.append(Step(
+                    iteration=iteration, tool="tool_call_budget",
+                    arguments={"requested": len(tool_calls),
+                               "budget": max_tool_calls_per_iteration,
+                               "skipped": skipped},
+                    result=answer, latency_ms=0.0, model_latency_ms=0.0, ok=False,
+                ))
+                return AgentResult(
+                    answer=answer, steps=steps, iterations=iteration, completed=False,
+                    stop_reason="tool_call_budget", model=model,
+                    total_ms=(time.perf_counter() - started) * 1000,
+                )
 
         # Budget exhausted with tool calls still outstanding.
         findings = _findings(steps)

@@ -482,3 +482,115 @@ def test_a_failed_tool_call_does_not_count_as_grounding(registry):
 def test_what_counts_as_stating_a_figure(answer, is_figure):
     from agent.orchestrator import states_a_figure
     assert states_a_figure(answer) is is_figure
+
+
+# ── the per-iteration tool-call budget ───────────────────────────────────────
+#
+# max_iterations bounds model round-trips, not work: the audit's fan-out query
+# put 16 parallel tool calls inside a single iteration, all of which ran.
+
+def many_calls(n: int, name: str = "get_margin") -> dict:
+    return responds_with({
+        "tool_calls": [
+            tool_call(name, {"ticker": f"T{i}"}, call_id=f"call_{i}")
+            for i in range(n)
+        ]
+    })
+
+
+def test_calls_within_the_budget_all_run(registry):
+    result, _ = drive([many_calls(8), responds_with({"content": "done"})],
+                      registry, max_tool_calls_per_iteration=8)
+
+    assert len([s for s in result.steps if s.tool == "get_margin"]) == 8
+    assert result.completed is True
+    assert result.stop_reason == "final_answer"
+
+
+def test_going_over_the_budget_runs_the_budget_and_stops(registry):
+    """The audit's 16 calls, against a budget of 8."""
+    result, _ = drive([many_calls(16)], registry, max_tool_calls_per_iteration=8)
+
+    executed = [s for s in result.steps if s.tool == "get_margin"]
+    assert len(executed) == 8
+    assert result.completed is False
+    assert result.stop_reason == "tool_call_budget"
+
+
+def test_the_calls_that_run_are_a_prefix_not_a_sample(registry):
+    result, _ = drive([many_calls(16)], registry, max_tool_calls_per_iteration=8)
+
+    executed = [s.arguments["ticker"] for s in result.steps if s.tool == "get_margin"]
+    assert executed == [f"T{i}" for i in range(8)]
+
+
+def test_the_over_budget_answer_says_what_happened(registry):
+    result, _ = drive([many_calls(16)], registry, max_tool_calls_per_iteration=8)
+
+    answer = result.answer
+    assert "couldn't complete" in answer
+    assert "16 tool calls" in answer          # what was asked for
+    assert "8 per step" in answer             # what the limit is
+    # It must not claim a step limit that was never reached -- that would send
+    # the user to rephrase the wrong thing.
+    assert "5-step limit" not in answer
+
+
+def test_the_over_budget_answer_carries_the_findings(registry):
+    """The M6 exhaustion contract: whatever did run is reported, not discarded."""
+    result, _ = drive([many_calls(16)], registry, max_tool_calls_per_iteration=8)
+
+    assert "get_margin" in result.answer
+    assert "T0" in result.answer
+    assert "T7" in result.answer
+    assert "T8" not in result.answer          # never ran, never claimed
+
+
+def test_the_trace_records_what_was_skipped(registry):
+    result, _ = drive([many_calls(16)], registry, max_tool_calls_per_iteration=8)
+
+    budget_step = result.steps[-1]
+    assert budget_step.tool == "tool_call_budget"
+    assert budget_step.ok is False
+    assert budget_step.arguments["requested"] == 16
+    assert budget_step.arguments["budget"] == 8
+    assert len(budget_step.arguments["skipped"]) == 8
+
+
+def test_nothing_is_asked_of_the_model_after_the_budget_stop(registry):
+    """It stops; it does not quietly carry on with a partial tool set."""
+    _, model = drive([many_calls(16), responds_with({"content": "unreached"})],
+                     registry, max_tool_calls_per_iteration=8)
+
+    assert len(model.requests) == 1
+
+
+def test_over_budget_with_nothing_usable_says_so(registry):
+    """Every call failed, so there are no findings to report -- and the message
+    must not imply there were."""
+    result, _ = drive([many_calls(16, name="broken")], registry,
+                      max_tool_calls_per_iteration=8)
+
+    assert result.stop_reason == "tool_call_budget"
+    assert "no findings to report" in result.answer
+
+
+def test_the_budget_is_per_iteration_not_per_run(registry):
+    """Eight in one turn and eight in the next is sixteen, and is fine."""
+    result, _ = drive([many_calls(8), many_calls(8), responds_with({"content": "done"})],
+                      registry, max_tool_calls_per_iteration=8)
+
+    assert len([s for s in result.steps if s.tool == "get_margin"]) == 16
+    assert result.completed is True
+    assert result.iterations == 3
+
+
+def test_a_budget_below_one_is_a_misconfiguration(registry):
+    """Zero would make every question end on the over-budget path."""
+    with pytest.raises(ValueError, match="at least 1"):
+        drive([many_calls(2)], registry, max_tool_calls_per_iteration=0)
+
+
+def test_the_default_budget_is_eight():
+    from agent.orchestrator import MAX_TOOL_CALLS_PER_ITERATION
+    assert MAX_TOOL_CALLS_PER_ITERATION == 8

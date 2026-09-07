@@ -90,6 +90,36 @@ To finish this, ask a narrower question -- for example about one company or one 
 metric at a time.\
 """
 
+# The same shape as EXHAUSTED_TEMPLATE -- what stopped it, what was established,
+# what to do instead -- for the other way a run ends without an answer: one
+# iteration asking for more tool calls than the per-iteration budget allows.
+#
+# It does not reuse EXHAUSTED_TEMPLATE's wording, because that wording names a
+# step limit that was not reached. Telling a user their question hit a
+# five-step limit when it actually asked for 16 tool calls in step one sends
+# them to rephrase the wrong thing -- and a message that misreports why it
+# stopped is the failure this whole path exists to avoid.
+EXHAUSTED_TOOL_BUDGET = """\
+I couldn't complete this question. It asked for {requested} tool calls in a \
+single step, and I run at most {budget} per step, so I stopped after the first \
+{executed} rather than half-answering from a partial set.
+
+Here is what those {executed} did establish:
+{findings}
+
+To finish this, ask for less at once -- one company, or one group of metrics, \
+per question.\
+"""
+
+EXHAUSTED_TOOL_BUDGET_NO_FINDINGS = """\
+I couldn't complete this question. It asked for {requested} tool calls in a \
+single step, and I run at most {budget} per step. The {executed} I did run \
+returned no usable data, so I have no findings to report -- nothing here is a \
+partial answer.
+
+Ask for less at once: one company, or one group of metrics, per question.\
+"""
+
 EXHAUSTED_NO_FINDINGS = """\
 I couldn't complete this question within the {max_iterations}-step limit, and \
 none of the tool calls I made returned usable data. Nothing here is a partial \

@@ -71,6 +71,7 @@ async def ask(
         body.message,
         history=history,
         max_iterations=settings.agent_max_iterations,
+        max_tool_calls_per_iteration=settings.agent_max_tool_calls_per_iteration,
     )
 
     log.info(
