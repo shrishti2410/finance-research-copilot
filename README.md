@@ -53,3 +53,4 @@ uvicorn api.main:app --reload
 - [docs/DATABASE.md](docs/DATABASE.md) — schema design, auth, migrations
 - [docs/RATE_LIMITING.md](docs/RATE_LIMITING.md) — Redis sliding-window limiter
 - [docs/INFERENCE.md](docs/INFERENCE.md) — running a model behind the proxy
+- [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) — deliberate behaviour that looks like a defect, and what would justify changing it

@@ -109,6 +109,13 @@ All credentials come from environment variables — see `.env.example`.
 ## 6. Status
 
 Last updated 2026-09-04, after milestone 5's retrieval layer landed.
+**This section is behind the code**: milestone 6 (tools, the agent loop and
+`POST /ask`) and audit fixes F1-F4 and F7 have since landed. See the git log
+until this is rewritten.
+
+Deliberate behaviour that looks like a defect until you know why is in
+[KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md), not here; this section is for
+what is and is not built.
 
 ### Milestones 0-3 — complete
 

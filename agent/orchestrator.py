@@ -103,6 +103,11 @@ TABLE_RESULT_CHARS = 88
 # tool call *and* the answer states a figure, so "hello" and "what can you do?"
 # are unaffected, and one retry is allowed per run -- a model that ignores the
 # correction produces an answer, not an infinite loop.
+#
+# It costs one redundant call on a pure comparison follow-up ("which one is
+# higher?"), because a figure established in an earlier turn is not a figure a
+# tool returned in this one. That trade, and what would justify revisiting it,
+# is written up in docs/KNOWN_LIMITATIONS.md.
 
 MAX_GROUNDING_RETRIES = 1
 
