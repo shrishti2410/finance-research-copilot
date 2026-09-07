@@ -27,10 +27,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from contextlib import suppress
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agent.memory import load_history
@@ -39,8 +39,8 @@ from api.routes_chat import append_message, owned_conversation
 from api.schemas import AskRequest, AskResponse
 from auth.deps import get_current_user
 from core.config import settings
-from db.base import get_session
-from db.models import User
+from db.base import SessionLocal, get_session
+from db.models import Conversation, User
 
 log = logging.getLogger(__name__)
 
@@ -177,6 +177,79 @@ def sse(event: dict) -> str:
     return f"data: {json.dumps(event, default=str)}\n\n"
 
 
+# Runs that outlived their request. Referenced here so the event loop cannot
+# collect them mid-flight; see where they are added.
+_RUNS: set[asyncio.Task] = set()
+
+
+async def _run_and_store(*, conversation_id, user_id, question, history, queue, put):
+    """Run the agent and persist the turn, on a session of its own.
+
+    The request's session is deliberately not used. It is closed when the
+    response ends, and the whole point of this task is to still be running then
+    -- writing through it after the client disconnects fails on a closed
+    connection, which is how a finished answer gets silently dropped.
+
+    The conversation is re-fetched here rather than passed in: an ORM object
+    belongs to the session that loaded it, and `append_message` mutates it.
+    Ownership was already established in the request, so this reads by id --
+    and still scopes by user_id, so a stale task can never write into a
+    conversation that changed hands.
+    """
+    try:
+        async with SessionLocal() as session:
+            conversation = await session.scalar(
+                select(Conversation).where(
+                    Conversation.id == conversation_id,
+                    Conversation.user_id == user_id,
+                )
+            )
+            if conversation is None:  # deleted between the check and now
+                await queue.put({
+                    "type": "error",
+                    "error": "NotFound",
+                    "message": "The conversation no longer exists.",
+                })
+                return
+
+            result = await run_agent(
+                question,
+                history=history,
+                max_iterations=settings.agent_max_iterations,
+                max_tool_calls_per_iteration=settings.agent_max_tool_calls_per_iteration,
+                stream_tokens=True,
+                on_token=lambda text: put({"type": "token", "text": text}),
+                on_event=put,
+            )
+            user_message, assistant_message = await _store_turn(
+                session, conversation, question, result,
+                history_messages=len(history),
+            )
+            await queue.put({
+                "type": "done",
+                "conversation_id": str(conversation_id),
+                "user_message_id": user_message.id,
+                "assistant_message_id": assistant_message.id,
+                "answer": result.answer,
+                "completed": result.completed,
+                "stop_reason": result.stop_reason,
+                "iterations": result.iterations,
+                "model": result.model,
+                "total_ms": round(result.total_ms, 1),
+                "history_messages": len(history),
+                "steps": [step.to_dict() for step in result.steps],
+            })
+    except Exception as exc:  # noqa: BLE001 - the client is owed a reason
+        log.exception("ask/stream: run failed for conversation %s", conversation_id)
+        await queue.put({
+            "type": "error",
+            "error": type(exc).__name__,
+            "message": str(exc),
+        })
+    finally:
+        await queue.put(None)  # sentinel: nothing more is coming
+
+
 @router.post("/ask/stream")
 async def ask_stream(
     body: AskRequest,
@@ -203,56 +276,30 @@ async def ask_stream(
         session, conversation.id, limit=settings.agent_history_messages
     )
 
-    # A queue decouples the loop from the socket. The alternative -- yielding
-    # from inside the loop -- would make a slow reader throttle tool execution,
-    # and a disconnected one hang the run holding a database session.
+    # A queue decouples the loop from the socket, so a slow reader cannot
+    # throttle tool execution and a vanished one cannot stall it.
     queue: asyncio.Queue = asyncio.Queue()
 
     async def put(event: dict) -> None:
         await queue.put(event)
 
-    async def run() -> None:
-        try:
-            result = await run_agent(
-                body.message,
-                history=history,
-                max_iterations=settings.agent_max_iterations,
-                max_tool_calls_per_iteration=settings.agent_max_tool_calls_per_iteration,
-                stream_tokens=True,
-                on_token=lambda text: put({"type": "token", "text": text}),
-                on_event=put,
-            )
-            user_message, assistant_message = await _store_turn(
-                session, conversation, body.message, result,
-                history_messages=len(history),
-            )
-            await queue.put({
-                "type": "done",
-                "conversation_id": str(conversation.id),
-                "user_message_id": user_message.id,
-                "assistant_message_id": assistant_message.id,
-                "answer": result.answer,
-                "completed": result.completed,
-                "stop_reason": result.stop_reason,
-                "iterations": result.iterations,
-                "model": result.model,
-                "total_ms": round(result.total_ms, 1),
-                "history_messages": len(history),
-                "steps": [step.to_dict() for step in result.steps],
-            })
-        except Exception as exc:  # noqa: BLE001 - the client is owed a reason
-            log.exception("ask/stream: run failed for conversation %s", conversation.id)
-            await session.rollback()
-            await queue.put({
-                "type": "error",
-                "error": type(exc).__name__,
-                "message": str(exc),
-            })
-        finally:
-            await queue.put(None)  # sentinel: nothing more is coming
+    task = asyncio.create_task(
+        _run_and_store(
+            conversation_id=conversation.id,
+            user_id=user.id,
+            question=body.message,
+            history=history,
+            queue=queue,
+            put=put,
+        )
+    )
+    # A task referenced only by the event loop can be garbage-collected
+    # mid-flight. Holding it until it finishes is what makes "the run survives
+    # the client" true rather than merely likely.
+    _RUNS.add(task)
+    task.add_done_callback(_RUNS.discard)
 
     async def frames():
-        task = asyncio.create_task(run())
         try:
             while True:
                 event = await queue.get()
@@ -260,12 +307,19 @@ async def ask_stream(
                     break
                 yield sse(event)
         finally:
-            # A client that goes away must not leave the loop running against a
-            # session the request is about to close.
+            # Deliberately not cancelled. A client hanging up -- a refresh, a
+            # closed tab -- is not a reason to throw away a run that has already
+            # spent a minute of model time and made real tool calls. It owns its
+            # own database session precisely so it can outlive this request and
+            # still commit; the reloaded page then finds the finished turn
+            # waiting for it.
             if not task.done():
-                task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
+                log.info(
+                    "ask/stream: client left; conversation %s continues in the "
+                    "background",
+                    conversation.id,
+                )
 
-    return StreamingResponse(frames(), media_type="text/event-stream",
-                             headers=SSE_HEADERS)
+    return StreamingResponse(
+        frames(), media_type="text/event-stream", headers=SSE_HEADERS
+    )

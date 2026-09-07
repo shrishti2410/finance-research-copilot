@@ -392,3 +392,86 @@ def test_the_stored_answer_records_how_much_history_it_saw(client, stub_agent):
     stored = next(m for m in messages if m["id"] == body["assistant_message_id"])
 
     assert stored["meta"]["agent"]["history_messages"] == 2
+
+
+# ── the streamed run outlives its request ────────────────────────────────────
+#
+# A refresh mid-answer used to cancel the run: the reload found a clean but
+# empty thread, and a minute of model time plus real tool calls was thrown away.
+# The run now owns a session of its own so it can commit after the client is
+# gone.
+
+def test_the_run_uses_its_own_session_not_the_requests(monkeypatch):
+    """The request's session is closed when the response ends. Writing the turn
+    through it after a disconnect fails on a closed connection, which is how a
+    finished answer gets silently dropped."""
+    import inspect
+
+    source = inspect.getsource(routes._run_and_store)
+    assert "SessionLocal()" in source
+    # The conversation has to be re-fetched: an ORM object belongs to the
+    # session that loaded it, and append_message mutates it.
+    assert "select(Conversation)" in source
+    # ...and still scoped to the owner, so a stale task cannot write into a
+    # conversation that changed hands.
+    assert "Conversation.user_id == user_id" in source
+
+
+def test_the_stream_does_not_cancel_the_run_when_the_client_leaves():
+    import inspect
+
+    source = inspect.getsource(routes.ask_stream)
+    assert "task.cancel()" not in source, (
+        "cancelling on disconnect is what discarded finished answers"
+    )
+    assert "_RUNS.add(task)" in source, (
+        "a task referenced only by the event loop can be collected mid-flight"
+    )
+
+
+def test_finished_runs_are_released_from_the_registry():
+    """_RUNS holds tasks so they survive; a done callback has to let them go, or
+    it is a leak that grows with every question asked."""
+    import inspect
+
+    source = inspect.getsource(routes.ask_stream)
+    assert "add_done_callback(_RUNS.discard)" in source
+
+
+# ── CORS is an allow-list ────────────────────────────────────────────────────
+
+def test_an_allowed_origin_is_echoed_back(client):
+    response = client.get("/health", headers={"Origin": "http://localhost:3000"})
+    assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
+
+
+@pytest.mark.parametrize("origin", [
+    "http://evil.example.com",
+    "https://localhost:3000",   # right host, wrong scheme
+    "http://localhost:3001",    # right host, wrong port
+    "null",                     # a sandboxed iframe or file://
+])
+def test_an_unlisted_origin_gets_no_allow_header(client, origin):
+    """Without the header the browser discards the response, whatever the
+    status code says."""
+    response = client.get("/health", headers={"Origin": origin})
+    assert "access-control-allow-origin" not in response.headers
+
+
+@pytest.mark.parametrize("origin", ["http://evil.example.com", "null"])
+def test_preflight_from_an_unlisted_origin_is_rejected(client, origin):
+    response = client.options("/ask/stream", headers={
+        "Origin": origin,
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "authorization,content-type",
+    })
+    assert response.status_code == 400
+    assert "access-control-allow-origin" not in response.headers
+
+
+def test_credentials_are_never_paired_with_a_wildcard_origin(client):
+    """allow-credentials with allow-origin '*' is how one site reads another's
+    data. The middleware is configured with an explicit list; this pins it."""
+    for origin in ("http://localhost:3000", "http://evil.example.com"):
+        response = client.get("/health", headers={"Origin": origin})
+        assert response.headers.get("access-control-allow-origin") != "*"

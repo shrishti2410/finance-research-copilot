@@ -19,7 +19,9 @@ import {
   useMemo,
   useState,
 } from "react";
+import { useRouter } from "next/navigation";
 import { api, ApiError, type User } from "./api";
+import { onSessionExpired } from "./session";
 
 const TOKEN_KEY = "frc.token";
 
@@ -29,6 +31,9 @@ interface AuthState {
   /** False until the stored token has been checked, so the UI can avoid
    *  flashing the login page at an already-authenticated user. */
   ready: boolean;
+  /** Set when a request came back 401 rather than the user signing out, so the
+   *  login page can say why they are looking at it. */
+  expired: boolean;
   signup: (email: string, password: string) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   logout: () => void;
@@ -40,6 +45,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [ready, setReady] = useState(false);
+  const [expired, setExpired] = useState(false);
+  const router = useRouter();
+
+  // Any 401 from anywhere in the app lands here. Dropping the dead token
+  // matters as much as the redirect: without it a reload would try the same
+  // expired token again and bounce straight back.
+  useEffect(
+    () =>
+      onSessionExpired(() => {
+        localStorage.removeItem(TOKEN_KEY);
+        setToken(null);
+        setUser(null);
+        setExpired(true);
+        router.replace("/login");
+      }),
+    [router],
+  );
 
   // On boot, adopt a stored token only if it still works. A token that expired
   // while the tab was closed would otherwise put the app in a logged-in state
@@ -75,6 +97,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem(TOKEN_KEY, accessToken);
     setToken(accessToken);
     setUser(await api.me(accessToken));
+    setExpired(false);   // signing in successfully clears the notice
   }, []);
 
   const signup = useCallback(
@@ -97,11 +120,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     localStorage.removeItem(TOKEN_KEY);
     setToken(null);
     setUser(null);
+    setExpired(false);   // a deliberate sign-out is not an expiry
   }, []);
 
   const value = useMemo(
-    () => ({ token, user, ready, signup, login, logout }),
-    [token, user, ready, signup, login, logout],
+    () => ({ token, user, ready, expired, signup, login, logout }),
+    [token, user, ready, expired, signup, login, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

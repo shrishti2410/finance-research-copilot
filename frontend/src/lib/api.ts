@@ -6,6 +6,8 @@
  * Response they have to remember to check `.ok` on.
  */
 
+import { sessionExpired } from "./session";
+
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
 
@@ -59,6 +61,10 @@ async function request<T>(
 
   const body = await response.json().catch(() => null);
   if (!response.ok) {
+    // A 401 here means the token expired or was revoked. It is never a
+    // per-request problem the caller can retry past, so it is handled once,
+    // centrally, rather than by every call site remembering to check.
+    if (response.status === 401) sessionExpired();
     throw new ApiError(
       response.status,
       readDetail(body, `${response.status} ${response.statusText}`),
@@ -224,6 +230,7 @@ export async function* askStream(
 
   if (!response.ok) {
     const body = await response.json().catch(() => null);
+    if (response.status === 401) sessionExpired();
     throw new ApiError(
       response.status,
       readDetail(body, `${response.status} ${response.statusText}`),

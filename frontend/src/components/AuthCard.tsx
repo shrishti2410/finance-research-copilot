@@ -8,6 +8,8 @@ interface Props {
   heading: string;
   submitLabel: string;
   pending: boolean;
+  /** Why the user is looking at this page, when it was not their idea. */
+  notice?: string;
   hint?: string;
   minPasswordLength?: number;
   altHref: string;
@@ -21,6 +23,7 @@ export function AuthCard({
   heading,
   submitLabel,
   pending,
+  notice,
   hint,
   minPasswordLength,
   altHref,
@@ -53,6 +56,15 @@ export function AuthCard({
           }}
         >
           <h2 className="text-sm font-medium text-neutral-300">{heading}</h2>
+
+          {notice && (
+            <p
+              role="status"
+              className="rounded-md border border-amber-900/60 bg-amber-950/30 px-3 py-2 text-xs text-amber-300/90"
+            >
+              {notice}
+            </p>
+          )}
 
           <label className="block">
             <span className="text-xs text-neutral-400">Email</span>
