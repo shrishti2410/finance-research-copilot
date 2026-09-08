@@ -1,0 +1,509 @@
+{
+  "generated_at": "2026-09-08T07:27:21+00:00",
+  "tolerance_semantics": "Absolute, in the case's `unit`. For unit 'percent' the tolerance is in percentage points, not a relative percentage.",
+  "corpus": {
+    "NVDA": "10-K FY2026 (period ending 2026-01-25): Item 1A, Item 7, consolidated statements of income",
+    "AAPL": "10-K FY2025 (period ending 2025-09-27): Item 1A, Item 7, consolidated statements of operations"
+  },
+  "cases": [
+    {
+      "id": "nvda-revenue-fy2026",
+      "question": "What was NVIDIA's total revenue for fiscal year 2026?",
+      "expected_answer": 215938.0,
+      "unit": "USD millions",
+      "tolerance": 1.0,
+      "answerable_via": [
+        "search_filings"
+      ],
+      "company": "NVDA",
+      "source": "NVDA FY2026 income statement, 'Revenue', column Jan 25, 2026"
+    },
+    {
+      "id": "nvda-gross-profit-fy2026",
+      "question": "What was NVIDIA's gross profit in fiscal year 2026?",
+      "expected_answer": 153463.0,
+      "unit": "USD millions",
+      "tolerance": 1.0,
+      "answerable_via": [
+        "search_filings"
+      ],
+      "company": "NVDA",
+      "source": "NVDA FY2026 income statement, 'Gross profit'"
+    },
+    {
+      "id": "nvda-rnd-fy2026",
+      "question": "How much did NVIDIA spend on research and development in fiscal 2026?",
+      "expected_answer": 18497.0,
+      "unit": "USD millions",
+      "tolerance": 1.0,
+      "answerable_via": [
+        "search_filings"
+      ],
+      "company": "NVDA",
+      "source": "NVDA FY2026 income statement, 'Research and development'"
+    },
+    {
+      "id": "nvda-net-income-fy2026",
+      "question": "What was NVIDIA's net income in fiscal year 2026?",
+      "expected_answer": 120067.0,
+      "unit": "USD millions",
+      "tolerance": 1.0,
+      "answerable_via": [
+        "search_filings"
+      ],
+      "company": "NVDA",
+      "source": "NVDA FY2026 income statement, 'Net income'"
+    },
+    {
+      "id": "nvda-diluted-eps-fy2026",
+      "question": "What was NVIDIA's diluted earnings per share in fiscal year 2026?",
+      "expected_answer": 4.9,
+      "unit": "USD",
+      "tolerance": 0.01,
+      "answerable_via": [
+        "search_filings"
+      ],
+      "company": "NVDA",
+      "source": "NVDA FY2026 income statement, diluted net income per share",
+      "notes": "Per-share rows are not scaled to millions; this case pins that."
+    },
+    {
+      "id": "nvda-revenue-fy2024",
+      "question": "What was NVIDIA's revenue in fiscal year 2024?",
+      "expected_answer": 60922.0,
+      "unit": "USD millions",
+      "tolerance": 1.0,
+      "answerable_via": [
+        "search_filings"
+      ],
+      "company": "NVDA",
+      "source": "NVDA FY2026 income statement, 'Revenue', column Jan 28, 2024",
+      "notes": "A prior-year column in the same table: the retrieved chunk holds three years, so this tests reading the right one."
+    },
+    {
+      "id": "nvda-diluted-shares-fy2026",
+      "question": "What was NVIDIA's weighted average diluted share count in fiscal 2026?",
+      "expected_answer": 24514.0,
+      "unit": "millions of shares",
+      "tolerance": 50.0,
+      "answerable_via": [
+        "search_filings"
+      ],
+      "company": "NVDA",
+      "source": "NVDA FY2026 income statement, diluted weighted average shares",
+      "notes": "Share-count rows carry their own scale; this pins that too."
+    },
+    {
+      "id": "aapl-revenue-fy2025",
+      "question": "What were Apple's total net sales for fiscal year 2025?",
+      "expected_answer": 416161.0,
+      "unit": "USD millions",
+      "tolerance": 1.0,
+      "answerable_via": [
+        "search_filings"
+      ],
+      "company": "AAPL",
+      "source": "AAPL FY2025 income statement, 'Total net sales'"
+    },
+    {
+      "id": "aapl-services-fy2025",
+      "question": "How much revenue did Apple's Services segment generate in fiscal 2025?",
+      "expected_answer": 109158.0,
+      "unit": "USD millions",
+      "tolerance": 1.0,
+      "answerable_via": [
+        "search_filings"
+      ],
+      "company": "AAPL",
+      "source": "AAPL FY2025 income statement, 'Services' under Net sales"
+    },
+    {
+      "id": "aapl-gross-margin-dollars-fy2025",
+      "question": "What was Apple's gross margin in dollars for fiscal year 2025?",
+      "expected_answer": 195201.0,
+      "unit": "USD millions",
+      "tolerance": 1.0,
+      "answerable_via": [
+        "search_filings"
+      ],
+      "company": "AAPL",
+      "source": "AAPL FY2025 income statement, 'Gross margin'",
+      "notes": "Apple labels the dollar figure 'Gross margin', not 'Gross profit'."
+    },
+    {
+      "id": "aapl-net-income-fy2025",
+      "question": "What was Apple's net income in fiscal year 2025?",
+      "expected_answer": 112010.0,
+      "unit": "USD millions",
+      "tolerance": 1.0,
+      "answerable_via": [
+        "search_filings"
+      ],
+      "company": "AAPL",
+      "source": "AAPL FY2025 income statement, 'Net income'"
+    },
+    {
+      "id": "aapl-basic-eps-fy2025",
+      "question": "What was Apple's basic earnings per share in fiscal year 2025?",
+      "expected_answer": 7.49,
+      "unit": "USD",
+      "tolerance": 0.01,
+      "answerable_via": [
+        "search_filings"
+      ],
+      "company": "AAPL",
+      "source": "AAPL FY2025 income statement, basic EPS",
+      "notes": "The units string scales amounts to millions and shares to thousands while EPS is unscaled; this is the case that catches getting that wrong."
+    },
+    {
+      "id": "aapl-basic-shares-fy2025",
+      "question": "What was Apple's weighted average basic share count in fiscal 2025?",
+      "expected_answer": 14.95,
+      "unit": "billions of shares",
+      "tolerance": 0.05,
+      "answerable_via": [
+        "search_filings"
+      ],
+      "company": "AAPL",
+      "source": "AAPL FY2025 income statement, basic weighted average shares",
+      "notes": "Reflected in thousands in the source table."
+    },
+    {
+      "id": "aapl-net-income-fy2023",
+      "question": "What was Apple's net income in fiscal year 2023?",
+      "expected_answer": 96995.0,
+      "unit": "USD millions",
+      "tolerance": 1.0,
+      "answerable_via": [
+        "search_filings"
+      ],
+      "company": "AAPL",
+      "source": "AAPL FY2025 income statement, 'Net income', column September 30, 2023"
+    },
+    {
+      "id": "nvda-gross-margin-pct-mdna",
+      "question": "According to NVIDIA's MD&A, what was its gross margin percentage in fiscal year 2026?",
+      "expected_answer": 71.1,
+      "unit": "percent",
+      "tolerance": 0.5,
+      "answerable_via": [
+        "search_filings"
+      ],
+      "company": "NVDA",
+      "source": "NVDA Item 7: 'Gross margins decreased to 71.1% in fiscal year 2026 from 75.0% in fiscal year 2025'"
+    },
+    {
+      "id": "nvda-effective-tax-rate-mdna",
+      "question": "What was NVIDIA's income tax expense as a percentage of income before income tax in fiscal 2026?",
+      "expected_answer": 15.1,
+      "unit": "percent",
+      "tolerance": 0.5,
+      "answerable_via": [
+        "search_filings"
+      ],
+      "company": "NVDA",
+      "source": "NVDA Item 7: 'Income tax as a percentage of income before income tax was an expense of 15.1% and 13.3%'"
+    },
+    {
+      "id": "nvda-buyback-authorization",
+      "question": "As of January 25, 2026, how much was NVIDIA authorized to spend repurchasing its own stock?",
+      "expected_answer": 58.5,
+      "unit": "USD billions",
+      "tolerance": 0.5,
+      "answerable_via": [
+        "search_filings"
+      ],
+      "company": "NVDA",
+      "source": "NVDA Item 7: 'authorized ... to repurchase up to $58.5 billion'"
+    },
+    {
+      "id": "nvda-datacenter-growth",
+      "question": "By what percentage did NVIDIA's Data Center revenue grow in fiscal 2026?",
+      "expected_answer": 68.0,
+      "unit": "percent",
+      "tolerance": 1.0,
+      "answerable_via": [
+        "search_filings"
+      ],
+      "company": "NVDA",
+      "source": "NVDA Item 7: 'Data Center revenue for fiscal year 2026 was up 68%'"
+    },
+    {
+      "id": "aapl-buyback-program",
+      "question": "How large was the share repurchase program Apple announced in May 2025?",
+      "expected_answer": 100.0,
+      "unit": "USD billions",
+      "tolerance": 1.0,
+      "answerable_via": [
+        "search_filings"
+      ],
+      "company": "AAPL",
+      "source": "AAPL Item 7: 'a new share repurchase program of up to $100 billion'"
+    },
+    {
+      "id": "aapl-dividend-per-share",
+      "question": "What did Apple raise its quarterly dividend to in May 2025?",
+      "expected_answer": 0.26,
+      "unit": "USD",
+      "tolerance": 0.005,
+      "answerable_via": [
+        "search_filings"
+      ],
+      "company": "AAPL",
+      "source": "AAPL Item 7: 'raised its quarterly dividend from $0.25 to $0.26 per share'"
+    },
+    {
+      "id": "nvda-operating-margin-derived",
+      "question": "What was NVIDIA's operating margin in fiscal year 2026?",
+      "expected_answer": 60.38,
+      "unit": "percent",
+      "tolerance": 0.5,
+      "answerable_via": [
+        "search_filings",
+        "calculate_ratio"
+      ],
+      "company": "NVDA",
+      "source": "Computed: operating income / revenue from the NVDA FY2026 statement; calculate_ratio('NVDA','operating_margin') independently gives 60.38%",
+      "notes": "Reachable either by retrieving the statement and dividing, or by the ratio tool. Both routes are correct."
+    },
+    {
+      "id": "nvda-effective-tax-rate-derived",
+      "question": "What effective tax rate did NVIDIA pay in fiscal 2026, based on its income statement?",
+      "expected_answer": 15.12,
+      "unit": "percent",
+      "tolerance": 0.5,
+      "answerable_via": [
+        "search_filings"
+      ],
+      "company": "NVDA",
+      "source": "Computed: income tax expense / income before income tax, NVDA FY2026"
+    },
+    {
+      "id": "nvda-revenue-growth-derived",
+      "question": "By what percentage did NVIDIA's total revenue grow from fiscal 2025 to fiscal 2026?",
+      "expected_answer": 65.47,
+      "unit": "percent",
+      "tolerance": 1.0,
+      "answerable_via": [
+        "search_filings"
+      ],
+      "company": "NVDA",
+      "source": "Computed from the two revenue columns; MD&A states 'up 65%'"
+    },
+    {
+      "id": "aapl-gross-margin-pct-derived",
+      "question": "What was Apple's gross margin percentage in fiscal year 2025?",
+      "expected_answer": 46.91,
+      "unit": "percent",
+      "tolerance": 0.5,
+      "answerable_via": [
+        "search_filings",
+        "calculate_ratio"
+      ],
+      "company": "AAPL",
+      "source": "Computed: gross margin / total net sales, AAPL FY2025; calculate_ratio gives 46.91%"
+    },
+    {
+      "id": "aapl-services-share-derived",
+      "question": "What share of Apple's fiscal 2025 revenue came from Services?",
+      "expected_answer": 26.23,
+      "unit": "percent",
+      "tolerance": 0.5,
+      "answerable_via": [
+        "search_filings"
+      ],
+      "company": "AAPL",
+      "source": "Computed: Services / Total net sales, AAPL FY2025"
+    },
+    {
+      "id": "nvda-gross-margin-tool",
+      "question": "What is NVIDIA's most recent annual gross margin?",
+      "expected_answer": 71.07,
+      "unit": "percent",
+      "tolerance": 0.5,
+      "answerable_via": [
+        "calculate_ratio"
+      ],
+      "company": "NVDA",
+      "source": "calculate_ratio('NVDA','gross_margin','annual') = 71.07%"
+    },
+    {
+      "id": "aapl-gross-margin-tool",
+      "question": "What is Apple's most recent annual gross margin?",
+      "expected_answer": 46.91,
+      "unit": "percent",
+      "tolerance": 0.5,
+      "answerable_via": [
+        "calculate_ratio"
+      ],
+      "company": "AAPL",
+      "source": "calculate_ratio('AAPL','gross_margin','annual') = 46.91%"
+    },
+    {
+      "id": "nvda-debt-to-equity-tool",
+      "question": "What is NVIDIA's debt-to-equity ratio?",
+      "expected_answer": 0.07,
+      "unit": "ratio (x)",
+      "tolerance": 0.05,
+      "answerable_via": [
+        "calculate_ratio"
+      ],
+      "company": "NVDA",
+      "source": "calculate_ratio('NVDA','debt_to_equity','annual') = 0.07x",
+      "notes": "Not in the ingested filings -- the balance sheet is not indexed, so this is only reachable through the tool."
+    },
+    {
+      "id": "aapl-debt-to-equity-tool",
+      "question": "What is Apple's debt-to-equity ratio?",
+      "expected_answer": 1.34,
+      "unit": "ratio (x)",
+      "tolerance": 0.05,
+      "answerable_via": [
+        "calculate_ratio"
+      ],
+      "company": "AAPL",
+      "source": "calculate_ratio('AAPL','debt_to_equity','annual') = 1.34x",
+      "notes": "Balance-sheet only; not answerable from the indexed filings."
+    },
+    {
+      "id": "aapl-net-margin-tool",
+      "question": "What is Apple's most recent annual net profit margin?",
+      "expected_answer": 26.92,
+      "unit": "percent",
+      "tolerance": 0.5,
+      "answerable_via": [
+        "calculate_ratio"
+      ],
+      "company": "AAPL",
+      "source": "calculate_ratio('AAPL','net_margin','annual') = 26.92%"
+    },
+    {
+      "id": "nvda-close-2026-08-07",
+      "question": "What did NVIDIA stock close at on August 7, 2026?",
+      "expected_answer": 223.96,
+      "unit": "USD",
+      "tolerance": 4.48,
+      "answerable_via": [
+        "get_stock_price"
+      ],
+      "company": "NVDA",
+      "source": "get_stock_price('NVDA','2026-08-03','2026-08-07').last = 223.96"
+    },
+    {
+      "id": "nvda-change-aug-week",
+      "question": "How much did NVIDIA stock move, in percent, between August 3 and August 7, 2026?",
+      "expected_answer": 8.38,
+      "unit": "percent",
+      "tolerance": 1.0,
+      "answerable_via": [
+        "get_stock_price"
+      ],
+      "company": "NVDA",
+      "source": "get_stock_price('NVDA','2026-08-03','2026-08-07').change_pct = 8.3817"
+    },
+    {
+      "id": "aapl-close-2026-08-07",
+      "question": "What did Apple stock close at on August 7, 2026?",
+      "expected_answer": 313.06,
+      "unit": "USD",
+      "tolerance": 6.26,
+      "answerable_via": [
+        "get_stock_price"
+      ],
+      "company": "AAPL",
+      "source": "get_stock_price('AAPL','2026-08-03','2026-08-07').last = 313.06"
+    },
+    {
+      "id": "nvda-july-high",
+      "question": "What was NVIDIA's highest closing price during July 2026?",
+      "expected_answer": 212.5,
+      "unit": "USD",
+      "tolerance": 4.25,
+      "answerable_via": [
+        "get_stock_price"
+      ],
+      "company": "NVDA",
+      "source": "get_stock_price('NVDA','2026-07-01','2026-07-31').high = 212.5 on 2026-07-15"
+    },
+    {
+      "id": "aapl-june-change",
+      "question": "How did Apple stock perform over June 2026, in percent?",
+      "expected_answer": -5.53,
+      "unit": "percent",
+      "tolerance": 1.5,
+      "answerable_via": [
+        "get_stock_price"
+      ],
+      "company": "AAPL",
+      "source": "get_stock_price('AAPL','2026-06-01','2026-06-30').change_pct = -5.5336",
+      "notes": "Negative: the month was down."
+    },
+    {
+      "id": "nvda-implied-market-cap",
+      "question": "Using NVIDIA's fiscal 2026 diluted share count and its August 7, 2026 closing price, what was its implied market capitalisation?",
+      "expected_answer": 5490.16,
+      "unit": "USD billions",
+      "tolerance": 164.7,
+      "answerable_via": [
+        "search_filings",
+        "get_stock_price"
+      ],
+      "company": "NVDA",
+      "source": "Computed: 24,514M diluted shares (filing) x $223.96 close (tool)",
+      "notes": "The share count is only in the filing; the price is only in the tool."
+    },
+    {
+      "id": "aapl-implied-market-cap",
+      "question": "Using Apple's fiscal 2025 diluted share count and its August 7, 2026 closing price, what was its implied market capitalisation?",
+      "expected_answer": 4697.37,
+      "unit": "USD billions",
+      "tolerance": 140.9,
+      "answerable_via": [
+        "search_filings",
+        "get_stock_price"
+      ],
+      "company": "AAPL",
+      "source": "Computed: 15,005M diluted shares (filing) x $313.06 close (tool)"
+    },
+    {
+      "id": "nvda-implied-pe-on-fy2026-eps",
+      "question": "At its August 7, 2026 closing price, what P/E ratio does NVIDIA's fiscal 2026 diluted EPS imply?",
+      "expected_answer": 45.71,
+      "unit": "ratio (x)",
+      "tolerance": 1.37,
+      "answerable_via": [
+        "search_filings",
+        "get_stock_price"
+      ],
+      "company": "NVDA",
+      "source": "Computed: $223.96 close / $4.9 FY2026 diluted EPS",
+      "notes": "Deliberately not calculate_ratio's pe_ratio, which uses trailing twelve-month EPS and today's price."
+    },
+    {
+      "id": "aapl-implied-pe-on-fy2025-eps",
+      "question": "At its August 7, 2026 closing price, what P/E ratio does Apple's fiscal 2025 diluted EPS imply?",
+      "expected_answer": 41.97,
+      "unit": "ratio (x)",
+      "tolerance": 1.26,
+      "answerable_via": [
+        "search_filings",
+        "get_stock_price"
+      ],
+      "company": "AAPL",
+      "source": "Computed: $313.06 close / $7.46 FY2025 diluted EPS"
+    },
+    {
+      "id": "nvda-vs-aapl-gross-margin-gap",
+      "question": "How many percentage points higher was NVIDIA's most recent gross margin than Apple's?",
+      "expected_answer": 24.16,
+      "unit": "percentage points",
+      "tolerance": 1.0,
+      "answerable_via": [
+        "calculate_ratio"
+      ],
+      "company": "NVDA+AAPL",
+      "source": "Computed: 71.07% - 46.91%",
+      "notes": "Two tool calls in one question; different fiscal year ends, which the answer should acknowledge."
+    }
+  ]
+}
