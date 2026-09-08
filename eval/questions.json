@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-08T07:27:21+00:00",
+  "generated_at": "2026-09-08T10:29:48+00:00",
   "tolerance_semantics": "Absolute, in the case's `unit`. For unit 'percent' the tolerance is in percentage points, not a relative percentage.",
   "corpus": {
     "NVDA": "10-K FY2026 (period ending 2026-01-25): Item 1A, Item 7, consolidated statements of income",
@@ -11,7 +11,7 @@
       "question": "What was NVIDIA's total revenue for fiscal year 2026?",
       "expected_answer": 215938.0,
       "unit": "USD millions",
-      "tolerance": 1.0,
+      "tolerance": 1079.69,
       "answerable_via": [
         "search_filings"
       ],
@@ -23,7 +23,7 @@
       "question": "What was NVIDIA's gross profit in fiscal year 2026?",
       "expected_answer": 153463.0,
       "unit": "USD millions",
-      "tolerance": 1.0,
+      "tolerance": 767.315,
       "answerable_via": [
         "search_filings"
       ],
@@ -35,7 +35,7 @@
       "question": "How much did NVIDIA spend on research and development in fiscal 2026?",
       "expected_answer": 18497.0,
       "unit": "USD millions",
-      "tolerance": 1.0,
+      "tolerance": 92.485,
       "answerable_via": [
         "search_filings"
       ],
@@ -47,7 +47,7 @@
       "question": "What was NVIDIA's net income in fiscal year 2026?",
       "expected_answer": 120067.0,
       "unit": "USD millions",
-      "tolerance": 1.0,
+      "tolerance": 600.335,
       "answerable_via": [
         "search_filings"
       ],
@@ -72,7 +72,7 @@
       "question": "What was NVIDIA's revenue in fiscal year 2024?",
       "expected_answer": 60922.0,
       "unit": "USD millions",
-      "tolerance": 1.0,
+      "tolerance": 304.61,
       "answerable_via": [
         "search_filings"
       ],
@@ -85,7 +85,7 @@
       "question": "What was NVIDIA's weighted average diluted share count in fiscal 2026?",
       "expected_answer": 24514.0,
       "unit": "millions of shares",
-      "tolerance": 50.0,
+      "tolerance": 122.57,
       "answerable_via": [
         "search_filings"
       ],
@@ -98,7 +98,7 @@
       "question": "What were Apple's total net sales for fiscal year 2025?",
       "expected_answer": 416161.0,
       "unit": "USD millions",
-      "tolerance": 1.0,
+      "tolerance": 2080.805,
       "answerable_via": [
         "search_filings"
       ],
@@ -110,7 +110,7 @@
       "question": "How much revenue did Apple's Services segment generate in fiscal 2025?",
       "expected_answer": 109158.0,
       "unit": "USD millions",
-      "tolerance": 1.0,
+      "tolerance": 545.79,
       "answerable_via": [
         "search_filings"
       ],
@@ -122,7 +122,7 @@
       "question": "What was Apple's gross margin in dollars for fiscal year 2025?",
       "expected_answer": 195201.0,
       "unit": "USD millions",
-      "tolerance": 1.0,
+      "tolerance": 976.005,
       "answerable_via": [
         "search_filings"
       ],
@@ -135,7 +135,7 @@
       "question": "What was Apple's net income in fiscal year 2025?",
       "expected_answer": 112010.0,
       "unit": "USD millions",
-      "tolerance": 1.0,
+      "tolerance": 560.05,
       "answerable_via": [
         "search_filings"
       ],
@@ -160,7 +160,7 @@
       "question": "What was Apple's weighted average basic share count in fiscal 2025?",
       "expected_answer": 14.95,
       "unit": "billions of shares",
-      "tolerance": 0.05,
+      "tolerance": 0.075,
       "answerable_via": [
         "search_filings"
       ],
@@ -173,7 +173,7 @@
       "question": "What was Apple's net income in fiscal year 2023?",
       "expected_answer": 96995.0,
       "unit": "USD millions",
-      "tolerance": 1.0,
+      "tolerance": 484.975,
       "answerable_via": [
         "search_filings"
       ],

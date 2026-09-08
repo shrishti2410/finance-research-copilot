@@ -77,6 +77,25 @@ def billions(value: float) -> float:
     return round(value / 1_000_000_000, 2)
 
 
+# Tolerance for a magnitude quantity: 0.5% of the value, never below 1.0.
+#
+# An absolute tolerance of one million dollars sounds rigorous and is actually
+# broken: "$215.9 billion" is how a person answers "what was NVIDIA's revenue",
+# and against 215,938 that is 38 million out. Failing it would measure rounding
+# convention, not correctness. 0.5% admits an answer given to three significant
+# figures, which is the way these figures are quoted, and still fails a wrong
+# line item -- gross profit and revenue are 29% apart.
+#
+# Per-share amounts and percentages keep absolute tolerances, because there the
+# convention is to quote them in full.
+def mag_tol(value: float) -> float:
+    # The floor is 0.01, not 1.0: a floor of one unit is invisible against a
+    # revenue in the hundreds of thousands of millions and enormous against a
+    # share count of 14.9 billion, where it would wave through an answer that
+    # was a billion shares out.
+    return round(max(0.01, abs(value) * 0.005), 3)
+
+
 DROPPED = {
     # Redundant with other line items from the same statement.
     "aapl-tax-provision-fy2025",
@@ -150,32 +169,32 @@ def build() -> list[dict]:
     # ── filings: line items read straight off the statement ─────────────────
     add("nvda-revenue-fy2026",
         "What was NVIDIA's total revenue for fiscal year 2026?",
-        millions(nv("Revenue")), M, 1.0, FIL, "NVDA",
+        millions(nv("Revenue")), M, mag_tol(millions(nv("Revenue"))), FIL, "NVDA",
         "NVDA FY2026 income statement, 'Revenue', column Jan 25, 2026")
 
     add("nvda-gross-profit-fy2026",
         "What was NVIDIA's gross profit in fiscal year 2026?",
-        millions(nv("Gross profit")), M, 1.0, FIL, "NVDA",
+        millions(nv("Gross profit")), M, mag_tol(millions(nv("Gross profit"))), FIL, "NVDA",
         "NVDA FY2026 income statement, 'Gross profit'")
 
     add("nvda-rnd-fy2026",
         "How much did NVIDIA spend on research and development in fiscal 2026?",
-        millions(nv("Research and development")), M, 1.0, FIL, "NVDA",
+        millions(nv("Research and development")), M, mag_tol(millions(nv("Research and development"))), FIL, "NVDA",
         "NVDA FY2026 income statement, 'Research and development'")
 
     add("nvda-operating-income-fy2026",
         "What was NVIDIA's operating income for fiscal year 2026?",
-        millions(nv("Operating income")), M, 1.0, FIL, "NVDA",
+        millions(nv("Operating income")), M, mag_tol(millions(nv("Operating income"))), FIL, "NVDA",
         "NVDA FY2026 income statement, 'Operating income'")
 
     add("nvda-net-income-fy2026",
         "What was NVIDIA's net income in fiscal year 2026?",
-        millions(nv("Net income")), M, 1.0, FIL, "NVDA",
+        millions(nv("Net income")), M, mag_tol(millions(nv("Net income"))), FIL, "NVDA",
         "NVDA FY2026 income statement, 'Net income'")
 
     add("nvda-tax-expense-fy2026",
         "What was NVIDIA's income tax expense for fiscal year 2026?",
-        millions(nv("Income tax expense")), M, 1.0, FIL, "NVDA",
+        millions(nv("Income tax expense")), M, mag_tol(millions(nv("Income tax expense"))), FIL, "NVDA",
         "NVDA FY2026 income statement, 'Income tax expense'")
 
     add("nvda-diluted-eps-fy2026",
@@ -186,36 +205,36 @@ def build() -> list[dict]:
 
     add("nvda-revenue-fy2024",
         "What was NVIDIA's revenue in fiscal year 2024?",
-        millions(nv("Revenue", "FY2024")), M, 1.0, FIL, "NVDA",
+        millions(nv("Revenue", "FY2024")), M, mag_tol(millions(nv("Revenue", "FY2024"))), FIL, "NVDA",
         "NVDA FY2026 income statement, 'Revenue', column Jan 28, 2024",
         "A prior-year column in the same table: the retrieved chunk holds "
         "three years, so this tests reading the right one.")
 
     add("nvda-diluted-shares-fy2026",
         "What was NVIDIA's weighted average diluted share count in fiscal 2026?",
-        millions(nv("Diluted#2")), "millions of shares", 50.0, FIL, "NVDA",
+        millions(nv("Diluted#2")), "millions of shares", mag_tol(millions(nv("Diluted#2"))), FIL, "NVDA",
         "NVDA FY2026 income statement, diluted weighted average shares",
         "Share-count rows carry their own scale; this pins that too.")
 
     add("aapl-revenue-fy2025",
         "What were Apple's total net sales for fiscal year 2025?",
-        millions(ap("Total net sales")), M, 1.0, FIL, "AAPL",
+        millions(ap("Total net sales")), M, mag_tol(millions(ap("Total net sales"))), FIL, "AAPL",
         "AAPL FY2025 income statement, 'Total net sales'")
 
     add("aapl-services-fy2025",
         "How much revenue did Apple's Services segment generate in fiscal 2025?",
-        millions(ap("Services")), M, 1.0, FIL, "AAPL",
+        millions(ap("Services")), M, mag_tol(millions(ap("Services"))), FIL, "AAPL",
         "AAPL FY2025 income statement, 'Services' under Net sales")
 
     add("aapl-gross-margin-dollars-fy2025",
         "What was Apple's gross margin in dollars for fiscal year 2025?",
-        millions(ap("Gross margin")), M, 1.0, FIL, "AAPL",
+        millions(ap("Gross margin")), M, mag_tol(millions(ap("Gross margin"))), FIL, "AAPL",
         "AAPL FY2025 income statement, 'Gross margin'",
         "Apple labels the dollar figure 'Gross margin', not 'Gross profit'.")
 
     add("aapl-net-income-fy2025",
         "What was Apple's net income in fiscal year 2025?",
-        millions(ap("Net income")), M, 1.0, FIL, "AAPL",
+        millions(ap("Net income")), M, mag_tol(millions(ap("Net income"))), FIL, "AAPL",
         "AAPL FY2025 income statement, 'Net income'")
 
     add("aapl-basic-eps-fy2025",
@@ -227,18 +246,18 @@ def build() -> list[dict]:
 
     add("aapl-basic-shares-fy2025",
         "What was Apple's weighted average basic share count in fiscal 2025?",
-        billions(ap("Basic#2")), "billions of shares", 0.05, FIL, "AAPL",
+        billions(ap("Basic#2")), "billions of shares", mag_tol(billions(ap("Basic#2"))), FIL, "AAPL",
         "AAPL FY2025 income statement, basic weighted average shares",
         "Reflected in thousands in the source table.")
 
     add("aapl-net-income-fy2023",
         "What was Apple's net income in fiscal year 2023?",
-        millions(ap("Net income", "FY2023")), M, 1.0, FIL, "AAPL",
+        millions(ap("Net income", "FY2023")), M, mag_tol(millions(ap("Net income", "FY2023"))), FIL, "AAPL",
         "AAPL FY2025 income statement, 'Net income', column September 30, 2023")
 
     add("aapl-tax-provision-fy2025",
         "What was Apple's provision for income taxes in fiscal 2025?",
-        millions(ap("Provision for income taxes")), M, 1.0, FIL, "AAPL",
+        millions(ap("Provision for income taxes")), M, mag_tol(millions(ap("Provision for income taxes"))), FIL, "AAPL",
         "AAPL FY2025 income statement, 'Provision for income taxes'")
 
     # ── filings: facts stated in MD&A prose, not in the table ────────────────
@@ -333,7 +352,7 @@ def build() -> list[dict]:
 
     add("aapl-opex-fy2025",
         "What were Apple's total operating expenses in fiscal 2025?",
-        millions(ap("Total operating expenses")), M, 1.0, FIL, "AAPL",
+        millions(ap("Total operating expenses")), M, mag_tol(millions(ap("Total operating expenses"))), FIL, "AAPL",
         "AAPL FY2025 income statement, 'Total operating expenses'")
 
     # ── tools: ratios ───────────────────────────────────────────────────────

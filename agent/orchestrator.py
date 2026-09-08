@@ -260,10 +260,20 @@ class AgentResult:
     stop_reason: str = "final_answer"
     model: str = ""
     total_ms: float = 0.0
+    # Summed across every model call in the run. Zero when the upstream did not
+    # report usage -- which the streaming path does not -- so a zero here means
+    # "not measured", not "free". `usage_measured` says which.
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    usage_measured: bool = False
 
     @property
     def tool_calls(self) -> list[Step]:
         return [step for step in self.steps if step.tool != "final_answer"]
+
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -273,6 +283,10 @@ class AgentResult:
             "stop_reason": self.stop_reason,
             "model": self.model,
             "total_ms": round(self.total_ms, 1),
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens,
+            "usage_measured": self.usage_measured,
             "steps": [step.to_dict() for step in self.steps],
         }
 
@@ -410,6 +424,8 @@ async def run_agent(
 
     steps: list[Step] = []
     grounding_retries = 0
+    prompt_tokens = completion_tokens = 0
+    usage_measured = False
     owns_client = client is None
     client = client or httpx.AsyncClient(
         base_url=settings.agent_inference_base_url,
@@ -441,6 +457,14 @@ async def run_agent(
                     response.raise_for_status()
                     body = response.json()
                     message = ((body.get("choices") or [{}])[0]).get("message") or {}
+                    # Ollama reports usage on the buffered path only. Summed
+                    # across iterations, because one question is several calls
+                    # and the per-call number is not what anything wants.
+                    usage = body.get("usage") or {}
+                    if usage:
+                        usage_measured = True
+                        prompt_tokens += int(usage.get("prompt_tokens") or 0)
+                        completion_tokens += int(usage.get("completion_tokens") or 0)
             except Exception as exc:  # noqa: BLE001 - upstream down, timeout, bad JSON
                 model_ms = (time.perf_counter() - call_started) * 1000
                 log.error("agent: inference call failed on iteration %d: %s", iteration, exc)
@@ -458,6 +482,8 @@ async def run_agent(
                     steps=steps, iterations=iteration, completed=False,
                     stop_reason="inference_error", model=model,
                     total_ms=(time.perf_counter() - started) * 1000,
+                    prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+                    usage_measured=usage_measured,
                 )
             model_ms = (time.perf_counter() - call_started) * 1000
             tool_calls = message.get("tool_calls") or []
@@ -512,6 +538,8 @@ async def run_agent(
                     steps=steps, iterations=iteration, completed=bool(answer),
                     stop_reason="final_answer" if answer else "empty_response",
                     model=model, total_ms=(time.perf_counter() - started) * 1000,
+                    prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+                    usage_measured=usage_measured,
                 )
 
             # The assistant's tool-call message has to go into the history
@@ -626,6 +654,8 @@ async def run_agent(
                     answer=answer, steps=steps, iterations=iteration, completed=False,
                     stop_reason="tool_call_budget", model=model,
                     total_ms=(time.perf_counter() - started) * 1000,
+                    prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+                    usage_measured=usage_measured,
                 )
 
         # Budget exhausted with tool calls still outstanding.
@@ -643,6 +673,8 @@ async def run_agent(
             answer=answer, steps=steps, iterations=max_iterations, completed=False,
             stop_reason="max_iterations", model=model,
             total_ms=(time.perf_counter() - started) * 1000,
+            prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+            usage_measured=usage_measured,
         )
     finally:
         if owns_client:
