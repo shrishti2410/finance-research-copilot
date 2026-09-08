@@ -45,35 +45,71 @@ DEFAULT_API = "http://127.0.0.1:8000"
 PASSWORD = "eval-harness-correct-horse"
 
 
-def authenticate(client: httpx.Client) -> dict[str, str]:
-    """A throwaway account per run, so a run never inherits another's threads."""
-    email = f"eval-{uuid.uuid4().hex[:12]}@example.com"
-    response = client.post("/auth/signup", json={"email": email, "password": PASSWORD})
-    response.raise_for_status()
-    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+class Session:
+    """A throwaway account, and a token kept alive for the length of the run.
+
+    Tokens expire after `jwt_expire_minutes` -- 30 by default. A 40-question
+    run takes closer to 100 minutes on this host, so authenticating once and
+    holding the token means every case after minute 30 fails with a 401. That
+    is exactly what happened on the first full run: cases 16-40 errored at
+    0.0s and the report showed 12.5% accuracy over 15 questions that had
+    actually run. A harness that cannot outlive its own credentials measures
+    its credentials.
+    """
+
+    def __init__(self, client: httpx.Client):
+        self.client = client
+        self.email = f"eval-{uuid.uuid4().hex[:12]}@example.com"
+        response = client.post(
+            "/auth/signup", json={"email": self.email, "password": PASSWORD}
+        )
+        response.raise_for_status()
+        self._adopt(response.json()["access_token"])
+
+    def _adopt(self, token: str) -> None:
+        self.headers = {"Authorization": f"Bearer {token}"}
+
+    def refresh(self) -> None:
+        response = self.client.post(
+            "/auth/login", json={"email": self.email, "password": PASSWORD}
+        )
+        response.raise_for_status()
+        self._adopt(response.json()["access_token"])
+
+    def request(self, method: str, path: str, **kwargs) -> httpx.Response:
+        """Send, and on a 401 log in again and send once more.
+
+        Retried once, not in a loop: a second 401 means the credentials are
+        wrong rather than stale, and retrying that forever would turn a
+        configuration error into a hang.
+        """
+        response = self.client.request(method, path, headers=self.headers, **kwargs)
+        if response.status_code == 401:
+            self.refresh()
+            response = self.client.request(
+                method, path, headers=self.headers, **kwargs
+            )
+        response.raise_for_status()
+        return response
 
 
-def ask(client: httpx.Client, auth: dict, question: str) -> dict:
+def ask(session: Session, question: str) -> dict:
     """One question in its own conversation. Raises for transport failures."""
-    conversation = client.post(
-        "/conversations", headers=auth, json={"title": None}
-    )
-    conversation.raise_for_status()
-    conversation_id = conversation.json()["id"]
+    conversation_id = session.request(
+        "POST", "/conversations", json={"title": None}
+    ).json()["id"]
 
-    response = client.post("/ask", headers=auth, json={
+    return session.request("POST", "/ask", json={
         "conversation_id": conversation_id,
         "message": question,
         "include_trace": True,
-    })
-    response.raise_for_status()
-    return response.json()
+    }).json()
 
 
-def run_case(client: httpx.Client, auth: dict, case: Case) -> Outcome:
+def run_case(session: Session, case: Case) -> Outcome:
     started = time.perf_counter()
     try:
-        body = ask(client, auth, case.question)
+        body = ask(session, case.question)
     except Exception as exc:  # noqa: BLE001 - a failed request is a scored case
         elapsed = (time.perf_counter() - started) * 1000
         return score_case(
@@ -233,13 +269,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"API not reachable at {args.api}: {exc}", file=sys.stderr)
         return 2
 
-    auth = authenticate(client)
+    session = Session(client)
     print(f"running {len(cases)} cases against {args.api}", flush=True)
 
     outcomes: list[Outcome] = []
     started = time.perf_counter()
     for index, case in enumerate(cases, 1):
-        outcome = run_case(client, auth, case)
+        outcome = run_case(session, case)
         outcomes.append(outcome)
         elapsed = time.perf_counter() - started
         print(f"  [{index:>2}/{len(cases)}] {outcome.verdict:9} {case.id:34} "

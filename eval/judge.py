@@ -339,7 +339,8 @@ def apply_judgement(claims: list[Claim], judged: list[dict]) -> None:
 
 # ── loading what to judge ───────────────────────────────────────────────────
 
-async def load_eval_turns(limit: int | None, hours: int) -> list[dict]:
+async def load_eval_turns(limit: int | None, hours: int,
+                          after_id: int = 0, before_id: int | None = None) -> list[dict]:
     """The stored question/answer/trace rows from the most recent eval run."""
     from sqlalchemy import text
 
@@ -356,8 +357,11 @@ async def load_eval_turns(limit: int | None, hours: int) -> list[dict]:
             WHERE u.email LIKE 'eval-%'
               AND a.role = 'assistant'
               AND a.created_at > now() - make_interval(hours => :hours)
+              AND a.id > :after_id
+              AND (:before_id IS NULL OR a.id <= :before_id)
             ORDER BY a.id
-        """), {"hours": hours})).mappings().all()
+        """), {"hours": hours, "after_id": after_id,
+               "before_id": before_id})).mappings().all()
     await engine.dispose()
 
     turns = [dict(r) for r in rows]
@@ -438,9 +442,9 @@ def render(judgements: list[Judgement]) -> str:
     return "\n".join(line for line in lines if line != "")
 
 
-async def run(limit: int | None, hours: int, model: str,
-              base_url: str) -> list[Judgement]:
-    turns = await load_eval_turns(limit, hours)
+async def run(limit: int | None, hours: int, model: str, base_url: str,
+              after_id: int = 0, before_id: int | None = None) -> list[Judgement]:
+    turns = await load_eval_turns(limit, hours, after_id, before_id)
     if not turns:
         raise SystemExit(
             f"no eval answers stored in the last {hours}h. Run "
@@ -489,9 +493,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model", default=settings.agent_model)
     parser.add_argument("--base-url", default=settings.agent_inference_base_url)
     parser.add_argument("--report", type=Path, default=None)
+    # Runs are told apart by message id, not by time: two eval runs an hour
+    # apart both fall inside any sane --hours window, and judging them together
+    # would report one blended number for two different runs.
+    parser.add_argument("--after-id", type=int, default=0)
+    parser.add_argument("--before-id", type=int, default=None)
     args = parser.parse_args(argv)
 
-    judgements = asyncio.run(run(args.limit, args.hours, args.model, args.base_url))
+    judgements = asyncio.run(run(args.limit, args.hours, args.model,
+                                 args.base_url, args.after_id, args.before_id))
     print()
     print(render(judgements))
 
