@@ -313,6 +313,10 @@ async def ask_stream(
             # own database session precisely so it can outlive this request and
             # still commit; the reloaded page then finds the finished turn
             # waiting for it.
+            #
+            # The cost is that repeated refreshes start repeated runs, each of
+            # which finishes and stores a turn. That trade, and what in-flight
+            # deduplication would take, is in docs/KNOWN_LIMITATIONS.md.
             if not task.done():
                 log.info(
                     "ask/stream: client left; conversation %s continues in the "

@@ -62,3 +62,64 @@ number, and the failure it prevents is the kind a user cannot catch.
 approaches tried (prompt rule, `tool_choice: "required"`, post-hoc catch) are in
 `agent/orchestrator.py`. `tests/test_orchestrator.py` pins the behaviour;
 `agent/memory.py` covers the history window it interacts with.
+
+---
+
+## Repeated refreshes during an answer each start a run that completes
+
+**What happens.** `POST /ask/stream` runs the agent in a task that is
+deliberately **not** cancelled when the client disconnects. A user who asks a
+question and then refreshes three times before it finishes has started four
+runs. All four complete, and all four store a user message and an assistant
+message, so the thread ends up with the same question answered four times.
+
+Each run costs what any run costs: model time (35–190 s on the CPU host), live
+tool calls against yfinance and RSS, and two rows.
+
+**Why.** Because the alternative was measured, and it was worse. When the run
+*was* tied to the request, hanging up mid-answer produced this:
+
+```
+  t= 199.7s  tool_result   calculate_ratio(NVDA, gross_margin)  ok=True
+  t= 199.7s  >>> CLOSING THE CONNECTION <<<
+  RESULT: after 4 minutes the thread still holds 0 message(s).
+```
+
+A completed tool call, three minutes of model time, and the user's own question
+— all discarded, because the response generator closing cancelled the task. The
+reload looked clean, which is precisely what made it bad: nothing on screen
+said the answer had been thrown away rather than never asked for.
+
+Losing a finished answer is a worse failure than doing redundant work. A
+duplicate turn is visible, harmless and cheap to delete; a silently dropped one
+is neither visible nor recoverable.
+
+The run therefore owns a database session of its own (`_run_and_store` in
+`api/routes.py`) rather than the request's, which is closed once the response
+ends — writing through that session after a disconnect fails on a closed
+connection, which is the mechanism by which the answer used to vanish.
+
+**What it would take to fix properly.** In-flight deduplication keyed on the
+conversation: a second `/ask/stream` for a conversation that already has a run
+going attaches to that run's event stream instead of starting another. That
+gives a refreshing user the *same* answer streaming again, which is what they
+actually expect, and stores one turn.
+
+It needs a registry of live runs keyed by conversation id, fan-out from one
+queue to several readers, and a decision about what a genuinely different
+question submitted during an in-flight run should do (almost certainly: queue,
+not join). That is a real piece of concurrency work, and it is not worth
+building against a single-user development deployment where the failure it
+prevents is a duplicated row.
+
+**When to revisit.** When duplicate runs cost something measurable: a metered
+model or tool API, enough concurrent users that redundant runs contend for the
+one-at-a-time Ollama backend, or threads polluted badly enough that the
+duplicates are a support problem. On this host, with Ollama serving one request
+at a time, a refresh storm is self-limiting — the runs queue behind each other
+rather than multiplying load.
+
+**Where the code is.** `api/routes.py`: `ask_stream` (which no longer cancels,
+and why), `_run_and_store` (the independent session), and `_RUNS` (which keeps
+the tasks from being garbage-collected mid-flight). `tests/test_ask_endpoint.py`
+pins all three, including that finished runs are released from the registry.
