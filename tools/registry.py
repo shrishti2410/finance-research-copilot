@@ -24,12 +24,15 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Literal, Union, get_args, get_origin
+from typing import Any, Callable, Literal, Union, get_args, get_origin, get_type_hints
 
 from tools.base import ERROR_BAD_INPUT, ERROR_UNSUPPORTED, ERROR_UPSTREAM, error
+
+log = logging.getLogger(__name__)
 
 _ARGS_HEADER = re.compile(r"^\s*(Args|Arguments|Parameters):\s*$")
 _SECTION_HEADER = re.compile(r"^\s*(Returns|Raises|Yields|Examples?|Notes?):\s*$")
@@ -203,6 +206,30 @@ def build_spec(fn: Callable, name: str | None = None, description: str | None = 
     signature = inspect.signature(fn)
     doc_description, doc_params = parse_docstring(fn)
 
+    # Resolve annotations to real types before reading them.
+    #
+    # Every tool module starts with `from __future__ import annotations`, which
+    # makes `param.annotation` the *string* "int", not the class. Looking that
+    # string up in _JSON_TYPES misses, falls back to "string", and so every
+    # parameter of every tool was declared a string in the schema -- which
+    # silently disabled `coerce` (it had nothing to convert toward) and threw
+    # away the Literal enums.
+    #
+    # The cost was not theoretical: the model called search_filings with
+    # k="1", the schema said k was a string so nothing coerced it, and the
+    # tool raised "'<' not supported between instances of 'int' and 'str'".
+    # The agent read that as a dead end and fabricated a share count instead.
+    #
+    # Resolution is best-effort: a hint that cannot be resolved (a name not
+    # importable at runtime) leaves that one parameter on the old fallback
+    # rather than failing the whole registration.
+    try:
+        hints = get_type_hints(fn)
+    except Exception:  # noqa: BLE001 - an unresolvable hint is not a fatal error
+        log.warning("registry: could not resolve type hints for %s; "
+                    "its parameters will be typed as strings", fn.__name__)
+        hints = {}
+
     properties: dict[str, Any] = {}
     required: list[str] = []
     accepted: list[str] = []
@@ -212,7 +239,7 @@ def build_spec(fn: Callable, name: str | None = None, description: str | None = 
             continue
         accepted.append(param.name)
 
-        schema = json_schema_for(param.annotation)
+        schema = json_schema_for(hints.get(param.name, param.annotation))
         if param.name in doc_params:
             schema["description"] = doc_params[param.name]
         if param.default is not param.empty and param.default is not None:

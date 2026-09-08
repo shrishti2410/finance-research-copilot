@@ -316,3 +316,115 @@ def test_registry_reports_its_contents(registry):
     assert len(registry) == 1
     assert registry.get("sample") is not None
     assert registry.get("nope") is None
+
+
+# ── annotations resolved to real types ──────────────────────────────────────
+#
+# Every tool module uses `from __future__ import annotations`, so
+# `inspect.signature(...).annotation` is the *string* "int". Looking that up in
+# _JSON_TYPES missed, fell back to "string", and so every parameter of every
+# tool was declared a string -- which silently disabled coerce() and dropped
+# the Literal enums. The model then called search_filings with k="1", nothing
+# coerced it, and the tool raised
+# "'<' not supported between instances of 'int' and 'str'".
+
+def test_an_int_parameter_is_typed_integer_not_string():
+    """The bug: `from __future__ import annotations` made this "string"."""
+    from agent.tools import build_registry
+
+    schema = next(s["function"] for s in build_registry().schemas()
+                  if s["function"]["name"] == "search_filings")
+    assert schema["parameters"]["properties"]["k"]["type"] == "integer"
+
+
+def test_every_int_annotated_parameter_is_declared_integer():
+    """Audited across all four tools, not just the one that crashed."""
+    import inspect
+    import typing
+
+    from agent.tools import build_registry
+
+    registry = build_registry()
+    for spec_schema in registry.schemas():
+        name = spec_schema["function"]["name"]
+        fn = registry._tools[name].fn
+        hints = typing.get_type_hints(fn)
+        properties = spec_schema["function"]["parameters"]["properties"]
+        for param in inspect.signature(fn).parameters.values():
+            if param.name not in properties:
+                continue
+            if hints.get(param.name) is int:
+                assert properties[param.name]["type"] == "integer", (
+                    f"{name}.{param.name} is annotated int but declared "
+                    f"{properties[param.name]['type']}"
+                )
+
+
+def test_literal_parameters_regain_their_enum():
+    """The same root cause threw these away. An enum is the single most useful
+    thing the schema carries -- it stops the model inventing period='monthly'."""
+    from agent.tools import build_registry
+
+    by_name = {s["function"]["name"]: s["function"] for s in build_registry().schemas()}
+    assert by_name["calculate_ratio"]["parameters"]["properties"]["period"]["enum"] == [
+        "annual", "quarterly", "ttm"
+    ]
+    assert "gross_margin" in (
+        by_name["calculate_ratio"]["parameters"]["properties"]["ratio_name"]["enum"]
+    )
+    assert by_name["search_filings"]["parameters"]["properties"]["section"]["enum"] == [
+        "risk", "mdna", "income"
+    ]
+
+
+def test_an_unresolvable_annotation_does_not_break_registration():
+    """A hint naming something not importable at runtime must degrade to the
+    old fallback, not take the whole registry down with it."""
+    from tools.registry import build_spec
+
+    def tool(value: "NotAnActualType") -> dict:  # noqa: F821
+        """Does a thing.
+
+        Args:
+            value: some value.
+        """
+        return {"ok": True}
+
+    spec = build_spec(tool)
+    assert spec.parameters["properties"]["value"]["type"] == "string"
+
+
+def test_search_filings_accepts_k_as_a_string():
+    """The exact call from Run A of the Milestone 8 eval:
+    search_filings({"k": "1", "query": "net income", "company": "NVIDIA"}).
+
+    It raised a TypeError, the agent read that as a dead end, and it
+    fabricated a share count rather than saying it could not answer."""
+    import asyncio
+
+    from agent.tools import build_registry
+
+    async def go():
+        registry = build_registry()
+        return await registry.call(
+            "search_filings", {"k": "1", "query": "net income", "company": "NVIDIA"}
+        )
+
+    from db.base import engine
+
+    loop = asyncio.new_event_loop()
+    try:
+        result = loop.run_until_complete(go())
+    except Exception as exc:  # noqa: BLE001 - no Postgres is a skip
+        pytest.skip(f"corpus unavailable: {type(exc).__name__}: {exc}")
+    finally:
+        # Dispose on this loop before closing it. db.base pools connections
+        # bound to the loop that opened them, so leaving them behind makes
+        # every later DB test in the same process fail on a closed loop --
+        # which tests/test_retrieval.py then reports as "Postgres
+        # unreachable" and skips. Seventeen tests went quiet that way.
+        loop.run_until_complete(engine.dispose())
+        loop.close()
+
+    assert result.ok, f"k as a string still fails: {result.result}"
+    assert result.arguments["k"] == "1", "the raw argument is recorded as sent"
