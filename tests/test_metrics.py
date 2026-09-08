@@ -92,7 +92,9 @@ def test_a_percent_number_is_never_offered_to_a_money_case():
     assert extract_number("Margins were 71.07%.", "USD millions") is None
 
 
-def test_candidates_keep_their_position_so_first_wins_is_defined():
+def test_candidates_keep_their_position_so_ordering_rules_can_apply():
+    """Position is what lets extract_number prefer a concluding figure over an
+    input to it; without it the choice would be arbitrary."""
     found = candidates("First 10%, then 20%.")
     assert [c.value for c in found] == [10.0, 20.0]
     assert found[0].start < found[1].start
