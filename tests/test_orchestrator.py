@@ -414,7 +414,10 @@ def test_the_correction_reaches_the_model_as_a_user_message(registry):
 
     correction = model.requests[1]["messages"][-1]
     assert correction["role"] == "user"
-    assert correction["content"] == UNGROUNDED_RETRY
+    # UNGROUNDED_RETRY is a template now: it names the figures that could not
+    # be traced, so the model knows which number to go and get.
+    assert "38.03" in correction["content"]
+    assert "do not appear in any tool result" in correction["content"]
     # The rejected answer stays in front of it, so the correction has a referent.
     assert model.requests[1]["messages"][-2] == {
         "role": "assistant", "content": "It was 38.03%."
@@ -443,14 +446,18 @@ def test_an_answer_with_no_figure_is_left_alone(registry):
 
 
 def test_the_guard_fires_at_most_once(registry):
-    """A model that ignores the correction gets an answer out, not a loop."""
+    """A model that ignores the correction gets an answer out, not a loop --
+    but the answer ships hedged rather than as a bare figure."""
     result, model = drive([
         responds_with({"content": "38.03%."}),
         responds_with({"content": "Still 38.03%."}),
     ], registry)
 
     assert [s.tool for s in result.steps] == ["ungrounded_answer", "final_answer"]
-    assert result.answer == "Still 38.03%."
+    assert result.answer.startswith("[Unverified:")
+    assert "Still 38.03%." in result.answer
+    assert result.completed is False
+    assert result.stop_reason == "unverified_figures"
     assert result.iterations == 2
     assert len(model.requests) == 2
 
@@ -772,3 +779,144 @@ def test_buffered_runs_emit_events_too(registry):
         "iteration", "tool_start", "tool_result", "iteration",
     ]
     assert model.requests[0].get("stream") is False
+
+
+# ── the guard is per-figure, not per-turn ────────────────────────────────────
+#
+# The Milestone 8 eval failure: asked for diluted EPS, search_filings failed and
+# calculate_ratio(net_margin) succeeded. The old guard saw one success and stood
+# down, and the model fabricated a share count to compute an EPS with.
+
+@pytest.fixture
+def eps_registry():
+    """Mirrors the real tools involved: one that fails, one that succeeds and
+    is not the one the question needs."""
+    reg = Registry()
+
+    def search_filings(query: str, k: int = 3) -> dict:
+        """Search filings.
+
+        Args:
+            query: what to look for.
+            k: how many passages.
+        """
+        return {"ok": False, "error": "upstream_error",
+                "message": "search_filings raised TypeError"}
+
+    def calculate_ratio(ticker: str, ratio_name: str) -> dict:
+        """Compute a ratio.
+
+        Args:
+            ticker: the symbol.
+            ratio_name: which ratio.
+        """
+        if ratio_name != "net_margin":
+            return {"ok": False, "error": "unsupported",
+                    "message": "Unknown ratio. Supported: net_margin."}
+        return ok(ticker=ticker, ratio="net_margin", value=0.556025,
+                  formatted="55.60%",
+                  inputs={"revenue": 215938000000.0, "net_income": 120067000000.0})
+
+    reg.register(search_filings)
+    reg.register(calculate_ratio)
+    return reg
+
+
+FABRICATED = (
+    "The net margin for NVIDIA is 55.60%. Without the exact number of shares "
+    "outstanding, if NVIDIA had approximately 1.8 billion shares outstanding, "
+    "the estimated diluted EPS would be approximately $66.70 per share."
+)
+
+
+def test_a_fabricated_figure_is_caught_even_though_another_tool_succeeded(eps_registry):
+    """The exact shape of the eval failure."""
+    result, _ = drive([
+        responds_with({"tool_calls": [tool_call("search_filings", {"query": "EPS"}, "c1")]}),
+        responds_with({"tool_calls": [tool_call("calculate_ratio",
+                                                {"ticker": "NVDA",
+                                                 "ratio_name": "net_margin"}, "c2")]}),
+        responds_with({"content": FABRICATED}),
+        responds_with({"content": "I could not establish NVIDIA's diluted EPS: "
+                                  "the filing search failed and no tool I have "
+                                  "returns a share count."}),
+    ], eps_registry)
+
+    tools = [s.tool for s in result.steps]
+    assert "ungrounded_answer" in tools, (
+        "a successful call to an unrelated ratio must not license an invented "
+        "share count"
+    )
+    assert "66.70" not in result.answer and "1.8 billion" not in result.answer
+
+
+def test_the_correction_names_the_offending_figures(eps_registry):
+    """A generic 'that was not grounded' leaves the model guessing which number
+    to fix, and it usually guesses the one that was fine."""
+    _, model = drive([
+        responds_with({"tool_calls": [tool_call("calculate_ratio",
+                                                {"ticker": "NVDA",
+                                                 "ratio_name": "net_margin"}, "c1")]}),
+        responds_with({"content": FABRICATED}),
+        responds_with({"content": "Could not establish it."}),
+    ], eps_registry)
+
+    correction = model.requests[-1]["messages"][-1]
+    assert correction["role"] == "user"
+    assert "66.70" in correction["content"] or "1.8" in correction["content"]
+
+
+def test_a_figure_backed_by_the_succeeding_tool_is_untouched(eps_registry):
+    """55.60% is in the tool result, so an answer that only claims it passes."""
+    result, _ = drive([
+        responds_with({"tool_calls": [tool_call("calculate_ratio",
+                                                {"ticker": "NVDA",
+                                                 "ratio_name": "net_margin"}, "c1")]}),
+        responds_with({"content": "NVIDIA's net margin was 55.60%."}),
+    ], eps_registry)
+
+    assert [s.tool for s in result.steps] == ["calculate_ratio", "final_answer"]
+    assert result.completed is True
+    assert result.stop_reason == "final_answer"
+
+
+def test_a_value_derived_from_two_evidence_numbers_is_allowed(eps_registry):
+    """Revenue = net_income / net_margin. Both inputs are in the result, and
+    blocking this would punish the model for showing correct arithmetic."""
+    result, _ = drive([
+        responds_with({"tool_calls": [tool_call("calculate_ratio",
+                                                {"ticker": "NVDA",
+                                                 "ratio_name": "net_margin"}, "c1")]}),
+        responds_with({"content": "Net income was $120,067,000,000 at a 55.60% "
+                                  "margin, so revenue was about "
+                                  "$215,938,000,000."}),
+    ], eps_registry)
+
+    assert "ungrounded_answer" not in [s.tool for s in result.steps]
+    assert result.completed is True
+
+
+def test_an_unverified_figure_that_survives_the_retry_is_hedged(eps_registry):
+    """One retry, then the answer ships with a caveat and completed=False --
+    never as a bare confident number."""
+    result, _ = drive([
+        responds_with({"tool_calls": [tool_call("calculate_ratio",
+                                                {"ticker": "NVDA",
+                                                 "ratio_name": "net_margin"}, "c1")]}),
+        responds_with({"content": FABRICATED}),
+        responds_with({"content": FABRICATED}),      # ignores the correction
+    ], eps_registry)
+
+    assert result.answer.startswith("[Unverified:")
+    assert "66.70" in result.answer          # not hidden, but not presented as fact
+    assert result.completed is False
+    assert result.stop_reason == "unverified_figures"
+    assert result.steps[-1].ok is False
+
+
+def test_a_non_numeric_answer_is_never_blocked(eps_registry):
+    result, _ = drive([
+        responds_with({"content": "NVDA and AAPL are the indexed filings."}),
+    ], eps_registry)
+    assert result.completed is True
+    assert [s.tool for s in result.steps] == ["final_answer"]

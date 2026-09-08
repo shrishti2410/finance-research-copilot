@@ -47,6 +47,7 @@ from agent.prompts import (
     EXHAUSTED_TOOL_BUDGET_NO_FINDINGS,
     system_prompt,
 )
+from agent.grounding import unsupported_figures
 from agent.tools import build_registry, compact_for_model
 from core.config import settings
 from tools.registry import Registry
@@ -126,10 +127,21 @@ _FIGURE = re.compile(
 
 # Addressed to the model as the user, because that is what was measured to work.
 UNGROUNDED_RETRY = (
-    "That answer states a figure, but you did not call a tool in this turn, so "
-    "the number is from memory rather than from data. It cannot be used -- "
-    "discard it. Call the tool that produces the figure now, then answer from "
-    "what it returns."
+    "These figures in your answer do not appear in any tool result from this "
+    "turn: {figures}. They are from memory or from an assumption, not from "
+    "data, so they cannot be used -- discard them. Either call a tool that "
+    "produces them and answer from what it returns, or say plainly that you "
+    "could not establish them. Do not assume a value in order to compute one."
+)
+
+# Used when the retry is spent and figures are still unaccounted for. The
+# answer is prefixed with this rather than replaced: its prose is usually
+# right, and the caller is owed what was established. What it must never do is
+# arrive looking like a reported figure.
+UNVERIFIED_CAVEAT = (
+    "[Unverified: I could not trace {figures} to any tool result in this "
+    "turn, so treat those numbers as unconfirmed rather than as reported "
+    "figures.]\n\n"
 )
 
 
@@ -493,40 +505,75 @@ async def run_agent(
 
                 # A figure nothing produced is recall, not a result. Give the
                 # model one chance to go and get it; see the guard's note above.
-                if (
-                    answer
-                    and grounding_retries < MAX_GROUNDING_RETRIES
-                    and states_a_figure(answer)
-                    and not any(s.ok for s in steps if s.tool != "final_answer")
-                ):
+                # Per-figure, not per-turn. "Some tool succeeded" is not
+                # evidence for *this* number: in the eval, search_filings
+                # failed, calculate_ratio(net_margin) succeeded, and the model
+                # invented a share count and an EPS that appeared nowhere in
+                # the turn. See agent/grounding.py.
+                unverified = unsupported_figures(answer, steps) if answer else []
+                if unverified and grounding_retries < MAX_GROUNDING_RETRIES:
                     grounding_retries += 1
                     # Recorded as a failed step, not dropped: the discarded
                     # answer is the evidence that the guard fired, and a trace
                     # that hides it makes the extra iteration unexplainable.
                     steps.append(Step(
-                        iteration=iteration, tool="ungrounded_answer", arguments={},
+                        iteration=iteration, tool="ungrounded_answer",
+                        arguments={"figures": [f.text for f in unverified]},
                         result=answer, latency_ms=model_ms,
                         model_latency_ms=model_ms, ok=False,
                     ))
                     log.warning(
-                        "agent: discarded an ungrounded answer on iteration %d "
-                        "(no tool call, figure stated): %s",
-                        iteration, _one_line(answer, 120),
+                        "agent: discarded an answer on iteration %d; %d figure(s) "
+                        "trace to no successful tool result: %s",
+                        iteration, len(unverified),
+                        ", ".join(f.text for f in unverified[:6]),
                     )
                     await _emit(on_event, {
                         "type": "discarded",
                         "iteration": iteration,
                         "reason": "ungrounded",
                         "draft": answer,
+                        "figures": [f.text for f in unverified],
                     })
                     messages.append({"role": "assistant", "content": answer})
-                    messages.append({"role": "user", "content": UNGROUNDED_RETRY})
+                    # Name the offending numbers. A generic "that was not
+                    # grounded" leaves the model guessing which figure to fix,
+                    # and it usually guesses the one that was fine.
+                    messages.append({
+                        "role": "user",
+                        "content": UNGROUNDED_RETRY.format(
+                            figures=", ".join(f.text for f in unverified[:6])
+                        ),
+                    })
                     continue
 
+                # The retry is spent and figures are still unaccounted for.
+                # The answer is not thrown away -- its prose is often right and
+                # the caller is owed whatever was established -- but it is
+                # never handed over as fact. It is prefixed with what could not
+                # be verified, and `completed` is False so a caller can tell
+                # this apart from a clean answer without reading the text.
+                if unverified:
+                    answer = UNVERIFIED_CAVEAT.format(
+                        figures=", ".join(f.text for f in unverified[:6]),
+                    ) + answer
+                    log.warning(
+                        "agent: answering with a caveat; %d figure(s) unverified "
+                        "after the retry: %s", len(unverified),
+                        ", ".join(f.text for f in unverified[:6]),
+                    )
+                    await _emit(on_event, {
+                        "type": "unverified",
+                        "iteration": iteration,
+                        "figures": [f.text for f in unverified],
+                    })
+
                 steps.append(Step(
-                    iteration=iteration, tool="final_answer", arguments={},
+                    iteration=iteration, tool="final_answer",
+                    arguments={"unverified": [f.text for f in unverified]}
+                    if unverified else {},
                     result=answer, latency_ms=model_ms, model_latency_ms=model_ms,
-                    ok=bool(answer),
+                    ok=bool(answer) and not unverified,
                 ))
                 log.info("agent: answered on iteration %d after %d tool calls",
                          iteration, len([s for s in steps if s.tool != "final_answer"]))
@@ -535,8 +582,10 @@ async def run_agent(
                         "The model returned an empty response. This is a failure, "
                         "not an answer."
                     ),
-                    steps=steps, iterations=iteration, completed=bool(answer),
-                    stop_reason="final_answer" if answer else "empty_response",
+                    steps=steps, iterations=iteration,
+                    completed=bool(answer) and not unverified,
+                    stop_reason=("unverified_figures" if unverified else
+                                 ("final_answer" if answer else "empty_response")),
                     model=model, total_ms=(time.perf_counter() - started) * 1000,
                     prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
                     usage_measured=usage_measured,
