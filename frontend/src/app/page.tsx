@@ -201,6 +201,22 @@ export default function ChatPage() {
             );
             break;
 
+          case "blocked":
+            // Same problem as "discarded" and a stricter remedy: the draft on
+            // screen is a recommendation, and there is no retry coming. Clear
+            // it now rather than leaving advice visible until the final answer
+            // arrives to overwrite it.
+            setPending((p) =>
+              p
+                ? {
+                    ...p,
+                    answer: "",
+                    status: "That answer crossed into advice; rewriting…",
+                  }
+                : p,
+            );
+            break;
+
           case "budget":
             setPending((p) =>
               p

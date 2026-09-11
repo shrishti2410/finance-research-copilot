@@ -182,6 +182,13 @@ export type AskEvent =
   | { type: "token"; text: string }
   | { type: "discarded"; iteration: number; reason: string; draft: string }
   | {
+      type: "blocked";
+      iteration: number;
+      reason: string;
+      phrases: string[];
+      draft: string;
+    }
+  | {
       type: "budget";
       iteration: number;
       requested: number;

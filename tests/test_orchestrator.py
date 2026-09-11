@@ -12,6 +12,7 @@ import httpx
 import pytest
 
 from agent.orchestrator import MAX_ITERATIONS, format_trace, run_agent
+from agent.untrusted import CLOSE_TAG, OPEN_TAG
 from tools.base import ok
 from tools.registry import Registry
 
@@ -196,14 +197,27 @@ def test_the_assistant_tool_call_message_is_echoed_back(registry):
     assert tool_message["name"] == "get_margin"
 
 
-def test_tool_results_reach_the_model_as_json(registry):
+def payload_of(tool_message: dict) -> dict:
+    """The JSON inside a tool message, unwrapped from its <tool_result> block.
+
+    Results stopped being bare JSON when agent/untrusted.py started enclosing
+    them -- retrieved text is written by people who do not operate this agent,
+    and the block is what says so. See tests/test_injection.py.
+    """
+    content = tool_message["content"]
+    start = content.index(OPEN_TAG) + len(OPEN_TAG)
+    return json.loads(content[start:content.rindex(CLOSE_TAG)])
+
+
+def test_tool_results_reach_the_model_as_json_inside_a_result_block(registry):
     _, model = drive([
         responds_with({"tool_calls": [tool_call("get_margin", {"ticker": "NVDA"})]}),
         responds_with({"content": "done"}),
     ], registry)
 
     tool_message = next(m for m in model.last_messages if m["role"] == "tool")
-    assert json.loads(tool_message["content"])["value"] == 0.71
+    assert OPEN_TAG in tool_message["content"]
+    assert payload_of(tool_message)["value"] == 0.71
 
 
 def test_the_tool_schemas_are_sent_every_iteration(registry):
@@ -233,8 +247,8 @@ def test_a_failing_tool_does_not_stop_the_loop(registry):
 
     assert result.completed is True
     assert result.steps[0].ok is False
-    assert "nothing for that ticker" in json.loads(
-        next(m for m in model.last_messages if m["role"] == "tool")["content"]
+    assert "nothing for that ticker" in payload_of(
+        next(m for m in model.last_messages if m["role"] == "tool")
     )["message"]
 
 
@@ -1107,3 +1121,124 @@ def test_generated_tokens_are_capped_on_both_models(registry):
     # Nothing goes out uncapped: an unbounded answer on a CPU host is a
     # minutes-long tail, not a better answer.
     assert all("max_tokens" in r for r in model.requests)
+
+
+# ── the investment-advice backstop ───────────────────────────────────────────
+#
+# The prompt asks the model not to recommend. This is what happens when it does
+# anyway -- which is the assumption the guard is built on, since the same class
+# of prompt rule was already measured failing for "never answer from memory".
+
+ADVISORY = ("NVIDIA's fiscal 2026 gross margin was 71.07%. Given that, I'd "
+            "recommend buying at these levels.")
+
+
+def test_an_advisory_answer_is_replaced_not_sent(registry):
+    result, _ = drive([
+        responds_with({"tool_calls": [tool_call("get_margin", {"ticker": "NVDA"})]}),
+        responds_with({"content": ADVISORY}),
+    ], registry)
+
+    assert "recommend buying" not in result.answer
+    assert "can't advise" in result.answer
+    assert result.completed is False
+    assert result.stop_reason == "investment_advice"
+
+
+def test_the_blocked_draft_is_kept_in_the_trace(registry):
+    """A trace that hides what was replaced cannot be audited, and this is
+    exactly the decision someone will want to audit."""
+    result, _ = drive([
+        responds_with({"tool_calls": [tool_call("get_margin", {"ticker": "NVDA"})]}),
+        responds_with({"content": ADVISORY}),
+    ], registry)
+
+    blocked = [s for s in result.steps if s.tool == "advisory_answer"]
+    assert len(blocked) == 1
+    assert blocked[0].result == ADVISORY
+    assert blocked[0].ok is False
+    assert blocked[0].arguments["kinds"] == ["directive"]
+    assert result.steps[-1].tool == "final_answer" and result.steps[-1].ok is False
+
+
+def test_the_figures_survive_the_block(registry):
+    """Throwing away the facts to deliver a refusal makes the guardrail feel
+    like a malfunction -- the figures are why the question was asked."""
+    result, _ = drive([
+        responds_with({"tool_calls": [tool_call("get_margin", {"ticker": "NVDA"})]}),
+        responds_with({"content": ADVISORY}),
+    ], registry)
+
+    assert "get_margin" in result.answer and "0.71" in result.answer
+
+
+def test_a_block_with_nothing_established_still_redirects(registry):
+    """No tool ran, so there are no findings to offer -- but the boundary is
+    still explained rather than the answer going out."""
+    result, _ = drive([responds_with({"content": "You should buy NVDA."})], registry)
+
+    assert "can't advise" in result.answer
+    assert "Here are the facts" not in result.answer
+    assert result.stop_reason == "investment_advice"
+
+
+def test_there_is_no_retry_on_advice(registry):
+    """Unlike the grounding guard. A model that has decided to recommend
+    something rephrases when challenged, which produces the same advice past a
+    pattern that no longer matches it."""
+    _, model = drive([responds_with({"content": "You should buy NVDA."})], registry)
+    assert len(model.requests) == 1
+
+
+def test_a_factual_answer_is_untouched(registry):
+    result, _ = drive([
+        responds_with({"tool_calls": [tool_call("get_margin", {"ticker": "NVDA"})]}),
+        responds_with({"content": "NVIDIA's gross margin was 0.71 for the period."}),
+    ], registry)
+
+    assert result.answer == "NVIDIA's gross margin was 0.71 for the period."
+    assert result.completed is True
+    assert result.stop_reason == "final_answer"
+    assert not [s for s in result.steps if s.tool == "advisory_answer"]
+
+
+def test_a_blocked_answer_emits_an_event_so_a_stream_can_reset(registry):
+    """The draft has already been streamed to the browser by the time this
+    fires, exactly as with the grounding guard's discarded event."""
+    events: list[dict] = []
+
+    async def on_event(event):
+        events.append(event)
+
+    # Figure-free, so the grounding guard has nothing to say and this test is
+    # about the advice check alone.
+    draft = "Honestly, you should buy NVDA and hold it."
+    model = FakeModel([responds_with({"content": draft})])
+
+    async def go():
+        async with model.client() as client:
+            return await run_agent("q", registry=registry, client=client,
+                                   model="fake-model", router_model="",
+                                   on_event=on_event)
+
+    run(go())
+    blocked = [e for e in events if e["type"] == "blocked"]
+    assert len(blocked) == 1
+    assert blocked[0]["reason"] == "investment_advice"
+    assert blocked[0]["draft"] == draft
+    assert blocked[0]["phrases"]
+
+
+def test_advice_is_blocked_even_when_figures_were_unverified(registry):
+    """A hedged recommendation is still a recommendation, so the advice check
+    runs on whatever the grounding guard settled on rather than instead of it."""
+    fabricated = ("Based on roughly 1.8 billion shares, EPS is about $66.70, so "
+                  "I'd recommend buying.")
+    result, _ = drive([
+        responds_with({"content": fabricated}),
+        responds_with({"content": fabricated}),
+    ], registry)
+
+    assert "recommend" not in result.answer
+    assert "can't advise" in result.answer
+    assert result.stop_reason == "investment_advice"

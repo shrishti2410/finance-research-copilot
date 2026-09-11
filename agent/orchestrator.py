@@ -47,7 +47,13 @@ from agent.prompts import (
     EXHAUSTED_TOOL_BUDGET_NO_FINDINGS,
     system_prompt,
 )
+from agent.advice import (
+    REDIRECTION,
+    REDIRECTION_WITH_FINDINGS,
+    advisory_spans,
+)
 from agent.grounding import unsupported_figures
+from agent.untrusted import wrap_tool_result
 from agent.tools import build_registry, compact_for_model
 from core.config import settings
 from tools.registry import Registry
@@ -695,12 +701,53 @@ async def run_agent(
                         "figures": [f.text for f in unverified],
                     })
 
+                # The advice backstop. Last, because it is the only check that
+                # replaces the answer outright rather than annotating it -- and
+                # it runs on whatever the earlier guards settled on, caveat
+                # included, since a hedged recommendation is still a
+                # recommendation.
+                #
+                # Unlike the grounding guard there is no retry. A model that has
+                # decided to recommend something does not un-decide when asked
+                # again; it rephrases, which produces the same advice past a
+                # pattern that no longer matches it. Replacing the text is the
+                # mechanism. See agent/advice.py.
+                advice = advisory_spans(answer) if answer else []
+                if advice:
+                    log.warning(
+                        "agent: blocked an advisory answer on iteration %d; "
+                        "%d phrase(s): %s", iteration, len(advice),
+                        "; ".join(f"[{a.kind}] {a.text}" for a in advice[:4]),
+                    )
+                    steps.append(Step(
+                        iteration=iteration, tool="advisory_answer",
+                        arguments={"phrases": [a.text for a in advice],
+                                   "kinds": sorted({a.kind for a in advice})},
+                        # The blocked draft is kept, not dropped: a trace that
+                        # hides what was replaced cannot be reviewed, and this
+                        # is exactly the decision someone will want to audit.
+                        result=answer, latency_ms=model_ms,
+                        model_latency_ms=model_ms, ok=False,
+                    ))
+                    await _emit(on_event, {
+                        "type": "blocked",
+                        "iteration": iteration,
+                        "reason": "investment_advice",
+                        "phrases": [a.text for a in advice],
+                        "draft": answer,
+                    })
+                    findings = _findings(steps)
+                    answer = (
+                        REDIRECTION_WITH_FINDINGS.format(findings=findings)
+                        if findings else REDIRECTION
+                    )
+
                 steps.append(Step(
                     iteration=iteration, tool="final_answer",
                     arguments={"unverified": [f.text for f in unverified]}
                     if unverified else {},
                     result=answer, latency_ms=model_ms, model_latency_ms=model_ms,
-                    ok=bool(answer) and not unverified,
+                    ok=bool(answer) and not unverified and not advice,
                 ))
                 log.info("agent: answered on iteration %d after %d tool calls",
                          iteration, len([s for s in steps if s.tool != "final_answer"]))
@@ -710,9 +757,10 @@ async def run_agent(
                         "not an answer."
                     ),
                     steps=steps, iterations=iteration,
-                    completed=bool(answer) and not unverified,
-                    stop_reason=("unverified_figures" if unverified else
-                                 ("final_answer" if answer else "empty_response")),
+                    completed=bool(answer) and not unverified and not advice,
+                    stop_reason=("investment_advice" if advice else
+                                 ("unverified_figures" if unverified else
+                                  ("final_answer" if answer else "empty_response"))),
                     model=model, router_model=router_model, router_calls=router_calls,
                     total_ms=(time.perf_counter() - started) * 1000,
                     prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
@@ -799,7 +847,11 @@ async def run_agent(
                     "role": "tool",
                     "tool_call_id": call.get("id") or f"call_{uuid.uuid4().hex[:8]}",
                     "name": name,
-                    "content": json.dumps(compact_for_model(name, outcome), default=str),
+                    # Enclosed rather than pasted in raw. A filing excerpt or a
+                    # news headline is written by someone who is not operating
+                    # this agent, and arrives in the same conversation as the
+                    # system prompt. See agent/untrusted.py.
+                    "content": wrap_tool_result(name, compact_for_model(name, outcome)),
                 })
 
             if over_budget:
