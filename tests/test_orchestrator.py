@@ -80,6 +80,14 @@ def registry():
 
 
 def drive(script: list[dict], registry, **kwargs):
+    """Drive the loop with a scripted model and no router.
+
+    router_model defaults to "" here because these cases are about the loop --
+    iteration accounting, tool threading, the budgets -- and a router turns one
+    scripted response per iteration into two. The router split has its own
+    section at the end of this file.
+    """
+    kwargs.setdefault("router_model", "")
     model = FakeModel(script)
 
     async def go():
@@ -635,6 +643,7 @@ class StreamingModel:
 
 
 def drive_stream(bodies: list[str], registry, **kwargs):
+    kwargs.setdefault("router_model", "")
     model = StreamingModel(bodies)
     tokens: list[str] = []
     events: list[dict] = []
@@ -749,7 +758,8 @@ def test_a_consumer_that_raises_does_not_fail_the_run(registry):
     async def go():
         async with model.client() as client:
             return await run_agent("q", registry=registry, client=client,
-                                   model="fake-model", stream_tokens=True,
+                                   model="fake-model", router_model="",
+                                   stream_tokens=True,
                                    on_token=explode, on_event=explode)
 
     result = run(go())
@@ -772,7 +782,8 @@ def test_buffered_runs_emit_events_too(registry):
     async def go():
         async with model.client() as client:
             return await run_agent("q", registry=registry, client=client,
-                                   model="fake-model", on_event=on_event)
+                                   model="fake-model", router_model="",
+                                   on_event=on_event)
 
     run(go())
     assert [e["type"] for e in events] == [
@@ -920,3 +931,179 @@ def test_a_non_numeric_answer_is_never_blocked(eps_registry):
     ], eps_registry)
     assert result.completed is True
     assert [s.tool for s in result.steps] == ["final_answer"]
+
+
+# ── a small model for routing, the large one for the answer ──────────────────
+#
+# Measured on the dev host: qwen2.5:1.5b picks the same tool as 7b on 6 of 6
+# representative questions and runs the routing step in 3.7s against 13.7s. What
+# it cannot do is recover -- handed a bad_input envelope for a missing end_date
+# it apologised instead of retrying with the date. So the split is not "small
+# model everywhere it fits": the larger model takes over for the answer, after a
+# failed tool call, and after a grounding retry.
+#
+# The router's call is streamed and abandoned at its first content token, which
+# is why these fakes serve SSE for streaming requests and JSON for buffered
+# ones. A router that is allowed to finish a draft costs about what routing
+# saves.
+
+class SplitModel:
+    """Serves SSE to streaming requests and JSON to buffered ones.
+
+    Records `(model, stream)` per request, which is what the split is asserted
+    on -- not the text, but which model was asked.
+    """
+
+    def __init__(self, router_bodies: list[str], answer_script: list[dict]):
+        self.router_bodies = list(router_bodies)
+        self.answer_script = list(answer_script)
+        self.seen: list[tuple[str, bool]] = []
+        self.requests: list[dict] = []
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        self.requests.append(payload)
+        self.seen.append((payload["model"], bool(payload.get("stream"))))
+        if payload.get("stream"):
+            body = (self.router_bodies.pop(0) if self.router_bodies
+                    else sse_chunks({"content": "router has nothing"}))
+            return httpx.Response(200, text=body,
+                                  headers={"content-type": "text/event-stream"})
+        body = (self.answer_script.pop(0) if self.answer_script
+                else responds_with({"content": "done"}))
+        return httpx.Response(200, json=body)
+
+    def client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            transport=httpx.MockTransport(self.handler),
+            base_url="http://model.invalid/v1",
+        )
+
+
+def drive_split(router_bodies, answer_script, registry, **kwargs):
+    model = SplitModel(router_bodies, answer_script)
+    events: list[dict] = []
+
+    async def on_event(event):
+        events.append(event)
+
+    async def go():
+        async with model.client() as client:
+            return await run_agent(
+                "compare margins", registry=registry, client=client,
+                model="big", router_model="small", on_event=on_event, **kwargs
+            )
+
+    return run(go()), model, events
+
+
+def test_the_router_selects_the_tool_and_the_big_model_never_sees_that_step(registry):
+    calls = [{"index": 0, "id": "c0",
+              "function": {"name": "get_margin", "arguments": '{"ticker":"NVDA"}'}}]
+    result, model, events = drive_split(
+        [sse_chunks({"tool_calls": calls})],
+        [responds_with({"content": "gross margin is 71%"})],
+        registry,
+    )
+
+    # Iteration 1 went to the router only; iteration 2's answer to the big model.
+    assert model.seen == [("small", True), ("small", True), ("big", False)]
+    assert [s.tool for s in result.steps] == ["get_margin", "final_answer"]
+    assert result.router_model == "small"
+    assert result.router_calls == 2
+
+
+def test_a_router_with_no_tool_call_hands_the_turn_to_the_big_model(registry):
+    result, model, events = drive_split(
+        [sse_chunks({"content": "I think it is about 71%."})],
+        [responds_with({"content": "NVDA and AAPL are indexed."})],
+        registry,
+    )
+
+    assert model.seen == [("small", True), ("big", False)]
+    assert result.answer == "NVDA and AAPL are indexed."
+    assert [e["type"] for e in events if e["type"] == "escalate"] == ["escalate"]
+
+
+def test_the_routers_discarded_draft_never_reaches_the_history(registry):
+    """Its draft is not evidence and not a turn -- the big model must not see it."""
+    _, model, _ = drive_split(
+        [sse_chunks({"content": "It is roughly 71%, I believe."})],
+        [responds_with({"content": "NVDA and AAPL are indexed."})],
+        registry,
+    )
+
+    big_request = next(r for r in model.requests if r["model"] == "big")
+    assert all("roughly 71%" not in (m.get("content") or "")
+               for m in big_request["messages"])
+    assert [m["role"] for m in big_request["messages"]] == ["system", "user"]
+
+
+def test_a_failed_tool_call_sends_the_next_iteration_to_the_big_model(registry):
+    """The measured gap: the small model reads an error envelope and gives up."""
+    calls = [{"index": 0, "id": "c0",
+              "function": {"name": "broken", "arguments": '{"ticker":"NVDA"}'}}]
+    result, model, _ = drive_split(
+        [sse_chunks({"tool_calls": calls})],
+        [responds_with({"content": "the tool failed, so I could not establish it"})],
+        registry,
+    )
+
+    assert result.steps[0].ok is False
+    # Iteration 2 skips the router entirely rather than streaming it first.
+    assert model.seen == [("small", True), ("big", False)]
+
+
+def test_a_grounding_retry_goes_to_the_big_model(eps_registry):
+    """Reading 'these figures trace to nothing, go and verify' is reasoning."""
+    calls = [{"index": 0, "id": "c0",
+              "function": {"name": "calculate_ratio",
+                           "arguments": '{"ticker":"NVDA","ratio_name":"net_margin"}'}}]
+    result, model, _ = drive_split(
+        [sse_chunks({"tool_calls": calls})],
+        [responds_with({"content": FABRICATED}),
+         responds_with({"content": "I could not establish the diluted EPS."})],
+        eps_registry,
+    )
+
+    assert [s.tool for s in result.steps] == [
+        "calculate_ratio", "ungrounded_answer", "final_answer"]
+    # Iteration 1 routes. Iteration 2 asks the router, which has nothing left to
+    # fetch, so the big model writes the draft the guard then discards. The retry
+    # skips the router entirely -- the correction is addressed to the model that
+    # has to act on it.
+    assert model.seen == [("small", True), ("small", True),
+                          ("big", False), ("big", False)]
+    assert result.completed is True
+
+
+def test_a_router_equal_to_the_model_is_no_router(registry):
+    """Escalating a model to itself would only buy a second full call."""
+    model = FakeModel([responds_with({"content": "NVDA and AAPL are indexed."})])
+
+    async def go():
+        async with model.client() as client:
+            return await run_agent("q", registry=registry, client=client,
+                                   model="same", router_model="same")
+
+    result = run(go())
+    assert result.router_model == ""
+    assert result.router_calls == 0
+    assert len(model.requests) == 1
+
+
+def test_generated_tokens_are_capped_on_both_models(registry):
+    calls = [{"index": 0, "id": "c0",
+              "function": {"name": "get_margin", "arguments": '{"ticker":"NVDA"}'}}]
+    _, model, _ = drive_split(
+        [sse_chunks({"tool_calls": calls})],
+        [responds_with({"content": "gross margin is 71%"})],
+        registry,
+        max_tokens=512, router_max_tokens=128,
+    )
+
+    caps = [(r["model"], r["max_tokens"]) for r in model.requests]
+    assert ("small", 128) in caps and ("big", 512) in caps
+    # Nothing goes out uncapped: an unbounded answer on a CPU host is a
+    # minutes-long tail, not a better answer.
+    assert all("max_tokens" in r for r in model.requests)

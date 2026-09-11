@@ -59,10 +59,35 @@ class Settings(BaseSettings):
     # directly, so agent traffic goes through the same timeouts, logging and
     # upstream config as every other client.
     agent_inference_base_url: str = "http://127.0.0.1:8000/v1"
-    # Tool calling is the whole mechanism here, and a 1.5B model picks tools
-    # unreliably. 7B is the smallest that holds a four-tool schema and a
-    # two-company comparison together.
+    # Tool calling is the whole mechanism here. 7B is the smallest that both
+    # picks tools and writes the answer; see agent_router_model for what a
+    # smaller model measurably can and cannot do.
     agent_model: str = "qwen2.5:7b"
+    # A smaller model for the tool-selection steps only, with agent_model
+    # reserved for writing the answer. Measured on this host: 1.5b picks the
+    # right tool on 6 of 6 representative questions at 13.9 tok/s against 7b's
+    # 2.8 -- a 13.7s routing step becomes 3.7s.
+    #
+    # What it cannot do is recover. Asked for a current stock price it called
+    # get_stock_price without the required end_date, read the bad_input
+    # envelope, and answered "I couldn't find the current stock price" instead
+    # of retrying with the date; 7b got it right first time. So the loop
+    # escalates to agent_model after any failed tool call -- recovery is
+    # reasoning, which is what the larger model is for.
+    #
+    # Empty disables the split and every step runs on agent_model.
+    agent_router_model: str = "qwen2.5:1.5b"
+    # Generated-token caps. Ollama is unbounded by default, which on a CPU host
+    # means one runaway answer can generate for minutes at ~4 tok/s. Across the
+    # 40 eval questions the longest final answer was ~368 tokens and the median
+    # ~57, so 512 clears every observed answer with room to spare and binds only
+    # on a runaway. 384 would have clipped the longest real answer.
+    agent_max_tokens: int = 512
+    # A routing step emits a tool call, about 35 tokens. The cap is generous
+    # against that because the router is also what writes the draft that gets
+    # discarded when it stops asking for tools -- a low cap makes that draft
+    # cheap to throw away.
+    agent_router_max_tokens: int = 128
     agent_max_iterations: int = 5
     # Bounds work, where agent_max_iterations bounds round-trips: Qwen
     # emits parallel tool calls, and one iteration held 16 of them in the

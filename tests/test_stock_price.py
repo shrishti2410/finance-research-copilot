@@ -131,6 +131,26 @@ def test_single_day_request_is_not_an_empty_range(yf):
     assert FakeTicker.calls[0]["end"] == "2026-08-04"
 
 
+def test_omitted_end_date_means_a_single_day(yf):
+    """The measured failure it prevents: qwen2.5:1.5b, asked for a current price,
+    called this with start_date alone, read "requires end_date" and answered "I
+    couldn't find the current stock price" instead of retrying with the date."""
+    yf["result"] = THREE_DAYS.iloc[:1]
+    result = stock_price.get_stock_price("NVDA", "2026-08-03")
+    assert result["ok"] is True and result["trading_days"] == 1
+    assert result["end_date"] == "2026-08-03"
+    assert FakeTicker.calls[0]["end"] == "2026-08-04"
+
+
+def test_end_date_is_optional_in_the_tool_schema(yf):
+    """A default in the signature is what makes the model free to omit it."""
+    from agent.tools import build_registry
+    spec = next(s["function"] for s in build_registry().schemas()
+                if s["function"]["name"] == "get_stock_price")
+    assert spec["parameters"]["required"] == ["ticker", "start_date"]
+    assert "end_date" in spec["parameters"]["properties"]
+
+
 def test_prices_are_adjusted(yf):
     """A split makes an unadjusted series discontinuous mid-range."""
     stock_price.get_stock_price("NVDA", "2026-08-03", "2026-08-05")

@@ -239,6 +239,61 @@ async def _stream_message(client, payload, on_token) -> dict:
     return message
 
 
+async def _router_message(client, payload) -> dict | None:
+    """Run the router's call, abandoning it the moment it starts writing prose.
+
+    Returns the assembled tool-call message, or None if the router had no tool
+    call to make -- which is the signal to hand the turn to the larger model.
+
+    Why this is streamed when the router's output is never shown: letting the
+    router finish a draft answer costs about what routing saves. Measured on
+    this host, the routing step drops from 13.7s to 3.7s, and a 128-token draft
+    at 13.9 tok/s is 9s of that back. Aborting at the first content token costs
+    time-to-first-token instead, about 1.5s.
+
+    That works because of how Ollama emits the two shapes: a tool call arrives as
+    a single `tool_calls` delta with no content deltas at all, while prose
+    arrives as a stream of content deltas. Measured over five questions -- three
+    that call a tool, two that cannot -- the tool-calling ones emitted zero
+    content deltas and the prose ones emitted their first at ~1.5s. So a
+    non-empty content delta is an unambiguous "this is not a tool call".
+    """
+    tool_calls: dict[int, dict] = {}
+    request = client.build_request("POST", "/chat/completions",
+                                   json={**payload, "stream": True})
+    response = await client.send(request, stream=True)
+    prose = False
+    try:
+        response.raise_for_status()
+        async for line in response.aiter_lines():
+            if not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if not data or data == "[DONE]":
+                continue
+            try:
+                chunk = json.loads(data)
+            except json.JSONDecodeError:
+                log.warning("agent: skipping unparseable router chunk: %s", data[:120])
+                continue
+            delta = ((chunk.get("choices") or [{}])[0]).get("delta") or {}
+            for call_delta in delta.get("tool_calls") or []:
+                _merge_tool_call_delta(tool_calls, call_delta)
+            if delta.get("content"):
+                # Stop reading. The rest of this draft is generated either way --
+                # nothing here can cancel work already queued upstream -- but it
+                # is not waited for, which is the part that costs.
+                prose = True
+                break
+    finally:
+        await response.aclose()
+
+    if prose or not tool_calls:
+        return None
+    return {"role": "assistant", "content": "",
+            "tool_calls": [tool_calls[i] for i in sorted(tool_calls)]}
+
+
 @dataclass
 class Step:
     """One row of the trace: a tool call, or the final answer."""
@@ -271,13 +326,20 @@ class AgentResult:
     completed: bool = True          # False when the budget ran out
     stop_reason: str = "final_answer"
     model: str = ""
+    # Empty when the whole turn ran on `model`. See settings.agent_router_model.
+    router_model: str = ""
     total_ms: float = 0.0
     # Summed across every model call in the run. Zero when the upstream did not
     # report usage -- which the streaming path does not -- so a zero here means
     # "not measured", not "free". `usage_measured` says which.
+    #
+    # These cover calls to `model`. The router's calls are streamed and so
+    # report no usage: when `router_calls` is above zero the totals are the
+    # larger model's share, not the whole run's.
     prompt_tokens: int = 0
     completion_tokens: int = 0
     usage_measured: bool = False
+    router_calls: int = 0
 
     @property
     def tool_calls(self) -> list[Step]:
@@ -294,6 +356,8 @@ class AgentResult:
             "completed": self.completed,
             "stop_reason": self.stop_reason,
             "model": self.model,
+            "router_model": self.router_model,
+            "router_calls": self.router_calls,
             "total_ms": round(self.total_ms, 1),
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
@@ -381,6 +445,9 @@ async def run_agent(
     *,
     registry: Registry | None = None,
     model: str | None = None,
+    router_model: str | None = None,
+    max_tokens: int | None = None,
+    router_max_tokens: int | None = None,
     max_iterations: int = MAX_ITERATIONS,
     max_tool_calls_per_iteration: int = MAX_TOOL_CALLS_PER_ITERATION,
     client: httpx.AsyncClient | None = None,
@@ -402,6 +469,14 @@ async def run_agent(
             executed and then the same honest stop as running out of
             iterations -- see the note on the constant.
         model: model id. Defaults to `settings.agent_model`.
+        router_model: a smaller model for the tool-selection steps, with `model`
+            reserved for writing the answer and for recovering from a failed
+            tool call. Defaults to `settings.agent_router_model`; pass "" to run
+            every step on `model`.
+        max_tokens: cap on generated tokens per call to `model`. Unbounded
+            generation on a CPU host is a minutes-long tail, not a longer
+            answer -- see the note on `settings.agent_max_tokens`.
+        router_max_tokens: the same cap for `router_model`.
         client: an httpx client to reuse. One is created and closed if omitted.
         today: overrides the date given to the model, for reproducible tests.
         temperature: 0 by default -- tool selection should not be a dice roll.
@@ -426,6 +501,16 @@ async def run_agent(
 
     registry = registry or build_registry()
     model = model or settings.agent_model
+    # "" is a deliberate opt-out, so `is None` rather than falsiness.
+    router_model = (settings.agent_router_model if router_model is None
+                    else router_model)
+    if router_model == model:
+        # Nothing is gained by escalating a model to itself, and the escalation
+        # would cost a second full call on the answer step.
+        router_model = ""
+    max_tokens = settings.agent_max_tokens if max_tokens is None else max_tokens
+    router_max_tokens = (settings.agent_router_max_tokens
+                         if router_max_tokens is None else router_max_tokens)
     started = time.perf_counter()
 
     messages: list[dict[str, Any]] = [
@@ -436,6 +521,8 @@ async def run_agent(
 
     steps: list[Step] = []
     grounding_retries = 0
+    escalate_next = False
+    router_calls = 0
     prompt_tokens = completion_tokens = 0
     usage_measured = False
     owns_client = client is None
@@ -449,34 +536,69 @@ async def run_agent(
         headers={"X-Internal-Token": settings.internal_token},
     )
 
+    async def one_call(call_model: str, cap: int, stream: bool) -> dict:
+        """One chat completion. Accumulates usage; raises on transport failure."""
+        nonlocal prompt_tokens, completion_tokens, usage_measured
+        payload = {
+            "model": call_model,
+            "messages": messages,
+            "tools": registry.schemas(),
+            "temperature": temperature,
+            "max_tokens": cap,
+            "stream": False,
+        }
+        if stream:
+            return await _stream_message(client, payload, on_token)
+        response = await client.post("/chat/completions", json=payload)
+        response.raise_for_status()
+        body = response.json()
+        # Ollama reports usage on the buffered path only. Summed across
+        # iterations, because one question is several calls and the per-call
+        # number is not what anything wants.
+        usage = body.get("usage") or {}
+        if usage:
+            usage_measured = True
+            prompt_tokens += int(usage.get("prompt_tokens") or 0)
+            completion_tokens += int(usage.get("completion_tokens") or 0)
+        return ((body.get("choices") or [{}])[0]).get("message") or {}
+
     try:
         for iteration in range(1, max_iterations + 1):
-            payload = {
-                "model": model,
-                "messages": messages,
-                "tools": registry.schemas(),
-                "temperature": temperature,
-                "stream": False,
-            }
+            # The router handles tool selection; agent_model writes the answer.
+            # Two things take routing away from it. A tool call that failed last
+            # iteration needs recovery, which the small model measurably cannot
+            # do -- see settings.agent_router_model. And a grounding retry is an
+            # instruction to go and verify a figure, which is the same kind of
+            # work.
+            use_router = bool(router_model) and not escalate_next
+            escalate_next = False
 
             call_started = time.perf_counter()
-            await _emit(on_event, {"type": "iteration", "iteration": iteration})
+            await _emit(on_event, {"type": "iteration", "iteration": iteration,
+                                   "model": router_model if use_router else model})
             try:
-                if stream_tokens:
-                    message = await _stream_message(client, payload, on_token)
+                if use_router:
+                    router_calls += 1
+                    routed = await _router_message(client, {
+                        "model": router_model, "messages": messages,
+                        "tools": registry.schemas(), "temperature": temperature,
+                        "max_tokens": router_max_tokens,
+                    })
+                    if routed is not None:
+                        message = routed
+                    else:
+                        # No tool call, so what remains is prose -- the larger
+                        # model's job. Nothing from the router reaches the
+                        # history, so the answer is written as if the larger
+                        # model had run the whole turn.
+                        log.debug("agent: escalating iteration %d to %s to write "
+                                  "the answer", iteration, model)
+                        await _emit(on_event, {"type": "escalate",
+                                               "iteration": iteration,
+                                               "from": router_model, "to": model})
+                        message = await one_call(model, max_tokens, stream_tokens)
                 else:
-                    response = await client.post("/chat/completions", json=payload)
-                    response.raise_for_status()
-                    body = response.json()
-                    message = ((body.get("choices") or [{}])[0]).get("message") or {}
-                    # Ollama reports usage on the buffered path only. Summed
-                    # across iterations, because one question is several calls
-                    # and the per-call number is not what anything wants.
-                    usage = body.get("usage") or {}
-                    if usage:
-                        usage_measured = True
-                        prompt_tokens += int(usage.get("prompt_tokens") or 0)
-                        completion_tokens += int(usage.get("completion_tokens") or 0)
+                    message = await one_call(model, max_tokens, stream_tokens)
             except Exception as exc:  # noqa: BLE001 - upstream down, timeout, bad JSON
                 model_ms = (time.perf_counter() - call_started) * 1000
                 log.error("agent: inference call failed on iteration %d: %s", iteration, exc)
@@ -493,6 +615,7 @@ async def run_agent(
                     ),
                     steps=steps, iterations=iteration, completed=False,
                     stop_reason="inference_error", model=model,
+                    router_model=router_model, router_calls=router_calls,
                     total_ms=(time.perf_counter() - started) * 1000,
                     prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
                     usage_measured=usage_measured,
@@ -545,6 +668,10 @@ async def run_agent(
                             figures=", ".join(f.text for f in unverified[:6])
                         ),
                     })
+                    # Reading "these figures trace to nothing, go and verify
+                    # them" and deciding what to call is the reasoning step the
+                    # router is not for.
+                    escalate_next = True
                     continue
 
                 # The retry is spent and figures are still unaccounted for.
@@ -586,7 +713,8 @@ async def run_agent(
                     completed=bool(answer) and not unverified,
                     stop_reason=("unverified_figures" if unverified else
                                  ("final_answer" if answer else "empty_response")),
-                    model=model, total_ms=(time.perf_counter() - started) * 1000,
+                    model=model, router_model=router_model, router_calls=router_calls,
+                    total_ms=(time.perf_counter() - started) * 1000,
                     prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
                     usage_measured=usage_measured,
                 )
@@ -648,6 +776,12 @@ async def run_agent(
                     )
 
                 steps.append(step)
+                # A failed call is the one case where the router demonstrably
+                # cannot carry on: given a bad_input envelope it apologised
+                # instead of retrying with the missing argument. The next
+                # iteration goes to the larger model.
+                if not step.ok:
+                    escalate_next = True
                 await _emit(on_event, {
                     "type": "tool_result",
                     "iteration": iteration,
@@ -702,6 +836,7 @@ async def run_agent(
                 return AgentResult(
                     answer=answer, steps=steps, iterations=iteration, completed=False,
                     stop_reason="tool_call_budget", model=model,
+                    router_model=router_model, router_calls=router_calls,
                     total_ms=(time.perf_counter() - started) * 1000,
                     prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
                     usage_measured=usage_measured,
@@ -721,6 +856,7 @@ async def run_agent(
         return AgentResult(
             answer=answer, steps=steps, iterations=max_iterations, completed=False,
             stop_reason="max_iterations", model=model,
+            router_model=router_model, router_calls=router_calls,
             total_ms=(time.perf_counter() - started) * 1000,
             prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
             usage_measured=usage_measured,

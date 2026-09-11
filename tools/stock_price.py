@@ -3,10 +3,12 @@
 Two behaviours here exist because of how a *model* will call this, not because
 of how yfinance works:
 
-**`end_date` is inclusive.** yfinance's `end` is exclusive, so asking it for
-2026-09-01 to 2026-09-01 returns an empty frame. A model asked "what did NVDA
-close at on September 1st" will pass the same date twice, every time. This
-function adds the day internally.
+**`end_date` is inclusive, and optional.** yfinance's `end` is exclusive, so
+asking it for 2026-09-01 to 2026-09-01 returns an empty frame. A model asked
+"what did NVDA close at on September 1st" will pass the same date twice, every
+time. This function adds the day internally -- and accepts the call with
+end_date left out, because a smaller model asked for a current price omitted it
+and then gave up rather than reading the error and retrying.
 
 **An unknown ticker does not raise.** yfinance returns an empty DataFrame for
 `ZZZZNOTREAL` exactly as it does for a range that lands entirely on a weekend.
@@ -61,7 +63,7 @@ def _no_data_reason(ticker: str, start: date, end: date) -> str:
     )
 
 
-def get_stock_price(ticker: str, start_date: str, end_date: str) -> dict[str, Any]:
+def get_stock_price(ticker: str, start_date: str, end_date: str = "") -> dict[str, Any]:
     """Get daily historical stock prices for a ticker over a date range.
 
     Use this for questions about what a stock's price did: closing prices,
@@ -73,8 +75,9 @@ def get_stock_price(ticker: str, start_date: str, end_date: str) -> dict[str, An
         ticker: Stock ticker symbol, e.g. "NVDA" or "AAPL". Case-insensitive.
             Use the exchange's symbol, not the company name.
         start_date: First date to include, as ISO "YYYY-MM-DD".
-        end_date: Last date to include, as ISO "YYYY-MM-DD". Inclusive. To get
-            a single day's price, pass the same date for both.
+        end_date: Last date to include, as ISO "YYYY-MM-DD". Inclusive.
+            Optional: omit it for a single day's price and it defaults to
+            start_date.
 
     Returns:
         On success, a dict with "ok": True and:
@@ -103,7 +106,13 @@ def get_stock_price(ticker: str, start_date: str, end_date: str) -> dict[str, An
     start, bad = _parse_date(start_date, "start_date")
     if bad:
         return {**bad, "ticker": symbol}
-    end, bad = _parse_date(end_date, "end_date")
+    # Omitting end_date means one day. Asked for a current price, qwen2.5:1.5b
+    # called this with start_date alone, read the "requires end_date" envelope,
+    # and answered "I couldn't find the current stock price" rather than
+    # retrying with the date -- a false negative produced entirely by making a
+    # model say the same date twice. A single-day range is what a bare
+    # start_date can only mean.
+    end, bad = _parse_date(end_date or start_date, "end_date")
     if bad:
         return {**bad, "ticker": symbol}
 
