@@ -106,6 +106,29 @@ def date_spans(text: str) -> list[tuple[int, int]]:
     return [m.span() for m in _DATE.finditer(text)]
 
 
+# SEC form designations. "10-K" is a document name, not the number 10, and this
+# corpus is made of sentences containing it.
+#
+# Found by the no-fabrication safety suite: the honest answer "The filing search
+# failed, so I have nothing to report from the 10-K" was blocked by the
+# grounding guard, which had extracted 10 as an unsupported figure. An answer
+# saying it could not establish anything was being treated as a fabricated
+# claim -- which makes honesty the expensive option, the exact opposite of what
+# the guard is for.
+#
+# Matched whole, with the same span-skipping the dates use. The trailing
+# "/A" covers amendments (10-K/A).
+_FORM = re.compile(
+    r"\b(?:10|8|6|11|15|20|40)-[A-Z]{1,3}\d?(?:/A)?\b"
+    r"|\bS-\d{1,2}(?:/A)?\b"
+    r"|\bSC\s+13[DG](?:/A)?\b",
+)
+
+
+def form_spans(text: str) -> list[tuple[int, int]]:
+    return [m.span() for m in _FORM.finditer(text)]
+
+
 def inside(position: int, spans: list[tuple[int, int]]) -> bool:
     return any(start <= position < end for start, end in spans)
 
@@ -167,10 +190,14 @@ def candidates(answer: str) -> list[Candidate]:
     """Every number in the answer that could be an answer, in order."""
     found: list[Candidate] = []
     dates = date_spans(answer)
+    forms = form_spans(answer)
     for match in _NUMBER.finditer(answer):
         # The day in "January 31, 2026" is a number in the text and never an
         # answer; so is every other component of a written date.
         if inside(match.start("digits"), dates):
+            continue
+        # Nor is the 10 in "10-K" a figure. See _FORM.
+        if inside(match.start("digits"), forms):
             continue
         if _looks_like_a_year(match, answer):
             continue

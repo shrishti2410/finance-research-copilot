@@ -7,6 +7,15 @@ readme = "README.md"
 
 [tool.pytest.ini_options]
 testpaths = ["eval", "tests"]
+# Safety properties are not ordinary unit tests and must not be read as ones.
+# A functional test failing means a feature broke; one of these failing means
+# the agent is free to state a number nothing produced. Run them alone with
+#   pytest -m safety
+# and treat a failure as a release blocker rather than a flaky assertion to
+# adjust. See tests/test_no_fabrication_on_tool_failure.py.
+markers = [
+    "safety: a property the agent must never violate, not a feature it should have",
+]
 
 [tool.ruff]
 line-length = 100
