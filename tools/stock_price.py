@@ -23,6 +23,7 @@ from typing import Any
 
 import yfinance as yf
 
+from tools._yahoo import history_timeout
 from tools.base import ERROR_BAD_INPUT, ERROR_NO_DATA, ERROR_UPSTREAM, error, ok
 
 # A model does not need 2,000 daily bars to answer a question, and putting them
@@ -129,6 +130,10 @@ def get_stock_price(ticker: str, start_date: str, end_date: str = "") -> dict[st
             start=start.isoformat(),
             end=(end + timedelta(days=1)).isoformat(),
             auto_adjust=True,
+            # Stated here rather than inherited. yfinance's own default is 10s
+            # and could change under an upgrade; retries are configured in
+            # tools/_yahoo.py, using the library's built-in backoff.
+            timeout=history_timeout(),
         )
     except Exception as exc:  # noqa: BLE001 - network, parsing, upstream schema drift
         return error(
@@ -137,25 +142,74 @@ def get_stock_price(ticker: str, start_date: str, end_date: str = "") -> dict[st
             ticker=symbol,
         )
 
-    if frame is None or frame.empty:
+    # Reaching Yahoo Finance and getting something back are two different
+    # things. `frame` here is whatever the library handed over, and the checks
+    # below are about its shape rather than the network.
+    try:
+        if frame is None or frame.empty:
+            return error(
+                ERROR_NO_DATA, _no_data_reason(symbol, start, end),
+                ticker=symbol, start_date=start.isoformat(),
+                end_date=end.isoformat(),
+            )
+    except AttributeError:
+        # Not a DataFrame at all. Measured: a stubbed upstream returning a
+        # string got as far as `.empty` and raised AttributeError out of the
+        # tool, which the registry then relayed to the model as
+        # "get_stock_price raised AttributeError: 'str' object has no attribute
+        # 'empty'" -- a sentence about our internals, in an answer about a share
+        # price.
+        return error(
+            ERROR_UPSTREAM,
+            f"Yahoo Finance returned {type(frame).__name__} instead of a price "
+            f"table for {symbol!r}. This is an upstream format problem, not a "
+            f"bad request.",
+            ticker=symbol,
+        )
+
+    missing = [column for column in ("Open", "High", "Low", "Close", "Volume")
+               if column not in getattr(frame, "columns", ())]
+    if missing:
+        # Same class of failure as above and the more likely one: Yahoo changes
+        # a column name and every price question starts answering with a
+        # KeyError.
+        return error(
+            ERROR_UPSTREAM,
+            f"Yahoo Finance returned a price table for {symbol!r} without "
+            f"{', '.join(missing)}. The upstream format has changed; this is "
+            f"not a bad request.",
+            ticker=symbol,
+        )
+
+    try:
+        rows = [
+            {
+                # The index is tz-aware in the exchange's timezone; .date() drops
+                # the time without shifting the calendar day, which
+                # .astimezone() would.
+                "date": stamp.date().isoformat(),
+                "open": round(float(row["Open"]), 4),
+                "high": round(float(row["High"]), 4),
+                "low": round(float(row["Low"]), 4),
+                "close": round(float(row["Close"]), 4),
+                "volume": int(row["Volume"]),
+            }
+            for stamp, row in frame.iterrows()
+        ]
+    except (TypeError, ValueError, AttributeError, KeyError) as exc:
+        # A row whose values are not numbers, or an index that is not dates.
+        return error(
+            ERROR_UPSTREAM,
+            f"Could not read the price table Yahoo Finance returned for "
+            f"{symbol!r}: {type(exc).__name__}: {exc}",
+            ticker=symbol,
+        )
+
+    if not rows:
         return error(
             ERROR_NO_DATA, _no_data_reason(symbol, start, end),
             ticker=symbol, start_date=start.isoformat(), end_date=end.isoformat(),
         )
-
-    rows = [
-        {
-            # The index is tz-aware in the exchange's timezone; .date() drops the
-            # time without shifting the calendar day, which .astimezone() would.
-            "date": stamp.date().isoformat(),
-            "open": round(float(row["Open"]), 4),
-            "high": round(float(row["High"]), 4),
-            "low": round(float(row["Low"]), 4),
-            "close": round(float(row["Close"]), 4),
-            "volume": int(row["Volume"]),
-        }
-        for stamp, row in frame.iterrows()
-    ]
 
     first, last = rows[0], rows[-1]
     highest = max(rows, key=lambda r: r["close"])

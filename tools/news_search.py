@@ -46,6 +46,8 @@ from urllib.parse import quote_plus
 import requests
 from lxml import etree
 
+from core.config import settings
+from core.retry import RetryPolicy, retrying, status_is_transient
 from tools.base import ERROR_BAD_INPUT, ERROR_UPSTREAM, error, ok
 
 GOOGLE_NEWS_RSS = (
@@ -55,7 +57,10 @@ GOOGLE_NEWS_RSS = (
 # Descriptive, and deliberately carries no personal contact details.
 USER_AGENT = "finance-research-copilot/0.1 (+https://github.com/; RSS reader)"
 
-REQUEST_TIMEOUT = 10
+# (connect, read). Separately, because a feed that accepts the socket and then
+# stalls is the common failure and one number cannot say "fail fast on
+# unreachable, be patient once connected". Both come from core.config.
+REQUEST_TIMEOUT = (settings.news_connect_timeout, settings.news_read_timeout)
 MAX_ARTICLES = 25
 MAX_DAYS_BACK = 90
 
@@ -78,12 +83,37 @@ def _feeds(query: str, days: int) -> list[tuple[str, str]]:
     ]
 
 
-def _fetch(url: str) -> bytes:
+def _transient(exc: BaseException) -> bool:
+    """Whether this failure is worth trying again.
+
+    Connection and timeout errors always are. An HTTP status is only sometimes:
+    429 and 5xx are the publisher asking for patience, while a 404 means the
+    feed is not there and asking twice more just spends the user's time.
+    """
+    if isinstance(exc, requests.HTTPError) and exc.response is not None:
+        return status_is_transient(exc.response.status_code)
+    return isinstance(exc, requests.RequestException)
+
+
+def _fetch_once(url: str) -> bytes:
     response = requests.get(
         url, headers={"User-Agent": USER_AGENT}, timeout=REQUEST_TIMEOUT
     )
     response.raise_for_status()
     return response.content
+
+
+def _fetch(url: str) -> bytes:
+    """Fetch a feed, retrying transient failures with backoff.
+
+    Google News rate-limits bursts, and the agent can issue two news searches in
+    one iteration, so a 429 here is a blip rather than an outage. The jitter in
+    the backoff is what keeps those two parallel calls from colliding again on
+    the retry.
+    """
+    policy = RetryPolicy(attempts=settings.news_retries, predicate=_transient)
+    return retrying(lambda: _fetch_once(url), policy=policy,
+                    description=f"news feed {url[:60]}")
 
 
 def _text_of(element) -> str:

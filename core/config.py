@@ -99,6 +99,29 @@ class Settings(BaseSettings):
     # window rather than a summary.
     agent_history_messages: int = 10
 
+    # --- External APIs ---
+    # Every outbound call names its own timeout. A library default is not a
+    # policy: it is invisible at the call site and changes under a pip upgrade.
+    #
+    # yfinance 1.2.0 defaults to 10s on history and 30s on the metadata behind
+    # fast_info, and ships with its own retry loop *disabled*
+    # (YfConfig.network.retries = 0). Both are set explicitly in tools/_yahoo.py.
+    # Retries go to that built-in loop rather than a wrapper around it, which
+    # would have multiplied the two. It backs off 2**attempt between tries.
+    yfinance_timeout: float = 15.0
+    yfinance_retries: int = 2
+    # Google News RSS. Separate connect and read: a feed that accepts the socket
+    # and then stalls is the common failure, and one combined number cannot
+    # express "fail fast on unreachable, be patient once connected".
+    news_connect_timeout: float = 5.0
+    news_read_timeout: float = 10.0
+    news_retries: int = 3
+    # SEC EDGAR. Read is generous because a 10-K is megabytes; the rate limiter
+    # in ingestion/edgar_client.py spaces the requests either way.
+    edgar_connect_timeout: float = 10.0
+    edgar_read_timeout: float = 60.0
+    edgar_retries: int = 3
+
     # --- Browser client ---
     # Origins allowed to call this API from a browser. The Next.js dev
     # server is the only one by default. Comma-separated in the env; an

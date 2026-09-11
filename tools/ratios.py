@@ -67,6 +67,10 @@ from typing import Any, Literal
 
 import yfinance as yf
 
+# Imported for the side effect: sets yfinance's timeout and enables its own
+# retry loop, which ships disabled. See tools/_yahoo.py.
+import tools._yahoo  # noqa: F401
+
 from tools.base import (
     ERROR_BAD_INPUT,
     ERROR_NO_DATA,

@@ -35,8 +35,24 @@ from pathlib import Path
 import httpx
 
 from core.config import settings
+from core.retry import RetryPolicy, retrying, status_is_transient
 
 log = logging.getLogger(__name__)
+
+
+def _edgar_transient(exc: BaseException) -> bool:
+    """Whether an EDGAR failure is worth another attempt.
+
+    Connection and timeout errors are. Of the HTTP statuses, only 429 and 5xx
+    are: EDGAR answers a burst with 429 and occasionally 503 while a document
+    server reshuffles. A 404 is a filing that does not exist and a 403 is a
+    rejected User-Agent, neither of which improves on the second ask -- and the
+    403 message tells the operator exactly what to change, which a retry would
+    only delay.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        return status_is_transient(exc.response.status_code)
+    return isinstance(exc, httpx.TransportError)
 
 TICKER_MAP_URL = "https://www.sec.gov/files/company_tickers.json"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
@@ -285,14 +301,28 @@ class EdgarClient:
                 # EDGAR serves gzip; a 10-K compresses about 10:1.
                 "Accept-Encoding": "gzip, deflate",
             },
-            timeout=httpx.Timeout(connect=10, read=60, write=30, pool=30),
+            # Stated in core.config rather than inline, so every outbound
+            # timeout in the project is visible in one place.
+            timeout=httpx.Timeout(connect=settings.edgar_connect_timeout,
+                                  read=settings.edgar_read_timeout,
+                                  write=30, pool=30),
             follow_redirects=True,
+        )
+        # A 403 is a wrong User-Agent and a 404 is a filing that is not there;
+        # neither improves on the second ask. Transient statuses and connection
+        # failures do. See core/retry.py.
+        self._retry = RetryPolicy(
+            attempts=settings.edgar_retries,
+            predicate=_edgar_transient,
         )
         self._ticker_map: dict[str, str] | None = None
 
     # ── plumbing ────────────────────────────────────────────────────────────
 
-    def _get(self, url: str) -> httpx.Response:
+    def _get_once(self, url: str) -> httpx.Response:
+        # Inside the retry, not outside it: a retry that skipped the limiter
+        # would burst against the very rate limit that most likely caused the
+        # failure being retried.
         self._limiter.wait()
         response = self._client.get(url)
         if response.status_code == 403:
@@ -303,6 +333,18 @@ class EdgarClient:
             )
         response.raise_for_status()
         return response
+
+    def _get(self, url: str) -> httpx.Response:
+        """Fetch a URL, retrying transient failures with backoff.
+
+        EDGAR answers a burst with 429 and occasionally 503, and an ingestion run
+        makes hundreds of requests -- one blip should not abandon a filing
+        halfway through. A 403 is deliberately *not* retried: it means the
+        User-Agent is wrong, which asking again cannot fix, and the message
+        above says what to do about it.
+        """
+        return retrying(lambda: self._get_once(url), policy=self._retry,
+                        description=f"EDGAR GET {url[:80]}")
 
     def close(self) -> None:
         self._client.close()
