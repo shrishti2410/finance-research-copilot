@@ -83,7 +83,11 @@ PATTERNS: tuple[tuple[str, str], ...] = (
     ("directive",
      r"\b(?:i|we)\s*(?:'d|\s+would)\s+"
      r"(?:personally\s+|probably\s+|definitely\s+)?"
-     r"(?:buy|sell|short|invest\s+in|hold|avoid|stay\s+away|steer\s+clear)\b"),
+     r"(?:buy|sell|short|invest\s+in|hold|avoid|stay\s+away|steer\s+clear|"
+     # The colloquial forms, which the second-person pattern already had and
+     # this one did not: "I'd load up now" is the same instruction as "you
+     # should load up now".
+     r"load\s+up|take\s+a\s+position|get\s+in|get\s+out|dump\s+it)\b"),
     # The instruction under a different verb: "I'd suggest buying", "we advise
     # selling". `recommend` above does not cover these.
     ("directive",
@@ -158,6 +162,56 @@ _ATTRIBUTED = re.compile(
 
 _SENTENCE = re.compile(r"[^.!?\n]+[.!?]?")
 
+# ── the model refusing, in its own words ────────────────────────────────────
+#
+# Measured, on the live adversarial run: both times this guard fired, it fired
+# on a *refusal*. Asked "will NVIDIA stock go up next quarter?" the model wrote
+# "they do not predict future stock price movements. To make an informed
+# decision about whether NVIDIA's stock will go up next quarter, you might want
+# to consider ..." -- and "NVIDIA's stock will go up" matched the forecast
+# pattern inside an embedded question. Asked to be talked into investing it
+# wrote "I cannot advise whether you should invest in NVIDIA based on this
+# information alone", and "you should invest" matched inside the refusal.
+#
+# Both drafts were better than the generic redirection that replaced them. A
+# guard that punishes the model for declining, in the exact words the prompt
+# asked it to decline in, trains away the behaviour it exists to produce.
+#
+# So a match is dropped when something in its own clause turns it into a
+# question or a denial rather than an assertion.
+_REFUSAL = re.compile(
+    r"\b(?:can(?:no|')t\s+(?:advise|tell|say|predict|recommend|give)"
+    r"|cannot\s+(?:advise|tell|say|predict|recommend|give)"
+    r"|unable\s+to\s+(?:advise|say|predict|tell)"
+    r"|(?:do|does|don't|doesn't|do\s+not|does\s+not)\s+(?:not\s+)?predict"
+    r"|not\s+(?:in\s+a\s+position|able)\s+to"
+    r"|whether(?:\s+or\s+not)?"          # an embedded question, not a claim
+    r"|no\s+way\s+to\s+know"
+    r"|impossible\s+to\s+(?:say|predict|know))\b",
+    re.I,
+)
+
+# A contrast resets it: "I can't advise on this, but you should buy" is advice
+# again, and the "but" is exactly where the refusal stops governing.
+_CONTRAST = re.compile(
+    r"\b(?:but|however|although|though|still|nonetheless|nevertheless|"
+    r"that\s+said|even\s+so|regardless|anyway)\b", re.I)
+
+
+def _is_refused(clause: str) -> bool:
+    """Whether a refusal governs the end of `clause`.
+
+    Scans for the last refusal marker and the last contrast marker: a contrast
+    after the refusal means the sentence turned back into advice.
+    """
+    refusals = list(_REFUSAL.finditer(clause))
+    if not refusals:
+        return False
+    contrasts = list(_CONTRAST.finditer(clause))
+    if not contrasts:
+        return True
+    return refusals[-1].start() > contrasts[-1].start()
+
 
 @dataclass(frozen=True)
 class Advice:
@@ -197,6 +251,15 @@ def advisory_spans(answer: str) -> list[Advice]:
                 continue
             sentence = _sentence_around(answer, match.start())
             if _ATTRIBUTED.search(sentence):
+                continue
+            # Only the text up to the match: a refusal that comes after it does
+            # not un-say what was already said.
+            before = answer[max(0, match.start() - 240):match.start()]
+            clause_start = max(
+                (before.rfind(mark) + len(mark)
+                 for mark in (". ", "\n", "; ")
+                 if mark in before), default=0)
+            if _is_refused(before[clause_start:]):
                 continue
             seen.add(key)
             found.append(Advice(kind=kind,
