@@ -38,6 +38,7 @@ from pathlib import Path
 
 import httpx
 
+from core.config import settings
 from eval.datasets import Case, load_cases
 from eval.metrics import Outcome, Summary, score_case, summarise
 
@@ -291,6 +292,18 @@ def main(argv: list[str] | None = None) -> int:
         args.report.write_text(json.dumps({
             "api": args.api,
             "cases": len(outcomes),
+            # The configuration this run measured. Without it a report promoted
+            # to a baseline months later cannot answer "better than what?", and
+            # eval/compare.py has to fall back to whatever settings happen to be
+            # loaded at promotion time.
+            "system": {
+                "agent_model": settings.agent_model,
+                "agent_router_model": settings.agent_router_model,
+                "agent_max_tokens": settings.agent_max_tokens,
+                "agent_max_iterations": settings.agent_max_iterations,
+                "agent_history_messages": settings.agent_history_messages,
+                "recorded_by_the_run": True,
+            },
             "outcomes": [
                 {
                     "case_id": o.case_id, "verdict": o.verdict,

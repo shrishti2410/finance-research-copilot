@@ -358,7 +358,12 @@ async def load_eval_turns(limit: int | None, hours: int,
               AND a.role = 'assistant'
               AND a.created_at > now() - make_interval(hours => :hours)
               AND a.id > :after_id
-              AND (:before_id IS NULL OR a.id <= :before_id)
+              -- Cast required: a bare NULL parameter appearing only in IS NULL
+              -- and a comparison gives asyncpg nothing to infer from, and
+              -- Postgres refuses the prepare with AmbiguousParameterError. This
+              -- crashed all four judge passes.
+              AND (CAST(:before_id AS bigint) IS NULL
+                   OR a.id <= CAST(:before_id AS bigint))
             ORDER BY a.id
         """), {"hours": hours, "after_id": after_id,
                "before_id": before_id})).mappings().all()
