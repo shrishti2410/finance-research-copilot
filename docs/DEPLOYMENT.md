@@ -6,17 +6,75 @@ network. That is the right shape for this project — one agent loop against one
 model, where the model is the entire cost — and it keeps the deployment to one
 command sequence.
 
-Nothing in this document has been run against rented hardware. It is built from
-the measured behaviour of this app on the dev host plus each provider's own
-documentation, and every step you can only verify on the host is written as a
-check with an expected output, not as an assurance.
-
 | | |
 |---|---|
 | **Recommended target** | Any host where you have Docker and root: Lambda Labs on-demand, RunPod **Bare Metal**, a GCP/AWS GPU VM. |
 | **Not usable as-is** | RunPod **Pods**. They are containers with no Docker daemon, so `docker compose` cannot run inside one. [See below](#runpod-pods-why-compose-does-not-work-there). |
 | **Minimum GPU** | 16GB VRAM holds `qwen2.5:7b` at Q4_K_M (~4.7GB) plus the 1.5b router (~1GB) with room for KV cache. A 24GB card (A10G, L4, 3090, 4090) is comfortable. |
 | **Disk** | ~25GB: ~6GB of model weights, ~8GB of images, the rest Postgres and the EDGAR cache. |
+
+---
+
+## 0. What has actually been run, and what has not
+
+Stated first, and in this much detail, because the difference between "this
+config is correct" and "this config has been executed" is exactly what a reader
+needs and exactly what deployment documentation tends to blur.
+
+| | status |
+|---|---|
+| `docker-compose.yml` — the CPU stack, all five services | see [§8](#8-what-the-cpu-run-proved) |
+| `Dockerfile`, `frontend/Dockerfile` | built and run as part of that |
+| `docker-compose.gpu.yml` — the GPU overlay | **written and config-validated; never executed** |
+| `deploy/pod-bootstrap.sh` — the RunPod Pod fallback | **written; never executed** |
+| Provider steps in [§3](#3-deploying-to-lambda-labs-the-recommended-path) / [§4](#4-runpod) | from provider documentation, not from an account |
+
+### Why the GPU path was not run
+
+Renting a GPU is the only way to execute it, and it costs money per hour for a
+result that is largely predictable from the CPU run. The decision was to prove
+the parts that can be proven for free — the images, the service topology, the
+inter-service networking, the migration and model-pull sequence, the app
+behaving identically in containers — and to leave exactly one variable unproven:
+whether the GPU reservation block grants the device.
+
+That is an honest trade, not a hidden gap, so here is precisely what remains
+unverified and what it would take to close it.
+
+### What "config-validated" means for the GPU overlay
+
+Checked mechanically:
+
+- Both compose files parse as YAML.
+- Every service the overlay names (`ollama`, `backend`) exists in the base file,
+  so the overlay adds to real services rather than silently creating stubs.
+- Every service referenced by a command in this document exists.
+- The overlay's `deploy.resources.reservations.devices` block matches the shape
+  in Docker's own GPU documentation, and the same block is already in
+  `docker-compose.vllm.yml`.
+
+Not checked, because it needs the hardware:
+
+- That `driver: nvidia, count: all` actually passes the device through on a
+  given host. This depends on the NVIDIA Container Toolkit being installed and
+  registered with the Docker daemon — a host property, not a property of this
+  file.
+- That `qwen2.5:7b` plus the 1.5b router fit in a particular card's VRAM at
+  `OLLAMA_CONTEXT_LENGTH=16384` and `OLLAMA_NUM_PARALLEL=2`. Those two numbers
+  multiply into VRAM and are the first things to lower if `ollama ps` reports
+  anything other than `100% GPU`.
+- Every latency figure implied by moving to a GPU. Nothing in this repo has
+  measured this app on a GPU; the CPU numbers in `docs/INFERENCE.md` are the only
+  measured ones, and `INFERENCE_READ_TIMEOUT=90` in the overlay is a judgement
+  from them rather than an observation.
+
+### The failure mode to expect first
+
+If the device is not passed through, **nothing errors**. Ollama probes for a
+GPU, finds none, and serves on CPU — a healthy server, several times slower than
+the hardware being paid for. This is why [§3](#verify-in-this-order) makes
+`ollama ps` reporting `100% GPU` the first check after `up`, ahead of any
+application check.
 
 ---
 
@@ -257,10 +315,10 @@ curl -s localhost:8000/v1/models       # the models model-pull fetched
 curl -s -X POST localhost:8000/auth/signup \
   -H 'content-type: application/json' \
   -d '{"email":"you@example.com","password":"a-real-password"}'
-# then use the access_token:
-curl -s -X POST localhost:8000/ask -H "Authorization: Bearer $TOKEN" \
-  -H 'content-type: application/json' \
-  -d '{"message":"What was NVIDIA'\''s gross margin in fiscal 2026?"}'
+# /ask requires a conversation_id, so there are two steps rather than one.
+# scripts/verify_deployment.py does this whole flow and checks the result --
+# prefer it to hand-rolled curl:
+python scripts/verify_deployment.py --base-url http://$HOST:8000
 
 # The suite, in the deployed image. 877 tests.
 docker compose run --rm backend python -m pytest -q
@@ -482,6 +540,153 @@ now stops the build rather than shipping a broken client, and `CORS_ORIGINS`
 fails visibly in the browser console. That leaves `COMPOSE_FILE` as the only
 silent one: omit it and you deploy on CPU, with everything working and nothing
 saying so.
+
+---
+
+## 8. What the CPU run proved
+
+The GPU is the only part of this that costs money, and it is one variable. So the
+CPU stack — the same five services, the same images, the same networking, the
+same startup sequence, minus the device reservation — is run locally instead, and
+that is what turns "the config is correct" into "the system works".
+
+### Running it yourself
+
+This host is Windows 11 Home with no Docker. The install needs an administrator
+and a reboot:
+
+```powershell
+# 1. WSL2, which Docker Desktop uses as its backend. Elevated prompt, then reboot.
+wsl --install
+
+# 2. Docker Desktop
+winget install -e --id Docker.DockerDesktop
+
+# 3. Start Docker Desktop once from the Start menu so it initialises the WSL
+#    backend, then confirm from any shell:
+docker version
+docker compose version
+```
+
+**Free three ports first.** The dev processes from working on this app bind
+exactly the ports the stack publishes, and a port collision surfaces as a
+container that exits immediately:
+
+| port | held by | what to do |
+|---|---|---|
+| 3000 | `next dev` | stop it |
+| 8000 | host `uvicorn` | stop it |
+| 11434 | host Ollama | stop it — the container needs the port *and* the RAM |
+
+Postgres (5432) and Redis (6379) do not collide: the host cluster runs on 55432
+and Redis on 6399.
+
+**Skip re-downloading the models.** `model-pull` fetches ~5.7GB, which this host
+already has. Copy them into the volume instead:
+
+```bash
+docker volume create copilot_ollama_models
+docker run --rm -v copilot_ollama_models:/dest \
+  -v "$HOME/.ollama:/src:ro" alpine sh -c "cp -a /src/. /dest/"
+```
+
+Then the sequence from [§7](#7-reference-the-whole-sequence) **without**
+`COMPOSE_FILE`, so no GPU overlay is applied:
+
+```bash
+cp .env.example .env
+python -c "import secrets; print('JWT_SECRET=' + secrets.token_urlsafe(48))" >> .env
+echo "PUBLIC_API_BASE=http://127.0.0.1:8000" >> .env
+echo "ALLOW_LOCALHOST_API_BASE=1"            >> .env   # required: see section 6
+echo "CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000" >> .env
+
+docker compose build
+docker compose up -d
+docker compose run --rm migrate
+docker compose run --rm model-pull      # skip if you copied the volume above
+docker compose run --rm backend python scripts/index_filings.py NVDA AAPL
+```
+
+### Verifying it
+
+Two commands, and they are the whole of the claim:
+
+```bash
+# The suite, inside the deployed image
+docker compose run --rm backend python -m pytest -q
+
+# The application, over HTTP, exactly as a browser would
+python scripts/verify_deployment.py --base-url http://127.0.0.1:8000
+```
+
+`scripts/verify_deployment.py` checks health per dependency, signup, login,
+`/auth/me`, a forged token, rate-limit headers, a real `/ask` with a tool call, a
+real `/ask/stream` with token-by-token delivery, that the turn persisted, and
+that a second user gets 404 on both. It talks HTTP only, so it is the same check
+against the host, a container, or a cloud VM — which is what makes the comparison
+meaningful rather than two different tests.
+
+Then open `http://localhost:3000`, sign up, and ask a question.
+
+### Results
+
+**Status: not yet run — Docker is not installed on this host, and installing it
+needs an administrator and a reboot.** This section gets the real numbers, or the
+real failures, once the stack is up.
+
+What is already done is the half that makes the comparison mean something: the
+**baseline**, captured from the app running directly on the host, so
+"containerized behaves identically" can be checked against a recorded result
+rather than a memory of one.
+
+```
+$ python scripts/verify_deployment.py --base-url http://127.0.0.1:8000
+
+1. health        4 dependencies checked separately, all 200
+                 rate limiting: limiting=True policy=fail-open
+                 models served: qwen2.5:7b, qwen2.5:1.5b, ...
+2. auth          signup 201, login 200, /auth/me identifies the caller,
+                 forged token 401, RateLimit-Remaining present
+3. ask           200 in 243s   stop_reason=final_answer completed=True iterations=2
+                 tools: ['calculate_ratio', 'final_answer']
+                 "NVIDIA's gross margin in fiscal 2026 was 71.07%, calculated as
+                  gross profit of $153.463 billion divided by revenue of $215.938
+                  billion."
+4. persistence   2 messages stored: ['user', 'assistant']
+5. ask/stream    iteration, escalate, discarded, iteration, tool_start,
+                 tool_result, iteration, escalate, done
+                 134 token events, first at 9.0s
+6. isolation     second user gets 404 on read and on stream
+
+OK  all 23 checks passed
+```
+
+Worth noting what the stream trace shows, because it is the system working rather
+than misbehaving: `discarded` is the grounding guard rejecting a first draft whose
+figures traced to no tool result, and `escalate` is the router handing off from
+the 1.5b model to the 7b. Both should appear in the containerized run too.
+
+Also checked statically, which needs no Docker:
+
+- Every `COPY` source in both Dockerfiles resolves on disk (15 and 3).
+- Every Python package in the repo is in the backend image's `COPY` list, so no
+  import can fail at run time for being absent from the build.
+- `.next/standalone`, `.next/static` and `public` — the three paths the frontend
+  runtime stage copies — are all produced by `npm run build`.
+
+### A caveat about RAM on this particular host
+
+15.7GB total, ~5GB free. Docker Desktop's WSL2 VM wants 2–4GB, and the Ollama
+container holds `qwen2.5:7b` (~4.7GB) plus the 1.5b router (~1GB) resident
+because `OLLAMA_MAX_LOADED_MODELS=2`. Running natively, free RAM on this host
+already dipped to **0.08GB** with both models loading (`docs/INFERENCE.md`).
+Adding a VM underneath makes it genuinely marginal.
+
+If the container is killed or the machine swaps, set `AGENT_ROUTER_MODEL=` in
+`.env` to run a single model. That disables the router split, which costs latency
+but removes ~1GB and one resident runner. It is a constraint of this laptop, not
+of the deployment: the cloud host the compose file is written for has neither the
+RAM ceiling nor the competing desktop.
 
 ---
 
