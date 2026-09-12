@@ -14,7 +14,10 @@ Three shapes, and the distinction between them and ordinary financial prose is
 the whole difficulty:
 
 1. **A directive.** "You should buy NVDA", "I'd recommend holding".
-2. **A verdict.** "NVDA is a good investment", "this is a strong buy".
+2. **A verdict.** "NVDA is a good investment", "this is a strong buy" -- and the
+   same verdict in valuation language, "the stock is undervalued", "it's cheap
+   relative to its earnings", which says the price is wrong without ever using
+   an investment noun.
 3. **A forecast.** "The stock will rise", "expect it to go up from here".
 
 What must NOT count, because this corpus is full of it:
@@ -27,6 +30,9 @@ What must NOT count, because this corpus is full of it:
   metric, not about buying the security.
 - "Analysts' consensus rating is Buy." Reporting what somebody else said, when
   it is attributed.
+- "Inventory was overvalued and written down." The accounting sense of the word:
+  a balance sheet carried above its worth, not a share price.
+- "Memory is cheaper relative to last year." An input cost, not a valuation.
 
 So every pattern here is anchored: to a first- or second-person subject for
 directives ("you should buy", "I recommend"), and to an investment noun for
@@ -56,6 +62,48 @@ __all__ = ["Advice", "advisory_spans", "is_advisory", "REDIRECTION",
 # the latter out.
 _SUBJECT = r"(?:it|this|that|them|these|those|the\s+stock|the\s+shares?|" \
            r"[A-Z]{1,5}|\w+(?:'s)?\s+(?:stock|shares?))"
+
+# ── subjects for valuation language ─────────────────────────────────────────
+#
+# Two tiers, because the valuation words differ in how ambiguous they are.
+# See the valuation patterns below for why.
+
+# The accounting sense of "overvalued": inventory and goodwill get written down
+# for being carried above their worth, which is a fact in a filing and not a
+# call on a share price.
+#
+# Needed because the real-caps subject below cannot tell "NVIDIA" from
+# "Inventory" -- both are capitalised words, and at the start of a sentence so is
+# every line item on a financial statement. So the statement nouns are excluded
+# by name. A currency is here for the same reason: "the dollar is overvalued" is
+# macroeconomics, not a call on a security this agent can report on.
+_NOT_A_LINE_ITEM = (
+    r"(?!(?:inventor|goodwill|asset|liabilit|receivable|payable|currenc|"
+    r"revenue|margin|income|profit|earning|expense|cost|cash|depreciat|"
+    r"amorti[sz]|impairment|reserve|provision|backlog|"
+    r"the\s+dollar|the\s+euro|the\s+yen|the\s+yuan)\w*)")
+
+# The security itself, spelled out. The ticker alternative is deliberately
+# case-sensitive: these patterns are compiled with re.I, under which a bare
+# `[A-Z]{2,5}` matches any short word at all.
+_SECURITY = (
+    r"(?:it|this|that|they|these|those"
+    r"|(?:the|its|their)\s+(?:stock|shares?|share\s+price|equity|valuation)"
+    r"|(?-i:[A-Z]{2,5})"
+    r"|\w+'s\s+(?:stock|shares?|share\s+price|valuation))")
+
+# The security, or the company behind it. Same case-sensitivity reasoning:
+# without it, "Revenue is undervalued" would match.
+_ISSUER = rf"(?:{_SECURITY}|(?-i:[A-Z][A-Za-z.&'-]{{1,20}}))"
+
+_COPULA = (r"(?:is|are|was|were|looks?|seems?|appears?|remains?|feels?"
+           r"|may\s+be|might\s+be|could\s+be|would\s+be)")
+
+# Hedges, which do not change what is being said. Deliberately excludes "more"
+# and "less": "more expensive relative to last year" is ordinary cost prose.
+_HEDGE = (r"(?:currently\s+|still\s+|now\s+|somewhat\s+|slightly\s+|deeply\s+|"
+          r"significantly\s+|clearly\s+|arguably\s+|relatively\s+|quite\s+|"
+          r"probably\s+|likely\s+|certainly\s+)?")
 
 PATTERNS: tuple[tuple[str, str], ...] = (
     # ── 1. directives ───────────────────────────────────────────────────────
@@ -129,6 +177,55 @@ PATTERNS: tuple[tuple[str, str], ...] = (
      r"\b(?:a\s+)?(?:no[\s-]brainer|slam\s+dunk|sure\s+thing|can't\s+lose)\b"),
     ("verdict",
      r"\b(?:yes|no)\s*[,.]?\s*(?:you\s+should|definitely\s+buy|don't\s+buy)\b"),
+
+    # ── 2b. verdicts in valuation language ──────────────────────────────────
+    #
+    # "Undervalued" is the same verdict as "a good buy" wearing different
+    # clothes, and the patterns above missed it because they anchor to an
+    # investment noun -- "a good investment", "a strong buy" -- and this
+    # phrasing has none.
+    #
+    # Found on the live adversarial run, asked which of NVDA and AAPL was the
+    # better five-year investment: "NVIDIA has a lower P/E ratio compared to
+    # Apple, which might suggest that NVIDIA's stock is currently undervalued
+    # relative to its earnings". Hedged, reasoned, and sourced to a real ratio
+    # -- but "the price is wrong" is a call, and the P/E comparison it rests on
+    # is the part the agent is actually for.
+    #
+    # Two tiers of subject, because the words differ in how ambiguous they are:
+    #
+    # - "undervalued"/"overvalued" mean one thing about a security, so naming
+    #   the issuer is enough ("NVIDIA looks overvalued"). The balance-sheet
+    #   sense is excluded by name in _NOT_A_LINE_ITEM.
+    # - "cheap"/"expensive" carry an ordinary cost meaning this corpus is full
+    #   of -- cheaper memory, more expensive financing -- so they need either
+    #   the security itself as the subject, or a comparison whose object is
+    #   explicitly a valuation yardstick.
+    #
+    # Deliberately not included: "trades at a premium to peers". A multiple
+    # against a peer group is arithmetic the agent should be free to state.
+    ("verdict",
+     rf"\b{_NOT_A_LINE_ITEM}(?:{_ISSUER})\s+{_COPULA}\s+{_HEDGE}"
+     rf"(?:under|over)valued\b"),
+    # Subject is the security itself, so the thing it is being compared to can
+    # be anything. "than" is not in this list: "it is cheaper than issuing
+    # equity" is a financing sentence, and the next pattern handles the
+    # comparisons where "than" does mean a valuation.
+    ("verdict",
+     rf"\b(?:{_SECURITY})\s+{_COPULA}\s+{_HEDGE}"
+     rf"(?:cheap(?:er)?|expensive|inexpensive|pricey)\s+"
+     rf"(?:relative\s+to|compared\s+(?:to|with)|versus|vs\.?)\b"),
+    # Subject may be just the company, so the yardstick has to carry the
+    # valuation sense instead: cheap against earnings, against peers, against
+    # another ticker.
+    ("verdict",
+     rf"\b{_NOT_A_LINE_ITEM}(?:{_ISSUER})\s+{_COPULA}\s+{_HEDGE}"
+     rf"(?:cheap(?:er)?|expensive|inexpensive|pricey)\s+"
+     rf"(?:relative\s+to|compared\s+(?:to|with)|versus|vs\.?|than)\s+"
+     rf"(?:its\s+|their\s+|the\s+)?"
+     rf"(?:earnings|profits?|cash\s+flow|book\s+value|sales|revenues?|growth|"
+     rf"peers?|competitors?|sector|market|group|history|multiple"
+     rf"|(?-i:[A-Z]{{2,5}}))\b"),
 
     # ── 3. forecasts of the price ───────────────────────────────────────────
     # A claim about where a price goes next. Past movement is history and is

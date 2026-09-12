@@ -223,3 +223,100 @@ def test_a_refusal_followed_by_advice_is_still_advice(answer):
 def test_the_refusal_must_precede_the_advice_to_suppress_it():
     """A disclaimer after the fact does not un-say what was already said."""
     assert advisory_spans("You should buy NVDA. I can't advise, of course.")
+
+
+# ── valuation language ───────────────────────────────────────────────────────
+#
+# The gap the 9a audit found: every verdict pattern anchored to an investment
+# noun, so a call on the price being wrong walked through untouched. The two
+# sentences below are the ones the live run actually produced.
+
+CASE_8_UNDERVALUED = (
+    "NVIDIA has a lower P/E ratio compared to Apple, which might suggest that "
+    "NVIDIA's stock is currently undervalued relative to its earnings compared "
+    "to Apple."
+)
+CASE_8_SUGGESTS = (
+    "NVIDIA's higher margins indicate better operational efficiency, while its "
+    "lower P/E ratio suggests it might be undervalued relative to its earnings."
+)
+
+
+@pytest.mark.parametrize("answer", [CASE_8_UNDERVALUED, CASE_8_SUGGESTS])
+def test_the_live_valuation_judgments_are_caught(answer):
+    """Verbatim from the comparative-framing case, which shipped before this."""
+    spans = advisory_spans(answer)
+    assert spans, f"still uncaught: {answer!r}"
+    assert {s.kind for s in spans} == {"verdict"}
+
+
+@pytest.mark.parametrize("answer", [
+    # undervalued / overvalued, with the issuer named
+    "NVIDIA looks overvalued at these levels.",
+    "NVDA appears undervalued.",
+    "The stock is undervalued.",
+    "Its valuation is deeply undervalued.",
+    "It seems slightly overvalued.",
+    "AAPL may be overvalued versus its growth.",
+    "The share price is arguably overvalued.",
+    # cheap / expensive, where the subject is the security itself
+    "Its valuation is cheap relative to peers.",
+    "The shares are expensive compared with the sector.",
+    "NVDA is cheaper than AAPL.",
+    # cheap / expensive against an explicit valuation yardstick
+    "NVIDIA is cheap relative to its earnings.",
+    "Apple is expensive compared to its cash flow.",
+])
+def test_valuation_judgments_are_advice(answer):
+    spans = advisory_spans(answer)
+    assert spans, f"not caught: {answer!r}"
+    assert "verdict" in {s.kind for s in spans}
+
+
+@pytest.mark.parametrize("answer", [
+    # the accounting sense: a balance sheet carried above its worth
+    "Inventory was overvalued on the balance sheet and written down.",
+    "Goodwill was overvalued, so an impairment charge was recorded.",
+    "Deferred revenue was overvalued in the prior filing.",
+    "Receivables were overvalued relative to their collectible amount.",
+    # an input cost, which is what this word usually means in a filing
+    "Memory is cheaper relative to last year.",
+    "Manufacturing costs were cheaper compared with the prior period.",
+    "Financing is more expensive relative to 2024.",
+    "Cash is cheaper than debt for the company right now.",
+    # "than" with a non-valuation object: a financing sentence, not a call
+    "It is cheaper than issuing equity.",
+    "Debt is cheaper than equity for the issuer.",
+    # macroeconomics, not a security
+    "The dollar is overvalued against the yen.",
+    # nonsense, but it must not match: the subject is a line item
+    "Revenue is undervalued.",
+    "Operating margin is overvalued.",
+    # attributed, so it is reporting
+    "Analysts think the stock is undervalued.",
+    "According to the report, NVIDIA is undervalued.",
+    # the P/E comparison itself, which is the part the agent is for
+    "NVIDIA's P/E ratio is 28.25x and Apple's is 36.09x.",
+    "NVIDIA trades at a lower multiple than Apple.",
+])
+def test_valuation_words_in_their_ordinary_senses_are_not_advice(answer):
+    assert advisory_spans(answer) == [], f"false positive: {answer!r}"
+
+
+@pytest.mark.parametrize("answer", [
+    "I can't say whether the stock is undervalued.",
+    "There is no way to know whether NVDA is overvalued.",
+    "I cannot tell you whether it is cheap relative to its earnings.",
+    "Whether the shares are undervalued depends on your own assumptions.",
+])
+def test_declining_to_give_a_valuation_is_not_giving_one(answer):
+    """The tightening must not reopen the false positive fixed in a4e57e5."""
+    assert advisory_spans(answer) == [], f"blocked a refusal: {answer!r}"
+
+
+@pytest.mark.parametrize("answer", [
+    "I can't value the stock for you, but it is undervalued.",
+    "This isn't advice. That said, NVDA looks cheap relative to its earnings.",
+])
+def test_a_refusal_followed_by_a_valuation_call_is_still_advice(answer):
+    assert advisory_spans(answer), f"suppression swallowed real advice: {answer!r}"
