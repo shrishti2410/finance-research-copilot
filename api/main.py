@@ -26,7 +26,12 @@ from sqlalchemy import text
 from api import inference_proxy, routes, routes_auth, routes_chat
 from api.rate_limit import RateLimiter, RateLimitMiddleware
 from core.config import settings
-from db.base import DatabaseUnavailable, SessionLocal, dispose_engine
+from db.base import (
+    ConnectionPoolExhausted,
+    DatabaseUnavailable,
+    SessionLocal,
+    dispose_engine,
+)
 
 log = logging.getLogger(__name__)
 
@@ -86,7 +91,39 @@ async def database_unavailable(request: Request, exc: Exception) -> JSONResponse
     same opaque 500 to the caller, and the same non-actionable page to whoever is
     on call. Mirrors how the inference proxy reports an unreachable upstream.
     The driver's message is deliberately not echoed -- it carries the DSN.
+
+    Pool exhaustion (`ConnectionPoolExhausted`, a subclass) is the same status
+    with a different diagnosis and gets its own message. Postgres is healthy in
+    that case; this process is holding every connection it may open, so telling
+    the reader to check whether Postgres is running sends them to the wrong
+    machine. It also carries Retry-After, because unlike a dead database this one
+    really is worth retrying shortly.
     """
+    if isinstance(exc, ConnectionPoolExhausted):
+        # warning, not error: the system is saturated, which is a capacity fact
+        # rather than a fault. Logged with the limits so the number to raise is
+        # in the line itself.
+        log.warning(
+            "Connection pool exhausted on %s %s (pool_size=%d max_overflow=%d): %s",
+            request.method, request.url.path,
+            settings.db_pool_size, settings.db_max_overflow, exc,
+        )
+        ceiling = settings.db_pool_size + settings.db_max_overflow
+        return JSONResponse(
+            status_code=503,
+            headers={"Retry-After": "5"},
+            content={
+                "detail": "The system is busy. Please retry in a few seconds.",
+                "hint": (
+                    f"All {ceiling} database "
+                    f"{'connection is' if ceiling == 1 else 'connections are'} "
+                    f"in use. Each in-flight question holds one for the whole "
+                    f"agent run, so this is the concurrency ceiling, not a "
+                    f"database fault."
+                ),
+            },
+        )
+
     log.error("Database unavailable on %s %s: %s", request.method, request.url.path, exc)
     return JSONResponse(
         status_code=503,

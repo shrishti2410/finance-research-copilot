@@ -97,19 +97,41 @@ requests fail instantly, a load generator with no think time immediately fires
 replacements, and those compete for the pool with the slow requests still holding
 connections. The practical limit is below the arithmetic one.
 
-### 2. Pool exhaustion is an unhandled 500, not a 503
+### 2. Pool exhaustion was an unhandled 500 — **fixed**
 
 `db/base.py` translates connection failures to `DatabaseUnavailable`, which
-`api/main.py` maps to a 503 with a useful hint. It catches
+`api/main.py` maps to a 503 with a useful hint. It caught
 `OperationalError, InterfaceError, OSError`.
 
 A pool timeout raises `sqlalchemy.exc.TimeoutError`, whose MRO is
 `TimeoutError → SQLAlchemyError → Exception`. It is not a subclass of any of
-those three, so it is not translated, and the caller gets an opaque 500 after
+those three, so it was not translated, and the caller got an opaque 500 after
 waiting 30 seconds. Verified statically before the run and confirmed by it.
 
-The one-line fix is to add `sqlalchemy.exc.TimeoutError` to that tuple. The real
-fix is not holding a connection across an inference call.
+Now translated to `ConnectionPoolExhausted` — a subclass of `DatabaseUnavailable`,
+so the existing handler catches it — with its own message, because the diagnosis
+is the opposite of its parent's: Postgres is healthy and this process is holding
+every connection it may open. The generic hint ("Is Postgres running?") would
+send the reader to the wrong machine.
+
+```
+503  Retry-After: 5
+{
+  "detail": "The system is busy. Please retry in a few seconds.",
+  "hint": "All 15 database connections are in use. Each in-flight question
+           holds one for the whole agent run, so this is the concurrency
+           ceiling, not a database fault."
+}
+```
+
+Covered by `tests/test_pool_exhaustion.py`, which exhausts a real pool rather
+than mocking the exception — the bug was about *which* exception SQLAlchemy
+raises, so a hand-raised one would have passed against the broken code. Verified
+to fail without the fix: 5 of its 10 tests do.
+
+**This makes the failure honest; it does not raise the ceiling.** The real fix is
+not holding a connection across an inference call, which is item 1 below and
+still open.
 
 ### 3. The 300s inference read timeout is tuned for one user
 
@@ -141,8 +163,8 @@ In rough order of payoff:
 
 1. **Release the DB session before the inference call and re-acquire to write the
    turn.** Removes the 15-connection ceiling, which currently binds before
-   anything else.
-2. **Translate pool exhaustion to a 503** so an overloaded deployment says so.
+   anything else. Still open.
+2. ~~**Translate pool exhaustion to a 503**~~ — done, see finding 2.
 3. **A batching inference server.** vLLM's continuous batching is the answer to
    flat throughput, and `docker-compose.vllm.yml` already exists — the numbers at
    the top of this file are the argument for it.

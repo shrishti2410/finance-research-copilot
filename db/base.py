@@ -8,6 +8,7 @@ which is what lets `alembic --sql` and unit tests import the models.
 from collections.abc import AsyncIterator
 
 from sqlalchemy.exc import InterfaceError, OperationalError
+from sqlalchemy.exc import TimeoutError as PoolTimeout
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -19,6 +20,24 @@ class DatabaseUnavailable(Exception):
 
     Distinct from a query or constraint error, which means the database answered
     and said no. `api/main.py` maps this to 503; everything else stays a 500.
+    """
+
+
+class ConnectionPoolExhausted(DatabaseUnavailable):
+    """Every pooled connection is checked out and the wait timed out.
+
+    A subclass, so the existing 503 handler catches it without a second
+    registration -- Starlette resolves handlers along the exception's MRO. It is
+    still its own type because the *cause* is the opposite of its parent's:
+    Postgres is healthy and answering, and this process is simply holding every
+    connection it is allowed to open. "Is Postgres running?" is the wrong
+    question to put in front of someone debugging this.
+
+    Found by the load test in `benchmarks/LOAD_TEST_RESULTS.md`. `/ask` and
+    `/ask/stream` hold their session for the whole agent run -- minutes, nearly
+    all of it waiting on the model -- so `db_pool_size + db_max_overflow`
+    connections is the real concurrency ceiling of the deployment. At ten
+    concurrent users it produced 25 pool timeouts and 33 unhandled 500s.
     """
 
 
@@ -60,6 +79,12 @@ async def get_session() -> AsyncIterator[AsyncSession]:
     try:
         async with SessionLocal() as session:
             yield session
+    # Ordered: PoolTimeout first, because it is the more specific condition and
+    # carries a different diagnosis. It subclasses SQLAlchemyError directly --
+    # not OperationalError -- so before this clause existed it matched nothing
+    # here and reached the caller as an unhandled 500 after a 30s wait.
+    except PoolTimeout as exc:
+        raise ConnectionPoolExhausted(str(exc)) from exc
     except (OperationalError, InterfaceError, OSError) as exc:
         raise DatabaseUnavailable(str(exc)) from exc
 
