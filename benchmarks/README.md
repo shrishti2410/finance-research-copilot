@@ -51,3 +51,74 @@ not an estimate of it. Batch size is 1 throughout, which leaves a GPU almost
 idle; that understates what a batching server like vLLM gets from the same card.
 
 Section 8 of the notebook states the caveats in full.
+
+---
+
+## `locustfile.py` — the full stack under concurrent load
+
+```bash
+python benchmarks/provision_users.py --users 20      # once
+DURATION=15m LEVELS="1 5 10 20" bash benchmarks/run_sweep.sh
+python benchmarks/summarize_sweep.py
+```
+
+Milestone 2's [`scripts/load_test.py`](../scripts/load_test.py) measured the
+inference proxy alone. This measures what a user waits for: one `/ask/stream` is
+several inference calls plus tool execution plus two database writes, which on a
+CPU host is minutes rather than seconds.
+
+### What it measures, and what it cannot
+
+The inference server barely batches. Measured directly with the M2 harness on
+this host:
+
+| concurrency | system tok/s | per-stream tok/s | scaling |
+|---|---|---|---|
+| 1 | 20.2 | 20.2 | 1.00x |
+| 2 | 21.4 | 16.1 | 1.06x |
+| 4 | 23.1 | 12.6 | 1.15x |
+
+4x the concurrency buys 15% more throughput. So the full-stack sweep is mostly a
+measurement of **queueing**, and flat throughput is the expected result rather
+than a defect. What it can still answer precisely: where the queue forms, how
+latency and time-to-first-token diverge as it grows, and at what concurrency the
+stack starts failing rather than merely slowing.
+
+### Three bugs this harness had, all found by running it
+
+Kept here because each produced a plausible-looking wrong answer, which is the
+failure mode a load test is most prone to.
+
+**1. Locust does not time a streamed response.** With `stream=True` the built-in
+timer stops when the response *headers* arrive. At concurrency 1 it reported
+**31 ms** for turns that actually took over three minutes. Total latency and TTFT
+are now fired by hand via `events.request.fire`, and the built-in entry is renamed
+`POST /ask/stream (to headers only)` — it is still worth having, because it is the
+auth and ownership check that happens before the agent starts.
+
+**2. Guard outcomes are not failures.** The first smoke run reported a 50%
+failure rate. The "failure" was `stop_reason=unverified_figures` — the grounding
+guard refusing to ship figures it could not trace to a tool result, which is the
+behaviour this project exists to have. Only `inference_error` and a missing
+terminal frame count as failures now; every other `stop_reason` is recorded by
+name, because a *rise* in guard activations under load would itself be a load
+effect worth seeing.
+
+**3. Tokens expire in 30 minutes; the sweep runs longer.** This one invalidated a
+whole hour-long run. `JWT_EXPIRE_MINUTES=30`, tokens expired mid-sweep, and an
+expired token does not fail cleanly: the rate limiter can no longer identify a
+user, so it falls back to the **anonymous per-IP bucket of 20/min**, and a harness
+with no think time becomes a 429 generator — roughly 70,000 of them in five
+minutes, while the latency table still looked reasonable. Fixed three ways:
+`provision_users.py --refresh` re-logs-in the pool, `run_sweep.sh` calls it before
+every level, and the locustfile now aborts the user on any 401 or 429 rather than
+looping.
+
+### Why accounts are pre-provisioned
+
+`/auth/*` is limited to 10 requests per minute **per IP regardless of token**,
+because signup and login are the brute-force surface. Every simulated user is
+127.0.0.1, so signing up inside the test would measure the rate limiter instead of
+the agent. `provision_users.py` creates the pool beforehand, paced under that
+limit, and writes `results/users.json` — which is gitignored, because it holds
+real bearer tokens.

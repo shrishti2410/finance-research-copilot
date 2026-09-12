@@ -18,6 +18,10 @@ venv/
 .ruff_cache/
 .mypy_cache/
 
+# Load-test artifacts. users.json holds real bearer tokens for the throwaway
+# accounts, and the CSVs are regenerable -- findings go in a committed .md.
+benchmarks/results/
+
 # Local data / indexes
 data/
 *.sqlite
