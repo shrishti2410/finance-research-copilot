@@ -228,6 +228,16 @@ and block designs are both worthless here.
 context window is 2048 or 8192. Anything that does not reduce generated tokens
 or raise tokens/sec does not reduce latency.
 
+Every configuration decision below follows from that one constraint, so it is
+worth knowing how much of it is the hardware.
+[`benchmarks/colab_t4_decode_benchmark.ipynb`](../benchmarks/colab_t4_decode_benchmark.ipynb)
+answers that on a free Colab GPU, using the hand-written decode loop from
+milestone 1 so the comparison is the same work rather than a different stack. On
+this host that loop measures **2.67 tok/s** for `Qwen2.5-1.5B-Instruct` in
+float32 (24 tokens in 8,995 ms, re-measured 2026-09-12) — the controlled baseline
+the notebook compares against, distinct from the Q4_K_M llama.cpp numbers in the
+table above.
+
 ### `OLLAMA_CONTEXT_LENGTH=8192`
 
 Raised, not lowered, and for correctness rather than speed.
