@@ -4,11 +4,12 @@ An LLM-powered research agent that answers questions about public companies by
 combining **RAG over SEC filings** with **live tools** (stock price, ratio
 calculation, news search).
 
-> **Status:** early. The inference proxy, the persistence/auth layer, SEC filing
-> ingestion (fetch → parse → chunk) and retrieval (embed → store → search) are
-> implemented and work end to end from the command line. There is no `/ask`
-> endpoint yet: tools and the agent are still stubs, and pgvector falls back to
-> exact search on this host. See [docs/PROJECT.md](docs/PROJECT.md#6-status).
+> **Status:** works end to end. Ingestion, retrieval, the three tools, the agent
+> loop, `/ask` and `/ask/stream`, auth, rate limiting and a Next.js client are all
+> implemented, with a 40-question eval harness and a baseline to compare against.
+> On the dev host pgvector is unavailable, so retrieval falls back to exact search
+> — the deployment image has it. See
+> [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) for what is deliberate.
 
 ## Architecture
 
@@ -50,7 +51,17 @@ python -m alembic upgrade head                  # create the schema
 uvicorn api.main:app --reload
 ```
 
+Or the whole stack in containers — API, frontend, Postgres, Redis and Ollama —
+which is also what a cloud GPU host runs:
+
+```bash
+docker compose up -d                      # add -f docker-compose.gpu.yml on a GPU
+docker compose run --rm migrate
+docker compose run --rm model-pull
+```
+
 - [docs/DATABASE.md](docs/DATABASE.md) — schema design, auth, migrations
 - [docs/RATE_LIMITING.md](docs/RATE_LIMITING.md) — Redis sliding-window limiter
 - [docs/INFERENCE.md](docs/INFERENCE.md) — running a model behind the proxy
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — containers, and a cloud GPU host
 - [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) — deliberate behaviour that looks like a defect, and what would justify changing it

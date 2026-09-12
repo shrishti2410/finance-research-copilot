@@ -1,0 +1,25 @@
+# Build context for the frontend image.
+#
+# Full-line comments only: dockerignore has no inline comment syntax, so
+# "node_modules  # reinstalled" is a pattern matching a directory of that
+# literal name, and node_modules gets copied in anyway.
+
+# Reinstalled from the lockfile inside the image.
+node_modules
+
+# A host build: wrong platform, and stale the moment source changes.
+.next
+out
+
+.git
+
+# Secrets, and anything Next would otherwise inline into client JavaScript.
+.env
+.env.*
+!.env.example
+
+npm-debug.log*
+.DS_Store
+tsconfig.tsbuildinfo
+Dockerfile
+.dockerignore

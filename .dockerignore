@@ -1,0 +1,35 @@
+# Build context for the backend image. Everything here is either irrelevant to
+# the image or actively harmful in it.
+
+.git
+.gitignore
+.gitattributes
+
+# Secrets. The image must never carry these -- compose injects them at run time
+# via env_file, which keeps them out of the layers and out of `docker history`.
+.env
+.env.*
+!.env.example
+
+# Virtualenvs and caches: host-built, wrong platform, and large.
+.venv
+venv
+**/__pycache__
+*.py[cod]
+.pytest_cache
+.ruff_cache
+.mypy_cache
+
+# The frontend has its own image and its own context. node_modules here would
+# add hundreds of megabytes to a build that never reads it.
+frontend
+
+# Cached EDGAR filings and built indexes. These belong in a volume, not a layer:
+# baking them in makes the image unreproducible and the rebuild slow.
+data
+
+# Nothing in the image renders these.
+docs
+scratchpad
+*.md
+!README.md

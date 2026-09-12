@@ -1,0 +1,257 @@
+# The full stack on one host: Postgres, Redis, Ollama, the API, the frontend.
+#
+#   CPU host      docker compose up -d
+#   GPU host      docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+#
+# The GPU override adds the device reservation and retunes Ollama. Nothing else
+# differs between the two, and the override file is deliberately readable as the
+# complete diff. See docs/DEPLOYMENT.md for the full sequence.
+#
+# ── Where configuration comes from, and why it is split ──────────────────────
+#
+# `env_file: .env`    secrets and policy: JWT_SECRET, SEC_EDGAR_USER_AGENT,
+#                     rate limits, CORS origins, token caps.
+# `environment:`      the topology: which host each service is at.
+#
+# The split is not cosmetic. Every service URL in .env points at 127.0.0.1,
+# because that is true when you run the app from a shell. Inside a container it
+# is false in the most confusing possible way -- 127.0.0.1 resolves, connects to
+# nothing, and the error names a port that is definitely in use on the host. So
+# the URLs that depend on *where the process runs* are set here, where the
+# topology is defined, and they override anything .env says. Editing .env for a
+# container deployment is then unnecessary rather than merely unwise.
+
+name: copilot
+
+services:
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Postgres. pgvector's image, not postgres:16-alpine.
+  #
+  # This is a functional upgrade over the dev compose file, not a preference.
+  # Migration 0002 probes for the `vector` extension and, when it is missing,
+  # falls back to a float array column with no ANN index -- correct, but every
+  # search is then a sequential scan. The dev host has no pgvector, which is why
+  # the project has been running on the fallback. This image has it, so the same
+  # migration creates `vector(384)` with an HNSW index instead.
+  #
+  # Consequence worth knowing: a pgdata volume initialised by the alpine image
+  # will NOT gain pgvector by swapping the image. The extension has to exist
+  # before migration 0002 runs. On a fresh cloud host that is automatic.
+  # ───────────────────────────────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-finance_copilot}
+    ports:
+      # Loopback only. On a cloud VM the host has a public IP, and "5432:5432"
+      # would publish a database whose password defaults to "postgres" to the
+      # entire internet. Nothing outside this compose network needs it; use
+      # `docker compose exec postgres psql` for a shell.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # `alembic upgrade` straight after `up -d` otherwise races first boot,
+      # which initialises the cluster before it accepts queries.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-finance_copilot}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Redis, for the rate limiter's sliding window.
+  #
+  # No volume and no persistence, same reasoning as the dev file: rate-limit
+  # counters are worth less than the window they cover, and fsyncing them would
+  # put a disk write in front of every request. Losing them on restart costs one
+  # window of enforcement.
+  # ───────────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    command: >
+      redis-server
+      --save ""
+      --appendonly no
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Ollama. The same image serves CPU and GPU -- see docker-compose.gpu.yml for
+  # what makes it use the GPU, which is not an Ollama setting.
+  #
+  # The environment below is the CPU tuning measured in docs/INFERENCE.md on the
+  # dev host. The GPU override replaces all three.
+  # ───────────────────────────────────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    ports:
+      # Loopback only: Ollama has no authentication of any kind. Published on a
+      # public IP it is an open inference endpoint on someone else's bill, and
+      # /api/pull means an attacker can also fill the disk. The app reaches it
+      # over the compose network as http://ollama:11434 instead.
+      - "127.0.0.1:11434:11434"
+    volumes:
+      # Model weights. ~4.7GB for qwen2.5:7b plus ~1GB for the 1.5b router, so a
+      # named volume rather than a re-download on every `up`.
+      - ollama_models:/root/.ollama
+    environment:
+      # num_ctx, and the only way to set it: the app calls the OpenAI-compatible
+      # /v1 endpoint, which has no num_ctx field. 8192 is the smallest power of
+      # two that clears the largest observed final-iteration prompt (~5,852
+      # tokens) plus the generation cap. At 4096 a 7,312-token conversation was
+      # silently evaluated as 3,970 tokens, dropping the earliest tool results --
+      # which is the evidence the answer is supposed to cite.
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-8192}
+      # The KV cache is allocated per parallel slot. This workload is strictly
+      # sequential -- one agent loop, one iteration at a time -- so extra slots
+      # multiply the cache and buy nothing.
+      OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-1}
+      # Required by the router split: the loop alternates between qwen2.5:7b and
+      # qwen2.5:1.5b inside a single turn. If the server evicts one to load the
+      # other, each switch costs a measured 172-207s model load, which makes the
+      # split far worse than not having it.
+      OLLAMA_MAX_LOADED_MODELS: ${OLLAMA_MAX_LOADED_MODELS:-2}
+    healthcheck:
+      # The CLI talks to the local server, so this is a real round-trip and needs
+      # no extra package in the image.
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      # Weights load from the volume on start; failing this for a minute while
+      # that happens is normal, not unhealthy.
+      start_period: 60s
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # The API, the agent loop, and the OpenAI-compatible proxy in front of Ollama.
+  # ───────────────────────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Named explicitly so `migrate` below can reuse this exact image instead of
+    # building a second copy of it.
+    image: copilot-backend:local
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # ── topology: overrides the 127.0.0.1 values in .env ──────────────────
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-finance_copilot}
+      REDIS_URL: redis://redis:6379/0
+      INFERENCE_BASE_URL: http://ollama:11434/v1
+      # Deliberately loopback, and correct: the agent calls the app's *own*
+      # proxy so its traffic goes through the same timeouts, logging and
+      # upstream config as every other client. Inside this container 127.0.0.1
+      # is this process. Pointing it at http://backend:8000 would work too, and
+      # would add a pointless hop through the Docker bridge.
+      AGENT_INFERENCE_BASE_URL: http://127.0.0.1:8000/v1
+      EDGAR_CACHE_DIR: /app/data/edgar
+      HF_HOME: /opt/hf
+      # ── fail fast on the one setting nobody notices is wrong ──────────────
+      # The app logs a warning and boots with a forgeable signing key. A warning
+      # in a container log is not a control: this refuses to start instead.
+      # Generate one with:  python -c "import secrets;print(secrets.token_urlsafe(48))"
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is unset or empty. Every token would be forgeable by anyone with the source. See docs/DEPLOYMENT.md}
+    ports:
+      # Public: the browser calls this directly. Restrict it at the provider
+      # firewall if you do not want the API reachable from anywhere.
+      - "${API_BIND:-0.0.0.0}:8000:8000"
+    volumes:
+      # Cached EDGAR filings, so a redeploy does not re-download from SEC.
+      - edgar_cache:/app/data/edgar
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        # Started, not healthy: the API boots fine without inference (the proxy
+        # reports an unreachable upstream per-request) and waiting on a cold
+        # model load would delay the whole stack for nothing.
+        condition: service_started
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # The Next.js client.
+  #
+  # NEXT_PUBLIC_API_BASE is a BUILD argument, not a runtime variable. It is
+  # compiled into the JavaScript the browser downloads, so it must be a URL the
+  # visitor's browser can reach, and changing it means rebuilding. See the long
+  # note in frontend/Dockerfile.
+  # ───────────────────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE: ${PUBLIC_API_BASE:-http://127.0.0.1:8000}
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_BIND:-0.0.0.0}:3000:3000"
+    depends_on:
+      - backend
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # One-shot setup tasks.
+  #
+  # Behind a profile so `up -d` never runs them: a schema migration on every
+  # container start is how two replicas race each other, and a model pull on
+  # every start is a 5GB surprise. Run them explicitly, once:
+  #
+  #   docker compose run --rm migrate
+  #   docker compose run --rm model-pull
+  #
+  # `run` enables a service's own profile, so no --profile flag is needed.
+  # ───────────────────────────────────────────────────────────────────────────
+  migrate:
+    profiles: ["setup"]
+    # The backend image, not a second build of it. Same code, same dependencies,
+    # and sharing the tag means `docker compose build` does this once.
+    image: copilot-backend:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-finance_copilot}
+      JWT_SECRET: ${JWT_SECRET:-migrations-do-not-issue-tokens}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["alembic", "upgrade", "head"]
+
+  model-pull:
+    profiles: ["setup"]
+    image: ollama/ollama:latest
+    environment:
+      # The CLI is a client here: it talks to the ollama service rather than
+      # starting a server of its own.
+      OLLAMA_HOST: http://ollama:11434
+    depends_on:
+      ollama:
+        condition: service_healthy
+    # Both models, because the router split needs both resident. Change these
+    # together with AGENT_MODEL / AGENT_ROUTER_MODEL in .env.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >
+        ollama pull ${AGENT_MODEL:-qwen2.5:7b} &&
+        ollama pull ${AGENT_ROUTER_MODEL:-qwen2.5:1.5b} &&
+        ollama list
+
+volumes:
+  pgdata:
+  ollama_models:
+  edgar_cache:

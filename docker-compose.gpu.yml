@@ -1,0 +1,104 @@
+# GPU overlay. This file IS the CPU-to-GPU configuration diff.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+#
+# Two of the three changes below are optional tuning. The first is not.
+#
+# ── Does Ollama auto-detect CUDA? ────────────────────────────────────────────
+#
+# Yes, and that is not enough.
+#
+# The ollama/ollama image ships CUDA runtime libraries and probes for a usable
+# GPU at start-up, with no flag, env var or config to switch it on. Given a
+# visible device it uses it; given none it falls back to CPU silently. The same
+# image, the same tag, both cases.
+#
+# What is missing on a GPU host is the *visibility*. Docker does not expose host
+# devices to a container by default, so Ollama's probe finds nothing and reports
+# a healthy CPU server -- which is why this failure mode is so easy to miss:
+# everything works, three times slower than it should. `docker run` spells the
+# grant `--gpus=all`; compose spells it as the `deploy.resources.reservations`
+# block below, which needs the NVIDIA Container Toolkit installed and registered
+# with the Docker daemon on the host.
+#
+# Confirm it took effect, don't assume:
+#
+#   docker compose exec ollama nvidia-smi        # the container can see the GPU
+#   docker compose exec ollama ollama ps         # PROCESSOR says "100% GPU"
+#
+# `ollama ps` is the one that matters. nvidia-smi passing while `ollama ps` says
+# "100% CPU" means the device is visible but the model did not fit in VRAM.
+
+services:
+
+  ollama:
+    # ── the change that is actually required ──────────────────────────────────
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all          # `1` to pin a single card on a multi-GPU host
+              capabilities: [gpu]
+
+    environment:
+      # ── tuning, now that generation is not the bottleneck ──────────────────
+      #
+      # On the CPU dev host these were chosen against a 15.7GB RAM budget that
+      # dipped to 0.08GB free with both models loading. A 24GB+ card holds
+      # qwen2.5:7b at Q4_K_M (~4.7GB) and the 1.5b router (~1GB) with room to
+      # spare, so the constraint that set them is gone.
+
+      # The KV cache is per parallel slot, which is why CPU used 1. With VRAM to
+      # spare, 2 slots let a second request proceed instead of queueing behind a
+      # streaming answer. Raise further only after watching VRAM under load:
+      # overcommitting it makes Ollama silently spill layers back to CPU.
+      OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-2}
+
+      # 16384 doubles the window. Not needed for the 40 eval questions -- the
+      # largest final-iteration prompt measured ~5,852 tokens -- so this buys
+      # headroom for longer conversations rather than fixing a known truncation.
+      # num_ctx is prompt and generation together, and it is multiplied by
+      # NUM_PARALLEL above, so the two settings interact: 16384 x 2 slots is a
+      # real amount of VRAM. Drop to 8192 if `ollama ps` stops saying 100% GPU.
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-16384}
+
+      # Keep both models resident between requests instead of unloading after
+      # the default 5 minutes. On CPU a reload cost 172-207s; on GPU it is far
+      # cheaper but still the largest single latency spike a user can hit, and
+      # there is no reason to pay it on an idle dedicated host.
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:--1}
+
+      # Unchanged from the base file, restated because NUM_PARALLEL above makes
+      # the interaction easy to forget: the router split alternates between two
+      # models inside one turn, and an eviction between them is the worst case.
+      OLLAMA_MAX_LOADED_MODELS: ${OLLAMA_MAX_LOADED_MODELS:-2}
+
+  backend:
+    environment:
+      # A 300s read timeout exists because a CPU host generated at 2.8-4.2
+      # tok/s and a long answer legitimately took minutes. On a GPU that is no
+      # longer a slow answer, it is a hung one, and 300s of waiting to find out
+      # is worse than failing at 90s. The agent loop already reports an
+      # unreachable or failed model as `inference_error` with no fabrication,
+      # so failing sooner costs nothing but the wait.
+      #
+      # Deliberately not retried -- see core/retry.py: a stuck model call needs a
+      # timeout and a failure, not a retry that doubles the wait.
+      INFERENCE_READ_TIMEOUT: ${INFERENCE_READ_TIMEOUT:-90}
+
+      # ── left alone on purpose ─────────────────────────────────────────────
+      #
+      # AGENT_ROUTER_MODEL: the 1.5b/7b split was worth -39%/-61%/-13% on three
+      # representative questions *on CPU*, where generation was ~97% of latency
+      # at 2.8 tok/s. On a GPU generating an order of magnitude faster, the
+      # saving shrinks while the cost does not: the 1.5b model measurably fails
+      # to recover from a bad tool call, which is why the loop escalates to the
+      # larger model after any failed one. It may well be worth disabling
+      # (AGENT_ROUTER_MODEL=""), and that is a measurement, not a guess --
+      # `python -m eval.compare` against eval/baselines/current.json answers it
+      # in one run. Left on, because that is what has been measured.
+      #
+      # AGENT_MAX_TOKENS: 512 was chosen to clear the longest observed answer
+      # (~368 tokens), not to save CPU time. Faster generation is not a reason
+      # to let answers run longer.

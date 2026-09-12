@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+# The deployment delta is a template too, and `.env.*` above would eat it.
+!.env.deploy.example
 
 # Python
 __pycache__/
