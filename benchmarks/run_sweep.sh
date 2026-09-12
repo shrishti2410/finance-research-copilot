@@ -12,17 +12,38 @@
 #
 # DURATION is per level, so the whole sweep is 3x that plus ramp.
 
+#
+# FRESH=1 provisions brand-new accounts first. Use it for any run that will be
+# compared against another, because reusing a pool does not reset the
+# conversations, and AGENT_HISTORY_MESSAGES replays a window of prior turns: a
+# pool that has been swept before sends a much larger prompt for every request.
+#
+# Measured, and the reason this flag exists: re-running the sweep on a reused pool
+# put 14 of 20 conversations at or past the 10-message window (one had 62
+# messages), and single-user median latency read 250s against the 88s the same
+# code measured on a fresh pool. Nothing about the system had changed.
+
 set -euo pipefail
 
 HOST="${HOST:-http://127.0.0.1:8000}"
 DURATION="${DURATION:-20m}"
 LEVELS="${LEVELS:-5 10 20}"
+FRESH="${FRESH:-0}"
+POOL_SIZE="${POOL_SIZE:-20}"
 OUT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/results"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 mkdir -p "$OUT"
 
+if [ "$FRESH" = "1" ]; then
+  echo "provisioning a fresh pool (empty conversations, comparable latency) ..."
+  python "$HERE/provision_users.py" --users "$POOL_SIZE" --base-url "$HOST"
+  echo
+fi
+
 if [ ! -f "$OUT/users.json" ]; then
   echo "No account pool. Run: python benchmarks/provision_users.py --users 20" >&2
+  echo "Or re-run with FRESH=1 to provision one now." >&2
   exit 1
 fi
 

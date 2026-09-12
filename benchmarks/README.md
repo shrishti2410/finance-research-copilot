@@ -57,10 +57,18 @@ Section 8 of the notebook states the caveats in full.
 ## `locustfile.py` — the full stack under concurrent load
 
 ```bash
-python benchmarks/provision_users.py --users 20      # once
-DURATION=15m LEVELS="1 5 10 20" bash benchmarks/run_sweep.sh
+# Any run that will be compared against another needs FRESH=1.
+FRESH=1 DURATION=10m LEVELS="1 5 10 20" bash benchmarks/run_sweep.sh
 python benchmarks/summarize_sweep.py
 ```
+
+**`FRESH=1` is not optional for a comparison.** Reusing a pool does not reset the
+conversations, and `AGENT_HISTORY_MESSAGES=10` replays a window of prior turns, so
+a pool that has already been swept sends a much larger prompt on every request.
+Re-running the sweep on a reused pool put 14 of 20 conversations at or past that
+window (one held 62 messages) and read **250s** single-user median against the
+**88s** the same code measured on a fresh pool. Nothing about the system had
+changed; the harness had aged.
 
 Milestone 2's [`scripts/load_test.py`](../scripts/load_test.py) measured the
 inference proxy alone. This measures what a user waits for: one `/ask/stream` is
@@ -84,7 +92,7 @@ than a defect. What it can still answer precisely: where the queue forms, how
 latency and time-to-first-token diverge as it grows, and at what concurrency the
 stack starts failing rather than merely slowing.
 
-### Three bugs this harness had, all found by running it
+### Four bugs this harness had, all found by running it
 
 Kept here because each produced a plausible-looking wrong answer, which is the
 failure mode a load test is most prone to.
@@ -113,6 +121,12 @@ minutes, while the latency table still looked reasonable. Fixed three ways:
 `provision_users.py --refresh` re-logs-in the pool, `run_sweep.sh` calls it before
 every level, and the locustfile now aborts the user on any 401 or 429 rather than
 looping.
+
+**4. A reused account pool ages.** See `FRESH=1` above: the pool's conversations
+keep their history between sweeps, and the replayed window makes every later run
+slower for reasons outside the code under test. Caught by noticing that a
+single-user median had tripled after a change that only touched connection
+lifetimes — which could not plausibly have slowed generation down.
 
 ### Why accounts are pre-provisioned
 
