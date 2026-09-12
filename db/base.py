@@ -6,6 +6,7 @@ which is what lets `alembic --sql` and unit tests import the models.
 """
 
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from sqlalchemy.exc import InterfaceError, OperationalError
 from sqlalchemy.exc import TimeoutError as PoolTimeout
@@ -63,6 +64,29 @@ SessionLocal = async_sessionmaker(
 )
 
 
+@asynccontextmanager
+async def session_scope() -> AsyncIterator[AsyncSession]:
+    """A session for one unit of work, released as soon as the block ends.
+
+    The same error translation as `get_session`, factored out so a handler that
+    manages its own session lifetime does not silently lose it. Using
+    `SessionLocal()` directly would: a pool timeout would stop being a 503 and go
+    back to being the unhandled 500 that `tests/test_pool_exhaustion.py` exists to
+    prevent.
+
+    Use this wherever a connection should be held for a query rather than for a
+    request -- `api/routes.py` holds one to read history and again to write the
+    turn, and none at all across the minutes of inference in between.
+    """
+    try:
+        async with SessionLocal() as session:
+            yield session
+    except PoolTimeout as exc:
+        raise ConnectionPoolExhausted(str(exc)) from exc
+    except (OperationalError, InterfaceError, OSError) as exc:
+        raise DatabaseUnavailable(str(exc)) from exc
+
+
 async def get_session() -> AsyncIterator[AsyncSession]:
     """FastAPI dependency. One session per request, always closed.
 
@@ -76,17 +100,12 @@ async def get_session() -> AsyncIterator[AsyncSession]:
     The route body runs at the `yield`, so its exceptions arrive here too
     (FastAPI throws them back into the dependency generator).
     """
-    try:
-        async with SessionLocal() as session:
-            yield session
-    # Ordered: PoolTimeout first, because it is the more specific condition and
-    # carries a different diagnosis. It subclasses SQLAlchemyError directly --
-    # not OperationalError -- so before this clause existed it matched nothing
-    # here and reached the caller as an unhandled 500 after a 30s wait.
-    except PoolTimeout as exc:
-        raise ConnectionPoolExhausted(str(exc)) from exc
-    except (OperationalError, InterfaceError, OSError) as exc:
-        raise DatabaseUnavailable(str(exc)) from exc
+    # Delegates, so the translation exists once. An exception raised in the route
+    # body is thrown back in at this `yield`, propagates into `session_scope`'s
+    # own yield, and is caught by its clauses -- same behaviour as when those
+    # clauses were written out here.
+    async with session_scope() as session:
+        yield session
 
 
 async def dispose_engine() -> None:

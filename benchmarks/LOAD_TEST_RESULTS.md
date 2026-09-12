@@ -79,16 +79,58 @@ completed** — 231 of the failures were 500s.
 
 Three separate problems, and the inference server is not any of them.
 
-### 1. A database connection is held for the entire agent run
+## Follow-up: the connection is no longer held across the run — measured
 
-`/ask` and `/ask/stream` both take `session: AsyncSession = Depends(get_session)`.
+Findings 1 and 2 below describe the system as first measured. Both have since
+been addressed; this section is what changed and what it was worth.
+
+`/ask` and `/ask/stream` now use the database in two short bursts with nothing
+held in between — read the history, release, run the agent for minutes holding no
+connection, reacquire to write the turn. `get_current_user` was doing the same
+thing and is also short-lived now, which is what removed the *second* connection
+per streaming request.
+
+Re-measured at the two levels that failed, same harness, same 10 minutes, same
+host:
+
+| | attempts | answers | median | QueuePool timeouts | 500s |
+|---|---|---|---|---|---|
+| **10 users** before | 63 | 2 | 403s | **25** | **33** |
+| **10 users** after | 11 | 4 | 376s | **0** | **0** |
+| **20 users** before | 284 | 0 | — | **37** | **231** |
+| **20 users** after | 33 | 3 | 373s | **0** | **0** |
+
+**Pool exhaustion is gone at both levels**, and 20 users went from *zero*
+completed answers to three. Every remaining failure is `inference_error` — the
+300s read timeout on a request queued behind the model — which is the bottleneck
+this change was never going to touch.
+
+Two numbers worth reading carefully rather than celebrating:
+
+- **Attempts collapsed** (63 → 11, 284 → 33). That is not less throughput; it is
+  the disappearance of instant failures. Before, a 500 came back in 30 seconds
+  and a load generator with no think time immediately fired another, so most of
+  those attempts were the same request failing over and over.
+- **Answers per 10 minutes barely moved** (2 → 4, 0 → 3). The stack was never
+  database-bound for *throughput*; it was database-bound for *failures*. The
+  ceiling this removed was on how many requests could be in flight without
+  erroring, not on how fast the model answers.
+
+The concurrency ceiling is now whatever the inference queue and the 300s timeout
+allow, not `db_pool_size + db_max_overflow`. Pinned by
+`tests/test_ask_endpoint.py::test_no_connection_is_held_across_the_agent_run`,
+which fails if a session is ever open across `run_agent` again.
+
+### 1. A database connection was held for the entire agent run — fixed
+
+`/ask` and `/ask/stream` both took `session: AsyncSession = Depends(get_session)`.
 FastAPI holds a dependency for the whole request, and for a stream that is the
 whole response — minutes. So one Postgres connection is pinned per in-flight
 question, for its full duration, while the agent is doing nothing but waiting on
 the model.
 
-`db_pool_size=5` + `db_max_overflow=10` = **15 connections**. That is the hard
-concurrency ceiling of this deployment, and it has nothing to do with how fast
+`db_pool_size=5` + `db_max_overflow=10` = **15 connections**. That was the hard
+concurrency ceiling of this deployment, and it had nothing to do with how fast
 inference is. On a GPU host where a question takes 10s instead of 400s, the
 ceiling would still be 15 — requests would just churn through it faster.
 
@@ -161,9 +203,9 @@ indistinguishable from one whose model died, and both surface as
 
 In rough order of payoff:
 
-1. **Release the DB session before the inference call and re-acquire to write the
-   turn.** Removes the 15-connection ceiling, which currently binds before
-   anything else. Still open.
+1. ~~**Release the DB session before the inference call and re-acquire to write
+   the turn.**~~ — done, and measured: see the follow-up section above. Pool
+   exhaustion no longer occurs at 10 or 20 users.
 2. ~~**Translate pool exhaustion to a 503**~~ — done, see finding 2.
 3. **A batching inference server.** vLLM's continuous batching is the answer to
    flat throughput, and `docker-compose.vllm.yml` already exists — the numbers at

@@ -28,10 +28,9 @@ import asyncio
 import json
 import logging
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from agent.memory import load_history
 from agent.orchestrator import run_agent
@@ -39,7 +38,7 @@ from api.routes_chat import append_message, owned_conversation
 from api.schemas import AskRequest, AskResponse
 from auth.deps import get_current_user
 from core.config import settings
-from db.base import SessionLocal, get_session
+from db.base import ConnectionPoolExhausted, session_scope
 from db.models import Conversation, User
 
 log = logging.getLogger(__name__)
@@ -50,6 +49,68 @@ router = APIRouter(tags=["agent"])
 # small, but a tool result is not bounded -- a filings search carries excerpts.
 # The row is the audit trail, not the archive.
 MAX_STORED_STEPS = 40
+
+
+async def _store_turn_in_new_session(
+    conversation_id, user_id, question, result, *, history_messages=0,
+    attempts: int = 4,
+):
+    """Open a session, re-read the conversation, write the turn, release.
+
+    Phase 3 of the split described on `ask`. Two things need care here that did
+    not when one session spanned the whole request.
+
+    **The conversation is re-read, scoped by user_id.** An ORM object belongs to
+    the session that loaded it and `append_message` mutates it, so the phase-1
+    instance cannot be reused. Re-reading also means a conversation deleted during
+    the run is noticed instead of being written to. Keeping `user_id` in the
+    predicate matters: ownership was established minutes ago, and a conversation
+    that changed hands since must not receive this answer.
+
+    **The write retries on pool exhaustion.** Everywhere else a full pool should
+    fail fast and let the caller retry, but by this point the answer has cost
+    minutes of inference and cannot be recreated -- dropping it to save a 30-second
+    wait is the wrong trade. The writes themselves are milliseconds, so a
+    connection frees up quickly even under load. A read failing in phase 1 costs
+    the user a retry; a write failing here costs them the answer.
+    """
+    delay = 0.5
+    for attempt in range(1, attempts + 1):
+        try:
+            async with session_scope() as session:
+                conversation = await session.scalar(
+                    select(Conversation).where(
+                        Conversation.id == conversation_id,
+                        Conversation.user_id == user_id,
+                    )
+                )
+                if conversation is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail="The conversation no longer exists.",
+                    )
+                return await _store_turn(
+                    session, conversation, question, result,
+                    history_messages=history_messages,
+                )
+        except ConnectionPoolExhausted:
+            if attempt == attempts:
+                # Out of attempts. The answer is lost, and saying so plainly beats
+                # a 503 that implies nothing happened -- the run did happen, and
+                # it was expensive.
+                log.error(
+                    "ask: could not store a completed turn for conversation %s "
+                    "after %d attempts; the answer is lost",
+                    conversation_id, attempts,
+                )
+                raise
+            log.warning(
+                "ask: pool full while storing conversation %s, retrying in %.1fs "
+                "[attempt %d of %d]",
+                conversation_id, delay, attempt, attempts,
+            )
+            await asyncio.sleep(delay)
+            delay *= 2
 
 
 async def _store_turn(session, conversation, question, result, history_messages=0):
@@ -98,22 +159,43 @@ async def _store_turn(session, conversation, question, result, history_messages=
 async def ask(
     body: AskRequest,
     user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session),
 ) -> AskResponse:
     """Run a question through the agent loop and store both sides of the turn.
 
     404s for a conversation the caller does not own, matching the rest of the
     conversation routes: a 403 would confirm the id exists and turn this into an
     existence oracle for other people's threads.
+
+    ── Three phases, and a connection held for only two of them ────────────────
+
+    Deliberately no `Depends(get_session)`. A dependency's session is released
+    when the response completes, which here is after the agent has finished --
+    minutes during which the connection sat idle waiting on the model. With
+    `db_pool_size + db_max_overflow` at 15, that made 15 the concurrency ceiling
+    of the deployment regardless of hardware; the load test hit it at ten users.
+
+    So the database is used for two short bursts with the long part in between
+    holding nothing:
+
+        1. read    ownership check and the history window       (milliseconds)
+        2. think   inference and tool calls, no connection      (minutes)
+        3. write   both messages, one transaction               (milliseconds)
+
+    The cost of the split is that the conversation must be re-read in phase 3,
+    and can have been deleted in the meantime. That is handled explicitly below
+    and is strictly more honest than the previous arrangement, which held a
+    transaction open across the whole run and could not have noticed.
     """
-    conversation = await owned_conversation(body.conversation_id, user, session)
+    async with session_scope() as session:
+        conversation = await owned_conversation(body.conversation_id, user, session)
+        conversation_id = conversation.id
+        # Read before writing this turn, so the window is the prior conversation
+        # and the current question appears exactly once -- run_agent appends it.
+        history = await load_history(
+            session, conversation_id, limit=settings.agent_history_messages
+        )
 
-    # Read before writing this turn, so the window is the prior conversation and
-    # the current question appears exactly once -- run_agent appends it itself.
-    history = await load_history(
-        session, conversation.id, limit=settings.agent_history_messages
-    )
-
+    # ── no database connection is held from here until the write ─────────────
     result = await run_agent(
         body.message,
         history=history,
@@ -124,16 +206,16 @@ async def ask(
     log.info(
         "ask: conversation=%s user=%s history=%d iterations=%d completed=%s "
         "stop=%s tools=%s",
-        conversation.id, user.id, len(history), result.iterations, result.completed,
+        conversation_id, user.id, len(history), result.iterations, result.completed,
         result.stop_reason, [step.tool for step in result.tool_calls],
     )
 
-    user_message, assistant_message = await _store_turn(
-        session, conversation, body.message, result, history_messages=len(history)
+    user_message, assistant_message = await _store_turn_in_new_session(
+        conversation_id, user.id, body.message, result, history_messages=len(history)
     )
 
     return AskResponse(
-        conversation_id=conversation.id,
+        conversation_id=conversation_id,
         user_message_id=user_message.id,
         assistant_message_id=assistant_message.id,
         answer=result.answer,
@@ -190,62 +272,66 @@ _RUNS: set[asyncio.Task] = set()
 
 
 async def _run_and_store(*, conversation_id, user_id, question, history, queue, put):
-    """Run the agent and persist the turn, on a session of its own.
+    """Run the agent with no connection held, then persist the turn.
 
-    The request's session is deliberately not used. It is closed when the
-    response ends, and the whole point of this task is to still be running then
-    -- writing through it after the client disconnects fails on a closed
-    connection, which is how a finished answer gets silently dropped.
+    The request's session is deliberately not used, and neither is one of this
+    task's own for the duration. This task outlives its request by design, so a
+    session borrowed from the request would be closed underneath it -- and a
+    session it opened itself would pin a pooled connection for the whole run,
+    which is what made a streaming request cost **two** connections and put the
+    ceiling at ten concurrent users rather than fifteen.
 
-    The conversation is re-fetched here rather than passed in: an ORM object
-    belongs to the session that loaded it, and `append_message` mutates it.
-    Ownership was already established in the request, so this reads by id --
-    and still scopes by user_id, so a stale task can never write into a
-    conversation that changed hands.
+    So: run first, connect afterwards. The conversation is re-read inside the
+    write, scoped by user_id, for the reasons in
+    `_store_turn_in_new_session`.
+
+    One behaviour change worth naming: the conversation used to be re-read
+    *before* the run, so a deletion during the request was caught early and the
+    agent never ran. Now the run happens first and the deletion is noticed at the
+    write. That wastes an inference on a conversation nobody can read, which is
+    cheap and rare, and it buys back the connection that the early check was
+    holding for minutes.
     """
     try:
-        async with SessionLocal() as session:
-            conversation = await session.scalar(
-                select(Conversation).where(
-                    Conversation.id == conversation_id,
-                    Conversation.user_id == user_id,
-                )
+        result = await run_agent(
+            question,
+            history=history,
+            max_iterations=settings.agent_max_iterations,
+            max_tool_calls_per_iteration=settings.agent_max_tool_calls_per_iteration,
+            stream_tokens=True,
+            on_token=lambda text: put({"type": "token", "text": text}),
+            on_event=put,
+        )
+
+        try:
+            user_message, assistant_message = await _store_turn_in_new_session(
+                conversation_id, user_id, question, result,
+                history_messages=len(history),
             )
-            if conversation is None:  # deleted between the check and now
+        except HTTPException as exc:
+            if exc.status_code == status.HTTP_404_NOT_FOUND:
                 await queue.put({
                     "type": "error",
                     "error": "NotFound",
                     "message": "The conversation no longer exists.",
                 })
                 return
+            raise
 
-            result = await run_agent(
-                question,
-                history=history,
-                max_iterations=settings.agent_max_iterations,
-                max_tool_calls_per_iteration=settings.agent_max_tool_calls_per_iteration,
-                stream_tokens=True,
-                on_token=lambda text: put({"type": "token", "text": text}),
-                on_event=put,
-            )
-            user_message, assistant_message = await _store_turn(
-                session, conversation, question, result,
-                history_messages=len(history),
-            )
-            await queue.put({
-                "type": "done",
-                "conversation_id": str(conversation_id),
-                "user_message_id": user_message.id,
-                "assistant_message_id": assistant_message.id,
-                "answer": result.answer,
-                "completed": result.completed,
-                "stop_reason": result.stop_reason,
-                "iterations": result.iterations,
-                "model": result.model,
-                "total_ms": round(result.total_ms, 1),
-                "history_messages": len(history),
-                "steps": [step.to_dict() for step in result.steps],
-            })
+        await queue.put({
+            "type": "done",
+            "conversation_id": str(conversation_id),
+            "user_message_id": user_message.id,
+            "assistant_message_id": assistant_message.id,
+            "answer": result.answer,
+            "completed": result.completed,
+            "stop_reason": result.stop_reason,
+            "iterations": result.iterations,
+            "model": result.model,
+            "total_ms": round(result.total_ms, 1),
+            "history_messages": len(history),
+            "steps": [step.to_dict() for step in result.steps],
+        })
     except Exception as exc:  # noqa: BLE001 - the client is owed a reason
         log.exception("ask/stream: run failed for conversation %s", conversation_id)
         await queue.put({
@@ -261,7 +347,6 @@ async def _run_and_store(*, conversation_id, user_id, question, history, queue, 
 async def ask_stream(
     body: AskRequest,
     user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session),
 ) -> StreamingResponse:
     """Run a question through the agent loop, reporting progress as it happens.
 
@@ -277,11 +362,20 @@ async def ask_stream(
 
     The access check happens before the response starts, so an unauthorized
     caller still gets a real 404 rather than a 200 whose first frame is bad news.
+
+    No `Depends(get_session)`: a dependency's session is released when the
+    response completes, and for a stream that is when the last token has been
+    sent. Combined with the task's own session that made two pooled connections
+    per in-flight question. Both are now short-lived -- one here to read, one in
+    `_store_turn_in_new_session` to write -- with none held across the run.
     """
-    conversation = await owned_conversation(body.conversation_id, user, session)
-    history = await load_history(
-        session, conversation.id, limit=settings.agent_history_messages
-    )
+    async with session_scope() as session:
+        conversation = await owned_conversation(body.conversation_id, user, session)
+        conversation_id = conversation.id
+        history = await load_history(
+            session, conversation_id, limit=settings.agent_history_messages
+        )
+    # From here on the request holds no connection.
 
     # A queue decouples the loop from the socket, so a slow reader cannot
     # throttle tool execution and a vanished one cannot stall it.
@@ -292,7 +386,7 @@ async def ask_stream(
 
     task = asyncio.create_task(
         _run_and_store(
-            conversation_id=conversation.id,
+            conversation_id=conversation_id,
             user_id=user.id,
             question=body.message,
             history=history,
@@ -316,9 +410,9 @@ async def ask_stream(
         finally:
             # Deliberately not cancelled. A client hanging up -- a refresh, a
             # closed tab -- is not a reason to throw away a run that has already
-            # spent a minute of model time and made real tool calls. It owns its
-            # own database session precisely so it can outlive this request and
-            # still commit; the reloaded page then finds the finished turn
+            # spent a minute of model time and made real tool calls. It opens its own
+            # short-lived session only when it has something to write, so it can
+            # outlive this request and still commit; the reloaded page then finds the finished turn
             # waiting for it.
             #
             # The cost is that repeated refreshes start repeated runs, each of
@@ -328,7 +422,7 @@ async def ask_stream(
                 log.info(
                     "ask/stream: client left; conversation %s continues in the "
                     "background",
-                    conversation.id,
+                    conversation_id,
                 )
 
     return StreamingResponse(

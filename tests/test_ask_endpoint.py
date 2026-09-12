@@ -401,20 +401,73 @@ def test_the_stored_answer_records_how_much_history_it_saw(client, stub_agent):
 # The run now owns a session of its own so it can commit after the client is
 # gone.
 
-def test_the_run_uses_its_own_session_not_the_requests(monkeypatch):
+def test_the_run_uses_its_own_session_not_the_requests():
     """The request's session is closed when the response ends. Writing the turn
     through it after a disconnect fails on a closed connection, which is how a
-    finished answer gets silently dropped."""
+    finished answer gets silently dropped.
+
+    The write moved out of `_run_and_store` into `_store_turn_in_new_session`
+    when the session stopped spanning the run, so the same property is asserted
+    about its new home.
+    """
     import inspect
 
-    source = inspect.getsource(routes._run_and_store)
-    assert "SessionLocal()" in source
+    source = inspect.getsource(routes._store_turn_in_new_session)
+    assert "session_scope()" in source
     # The conversation has to be re-fetched: an ORM object belongs to the
     # session that loaded it, and append_message mutates it.
     assert "select(Conversation)" in source
-    # ...and still scoped to the owner, so a stale task cannot write into a
+    # ...and still scoped to the owner, so a stale task can never write into a
     # conversation that changed hands.
     assert "Conversation.user_id == user_id" in source
+
+
+def test_no_connection_is_held_across_the_agent_run():
+    """The property that raised the concurrency ceiling.
+
+    A session left open around `run_agent` pins a pooled connection for minutes
+    while the process waits on the model. Two of them did: the request's
+    dependency and the background task's own. With pool_size + max_overflow at
+    15 that made 15 the ceiling of the whole deployment, and the load test hit it
+    at ten users because a streaming request cost two.
+
+    Asserted on structure rather than behaviour because the failure is invisible
+    at one user -- everything works, just fifteen at a time.
+    """
+    import inspect
+
+    for handler in (routes.ask, routes._run_and_store):
+        source = inspect.getsource(handler)
+        run_at = source.index("run_agent(")
+        if "session_scope(" in source:
+            opened_at = source.index("session_scope(")
+            assert opened_at < run_at, (
+                f"{handler.__name__} opens a session after the run starts"
+            )
+            # The `async with` must end above the call, not wrap it. Matched on
+            # "run_agent(" rather than the bare name: `ask`'s read block carries a
+            # comment mentioning run_agent, and the first version of this
+            # assertion failed on that comment rather than on any held session.
+            assert "run_agent(" not in source[opened_at:run_at], (
+                f"{handler.__name__} still holds a session across run_agent; "
+                f"that connection is pinned for the whole run"
+            )
+
+    # The streaming task must run first and connect afterwards. Without this the
+    # check above passes vacuously for `_run_and_store`, which now contains no
+    # session_scope of its own at all.
+    task_source = inspect.getsource(routes._run_and_store)
+    assert task_source.index("run_agent(") < task_source.index(
+        "_store_turn_in_new_session("
+    ), "the streaming task must finish the run before it takes a connection"
+
+    # Neither endpoint may take a session as a dependency: FastAPI holds one for
+    # the entire response, which for a stream is the whole run.
+    for handler in (routes.ask, routes.ask_stream):
+        parameters = inspect.signature(handler).parameters
+        assert not any("session" in name for name in parameters), (
+            f"{handler.__name__} takes a session dependency"
+        )
 
 
 def test_the_stream_does_not_cancel_the_run_when_the_client_leaves():
