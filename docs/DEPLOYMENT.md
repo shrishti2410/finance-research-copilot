@@ -373,9 +373,42 @@ is `"use client"`, so every request is made *by the browser*. Next replaces
 - Setting it in compose `environment:` does nothing. It is already compiled in.
   Changing it requires `docker compose build frontend`.
 
-Left at its default on a remote host, the frontend loads and renders and then
-sends every request to the *visitor's own* `127.0.0.1:8000`. Nothing in the
-server logs. This is the single most likely thing to go wrong.
+Get this wrong and the frontend loads, renders, routes, and sends every request
+to the *visitor's own* machine. Nothing appears in the server logs, because
+nothing reaches the server.
+
+**So the build refuses to produce that.** `next.config.ts` asserts the value
+during `next build` — before it compiles anything — and throws if it is unset,
+not an `http(s)` URL, one of this stack's compose service names, or a loopback
+address:
+
+```
+NEXT_PUBLIC_API_BASE points at 127.0.0.1, which in a browser means the
+visitor's own machine.
+  ...
+  Building a container to run on this machine? Say so explicitly:
+    ALLOW_LOCALHOST_API_BASE=1 ...
+```
+
+There is no default value anywhere in the chain — not in the Dockerfile `ARG`,
+not in the compose `args` — because the only plausible default is a localhost
+one, and a localhost default is precisely the failure. Unset reaches the
+assertion as empty and stops the build.
+
+To build a stack you intend to browse from the host running it, opt in:
+
+```bash
+ALLOW_LOCALHOST_API_BASE=1 docker compose build frontend
+# or set PUBLIC_API_BASE + ALLOW_LOCALHOST_API_BASE in .env
+```
+
+`next dev` is never checked; localhost is correct there.
+
+One case the build cannot catch: an image built legitimately for localhost and
+then served from somewhere else. Only the browser knows, so `src/lib/api.ts`
+checks at request time and replaces the generic "cannot reach the API" with the
+actual reason — that the page is served from one host and was compiled to call
+another.
 
 ### `CORS_ORIGINS` — an allow-list, never `*`
 
@@ -444,9 +477,11 @@ curl -s localhost:8000/health/db
 open http://$HOST:3000
 ```
 
-Nine commands. The two that are easy to get wrong are `COMPOSE_FILE` (omit it and
-you silently deploy on CPU) and the two host-address lines (get them wrong and
-the frontend loads but cannot reach the API).
+Nine commands. Of the two that used to be easy to get wrong, `PUBLIC_API_BASE`
+now stops the build rather than shipping a broken client, and `CORS_ORIGINS`
+fails visibly in the browser console. That leaves `COMPOSE_FILE` as the only
+silent one: omit it and you deploy on CPU, with everything working and nothing
+saying so.
 
 ---
 

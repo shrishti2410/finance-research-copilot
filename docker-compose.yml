@@ -196,7 +196,13 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_BASE: ${PUBLIC_API_BASE:-http://127.0.0.1:8000}
+        # No fallback here either: unset reaches next.config.ts as empty and
+        # fails the build with an explanation. A localhost default would build
+        # cleanly and break only in the browser.
+        NEXT_PUBLIC_API_BASE: ${PUBLIC_API_BASE:-}
+        # Set ALLOW_LOCALHOST_API_BASE=1 in .env to build a stack meant to be
+        # used from this machine.
+        ALLOW_LOCALHOST_API_BASE: ${ALLOW_LOCALHOST_API_BASE:-}
     restart: unless-stopped
     ports:
       - "${FRONTEND_BIND:-0.0.0.0}:3000:3000"

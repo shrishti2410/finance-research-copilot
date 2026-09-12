@@ -54,20 +54,23 @@ COPY . .
 # it out of the build context, and Next resolves process.env ahead of every .env
 # file anyway. Worth knowing, because .env.local in this repo sets this variable
 # to 127.0.0.1 and would otherwise be a silent way to ship a broken client.
-ARG NEXT_PUBLIC_API_BASE=http://127.0.0.1:8000
+#
+# No default value, deliberately. An unset ARG is the empty string, and
+# next.config.ts refuses to build on that -- where a localhost default would
+# quietly succeed and produce exactly the broken client described above.
+ARG NEXT_PUBLIC_API_BASE
 ENV NEXT_PUBLIC_API_BASE=$NEXT_PUBLIC_API_BASE
 
-# Fail the build rather than ship a client pointed at the developer's laptop.
-# A frontend built with the default and served from a cloud VM looks completely
-# healthy -- it renders, it routes -- and every request goes to the *visitor's*
-# own 127.0.0.1. That is a long debugging session, and it is avoidable here.
-RUN if [ "$NEXT_PUBLIC_API_BASE" = "http://127.0.0.1:8000" ]; then \
-      echo "WARNING: building with the localhost API base."; \
-      echo "  Fine for local use; wrong for any remote deployment."; \
-      echo "  Pass --build-arg NEXT_PUBLIC_API_BASE=http://<host>:8000"; \
-    fi
+# The opt-in for deliberately building a container to run on this machine.
+# next.config.ts fails the build on a loopback address without it.
+ARG ALLOW_LOCALHOST_API_BASE
+ENV ALLOW_LOCALHOST_API_BASE=$ALLOW_LOCALHOST_API_BASE
 
 ENV NEXT_TELEMETRY_DISABLED=1
+
+# next.config.ts asserts NEXT_PUBLIC_API_BASE is reachable before this compiles
+# anything, so a misconfigured build fails here with an explanation rather than
+# succeeding and failing silently in someone's browser later.
 RUN npm run build
 
 # ─────────────────────────────────────────────────────────────────────────────

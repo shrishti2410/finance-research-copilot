@@ -11,6 +11,45 @@ import { sessionExpired } from "./session";
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
 
+/** Hosts that mean "whichever machine is running this code". */
+const LOOPBACK = /^(?:localhost|127(?:\.\d{1,3}){3}|\[::1\]|::1|0\.0\.0\.0)$/i;
+
+/**
+ * Whether this bundle was built for a different machine than it is served from.
+ *
+ * `next.config.ts` refuses to *build* a client pointed at localhost without an
+ * explicit opt-in, which covers the common mistake. It cannot cover this one: a
+ * build that was legitimately made for localhost, then served from somewhere
+ * else. Only the browser knows, and only at request time.
+ *
+ * Worth the few lines because the symptom is otherwise silent -- the request
+ * goes to the visitor's own machine, so there is nothing in any server log, and
+ * "Cannot reach the API" sends you looking at a backend that is running fine.
+ */
+function builtForADifferentMachine(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return (
+      !LOOPBACK.test(window.location.hostname) &&
+      LOOPBACK.test(new URL(API_BASE, window.location.href).hostname)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function unreachableMessage(): string {
+  if (builtForADifferentMachine()) {
+    return (
+      `This page is served from ${window.location.host}, but its API address ` +
+      `was compiled as ${API_BASE} -- which is this browser's own machine, not ` +
+      `the server. The frontend was built without NEXT_PUBLIC_API_BASE set to ` +
+      `a reachable URL; rebuild it with the API's public address.`
+    );
+  }
+  return `Cannot reach the API at ${API_BASE}. Is it running?`;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -54,7 +93,7 @@ async function request<T>(
   } catch {
     // fetch only rejects for network-level failures, and "the API isn't
     // running" is by far the most likely one in development.
-    throw new ApiError(0, `Cannot reach the API at ${API_BASE}. Is it running?`);
+    throw new ApiError(0, unreachableMessage());
   }
 
   if (response.status === 204) return undefined as T;
@@ -225,15 +264,26 @@ export async function* askStream(
   message: string,
   signal?: AbortSignal,
 ): AsyncGenerator<AskEvent> {
-  const response = await fetch(`${API_BASE}/ask/stream`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({ conversation_id: conversationId, message }),
-    signal,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}/ask/stream`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ conversation_id: conversationId, message }),
+      signal,
+    });
+  } catch (error) {
+    // An abort is the caller stopping the stream on purpose, not a failure;
+    // rewriting it as "cannot reach the API" would be a lie the UI acts on.
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    // Everything else reaching here is network-level, and reached the user as a
+    // bare "TypeError: Failed to fetch" before this -- the same unreachable
+    // API as `request`, with none of the explanation.
+    throw new ApiError(0, unreachableMessage());
+  }
 
   if (!response.ok) {
     const body = await response.json().catch(() => null);
