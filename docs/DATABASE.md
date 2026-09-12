@@ -208,6 +208,53 @@ No Docker? Any Postgres 13+ works — a local install, or a hosted instance
 (Neon, Supabase, RDS). Point `DATABASE_URL` at it, keeping the
 `postgresql+asyncpg://` prefix.
 
+#### Where the data directory goes, and one place it must not
+
+The dev host here has no Docker, so it runs portable Postgres 16 binaries
+directly:
+
+```
+C:\Users\shris\AppData\Local\finance-research-copilot\pgsql\    binaries
+C:\Users\shris\AppData\Local\finance-research-copilot\pgdata\   the cluster
+                                                               port 55432
+```
+
+```powershell
+$pg = "$env:LOCALAPPDATA\finance-research-copilot"
+& "$pg\pgsql\bin\pg_ctl.exe" -D "$pg\pgdata" -l "$pg\pg.log" `
+    -o "-p 55432 -c listen_addresses=127.0.0.1" start
+```
+
+`%LOCALAPPDATA%`, deliberately, and **never `%TEMP%`** — including the per-session
+scratchpad, which lives under it.
+
+This is not a style preference. On 2026-09-12 the cluster was there, and
+Windows' `\Microsoft\Windows\DiskCleanup\SilentCleanup` task ran at 11:39:27 and
+deleted the database out from under a server that had been running healthily for
+eight days. It removed, by age, every file it was allowed to: `postgresql.conf`,
+most of `global/`, and the bulk of the system catalogs in all three databases —
+along with `initdb`, `pg_ctl` and the whole of the installation's `lib/`.
+Recently-touched files survived because Windows would not let it delete an open
+handle, which is why the damage looked so arbitrary.
+
+The first symptom was at 11:41:14:
+
+```
+ERROR: could not open file "base/1/2601": No such file or directory
+```
+
+Postgres reported this correctly and kept serving what it could still read, so
+the failure surfaced as one oddly-failing test rather than as an outage. There
+was no crash, no improper shutdown, and nothing wrong with Postgres. WAL replay
+cannot help: it replays changes to pages in relation files, it does not recreate
+deleted ones — and with `postgresql.conf` gone the server will not start far
+enough to try.
+
+The container deployment is not exposed to this (`docs/DEPLOYMENT.md`): `pgdata`
+is a named Docker volume, and nothing prunes those by age. The transferable rule
+is just the one above — a data directory must never live anywhere a cleaner
+believes it owns.
+
 ### 2. Configure
 
 ```bash
