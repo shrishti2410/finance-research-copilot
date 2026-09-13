@@ -30,8 +30,12 @@ DURATION="${DURATION:-20m}"
 LEVELS="${LEVELS:-5 10 20}"
 FRESH="${FRESH:-0}"
 POOL_SIZE="${POOL_SIZE:-20}"
-OUT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/results"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# OUT keeps runs that must not overwrite each other's CSVs apart -- the replica
+# comparison runs the same levels once per configuration. The account pool
+# always lives in results/, where the locustfile reads it.
+OUT="${OUT:-$HERE/results}"
+POOL="$HERE/results/users.json"
 
 mkdir -p "$OUT"
 
@@ -41,7 +45,7 @@ if [ "$FRESH" = "1" ]; then
   echo
 fi
 
-if [ ! -f "$OUT/users.json" ]; then
+if [ ! -f "$POOL" ]; then
   echo "No account pool. Run: python benchmarks/provision_users.py --users 20" >&2
   echo "Or re-run with FRESH=1 to provision one now." >&2
   exit 1

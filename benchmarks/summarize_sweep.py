@@ -1,8 +1,8 @@
 """Turn the sweep's CSVs into the comparison the sweep was run to produce.
 
-    python benchmarks/summarize_sweep.py
+    python benchmarks/summarize_sweep.py [RESULTS_DIR]
 
-Reads benchmarks/results/c{NN}_stats.csv and reports, per concurrency level:
+Reads c{NN}_stats.csv from RESULTS_DIR (default benchmarks/results/) and reports, per concurrency level:
 throughput, total latency, time to first token, and how the two diverge -- which
 is what distinguishes a system that is working harder from one that is queueing.
 
@@ -86,15 +86,16 @@ def read_level(stats_csv: pathlib.Path) -> dict:
 
 
 def main() -> int:
+    results = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else RESULTS
     levels = []
-    for path in sorted(RESULTS.glob("c*_stats.csv")):
+    for path in sorted(results.glob("c*_stats.csv")):
         match = re.search(r"c(\d+)_stats\.csv$", path.name)
         if not match:
             continue
         levels.append((int(match.group(1)), read_level(path)))
 
     if not levels:
-        print(f"No sweep results in {RESULTS}. Run benchmarks/run_sweep.sh first.")
+        print(f"No sweep results in {results}. Run benchmarks/run_sweep.sh first.")
         return 1
 
     print("Full stack under concurrent load: auth, agent loop, tools, DB, inference")

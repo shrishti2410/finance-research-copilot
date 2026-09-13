@@ -137,6 +137,33 @@ now prints `runs/min` and `ok/min` side by side and scales on the delivered rate
 Caught because 8x throughput from a server measured at 1.15x batching is not a
 result, it is a unit error.
 
+### Keeping runs apart
+
+`OUT=benchmarks/results/<name> bash benchmarks/run_sweep.sh` writes a sweep's CSVs
+to their own directory, and `python benchmarks/summarize_sweep.py <dir>` reads
+them back. Without that, a second configuration overwrites the first one's CSVs.
+
+---
+
+## `replica_ab.py` and `router_overhead.py` — replicas behind a router
+
+```bash
+python benchmarks/replica_ab.py                  # ~1 h: 6 configurations x 2 rounds
+python benchmarks/router_overhead.py synthetic   # ~16 min: the router alone, fake upstream
+python benchmarks/router_overhead.py ollama      # ~20 min: direct vs router, interleaved
+```
+
+These measure the inference servers alone, not the agent, using the same request
+loop as `scripts/load_test.py`:
+- **`replica_ab.py`** compares one Ollama, two behind `inference_router`, two with
+  the thread budget split, and one at `NUM_PARALLEL=2`.
+- **`router_overhead.py`** takes apart whether the router costs throughput, and if
+  so through which mechanism.
+
+Results, and the recommendation that follows from them, are in
+[`docs/INFERENCE_REPLICAS.md`](../docs/INFERENCE_REPLICAS.md). All of it is measured
+on `qwen2.5:1.5b`, because two 7b replicas do not fit in this machine's RAM.
+
 ### Why accounts are pre-provisioned
 
 `/auth/*` is limited to 10 requests per minute **per IP regardless of token**,
