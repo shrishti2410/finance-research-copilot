@@ -72,7 +72,7 @@ BASELINE = "router, 1 replica"
 class Config:
     name: str
     ports: tuple[int, ...]
-    model: str = MODEL
+    model: str | None = None       # None: whatever --model names
     via_router: bool = True
     second_parallel: int = 1       # OLLAMA_NUM_PARALLEL for the replica on 11435
 
@@ -223,13 +223,21 @@ def run(args) -> pathlib.Path:
         if port_answers(port):
             raise SystemExit(f"port {port} is already in use; this script must own it")
     binary = ollama_binary(args.ollama)
-    ensure_thread_variant()
+    configs = [c for c in CONFIGS if not args.only or c.name in args.only]
+    unknown = set(args.only or ()) - {c.name for c in CONFIGS}
+    if unknown or not configs:
+        raise SystemExit(f"unknown configuration(s): {sorted(unknown)}")
+    levels = ([tuple(int(x) for x in pair.split(":")) for pair in args.levels.split(",")]
+              if args.levels else LEVELS)
+    if any(c.model == MODEL_T3 for c in configs):
+        ensure_thread_variant()
 
     def write(record: dict) -> None:
         with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record) + "\n")
 
-    write({"type": "meta", "started": stamp, "levels": LEVELS, "max_tokens": args.max_tokens,
+    write({"type": "meta", "started": stamp, "levels": levels, "model": args.model,
+           "max_tokens": args.max_tokens,
            "rounds": args.rounds, "cpu_logical": os.cpu_count(),
            "ollama": httpx.get(f"http://127.0.0.1:{PRIMARY}/api/version").json()["version"]})
 
@@ -238,8 +246,9 @@ def run(args) -> pathlib.Path:
     router = None
     try:
         for rnd in range(1, args.rounds + 1):
-            order = CONFIGS if rnd % 2 else list(reversed(CONFIGS))
+            order = configs if rnd % 2 else list(reversed(configs))
             for cfg in order:
+                model = cfg.model or args.model
                 print(f"\n[round {rnd}] {cfg.name}", flush=True)
                 stop(router)
                 router = None
@@ -250,15 +259,15 @@ def run(args) -> pathlib.Path:
                                                   logs / "ollama-11435.log")
                 unload_everything((PRIMARY, SECOND))
                 for port in cfg.ports:
-                    warm(port, cfg.model)
+                    warm(port, model)
                 if cfg.via_router:
                     router = start_router(cfg.ports, logs / "router.log")
                     base = f"http://127.0.0.1:{ROUTER}"
                 else:
                     base = f"http://127.0.0.1:{cfg.ports[0]}"
 
-                for concurrency, total in LEVELS:
-                    rec = measure(base, cfg.model, concurrency, total, args.max_tokens)
+                for concurrency, total in levels:
+                    rec = measure(base, model, concurrency, total, args.max_tokens)
                     write({"type": "level", "round": rnd, "config": cfg.name, **rec})
                     print(f"  c={concurrency:<2} {rec['system_tps']:6.1f} tok/s system   "
                           f"TTFT p50 {rec['ttft_p50'] or 0:6.2f}s   ok {rec['ok']}/{total}",
@@ -295,7 +304,7 @@ def summarize(path: pathlib.Path) -> None:
         return statistics.mean(v) if v else float("nan")
 
     width = max(len(n) for n in names) + 2
-    print(f"Raw inference, {MODEL}, {meta['max_tokens']} max tokens, "
+    print(f"Raw inference, {meta.get('model', MODEL)}, {meta['max_tokens']} max tokens, "
           f"{meta['rounds']} rounds, Ollama {meta['ollama']}")
     print("\nSystem throughput, tok/s  (mean of rounds, [min-max])")
     print(f"{'':<{width}}" + "".join(f"{'c=' + str(c):>17}" for c in cs))
@@ -306,13 +315,15 @@ def summarize(path: pathlib.Path) -> None:
             cells.append(f"{statistics.mean(v):6.1f} [{min(v):4.1f}-{max(v):4.1f}]" if v else "-")
         print(f"{n:<{width}}" + "".join(f"{x:>17}" for x in cells))
 
-    print(f"\nRelative to '{BASELINE}' at the same concurrency")
-    print(f"{'':<{width}}" + "".join(f"{'c=' + str(c):>9}" for c in cs) + f"{'peak vs peak':>14}")
-    base_peak = max(mean(BASELINE, c, "system_tps") for c in cs)
-    for n in names:
-        ratios = [mean(n, c, "system_tps") / mean(BASELINE, c, "system_tps") for c in cs]
-        peak = max(mean(n, c, "system_tps") for c in cs)
-        print(f"{n:<{width}}" + "".join(f"{r:>8.2f}x" for r in ratios) + f"{peak / base_peak:>13.2f}x")
+    if BASELINE in names:
+        print(f"\nRelative to '{BASELINE}' at the same concurrency")
+        print(f"{'':<{width}}" + "".join(f"{'c=' + str(c):>9}" for c in cs) + f"{'peak vs peak':>14}")
+        base_peak = max(mean(BASELINE, c, "system_tps") for c in cs)
+        for n in names:
+            ratios = [mean(n, c, "system_tps") / mean(BASELINE, c, "system_tps") for c in cs]
+            peak = max(mean(n, c, "system_tps") for c in cs)
+            print(f"{n:<{width}}" + "".join(f"{r:>8.2f}x" for r in ratios)
+                  + f"{peak / base_peak:>13.2f}x")
 
     print("\nMedian time to first token, s  /  per-stream tok/s")
     print(f"{'':<{width}}" + "".join(f"{'c=' + str(c):>15}" for c in cs))
@@ -338,6 +349,11 @@ def main() -> int:
     ap.add_argument("--max-tokens", type=int, default=128)
     ap.add_argument("--cooldown", type=float, default=30.0, help="seconds between configurations")
     ap.add_argument("--ollama", help="path to the ollama binary")
+    ap.add_argument("--model", default=MODEL,
+                    help="model for every configuration that does not pin its own")
+    ap.add_argument("--only", action="append",
+                    help="run just this configuration, by exact name (repeatable)")
+    ap.add_argument("--levels", help='concurrency:requests pairs, e.g. "1:3,2:4,4:8"')
     args = ap.parse_args()
 
     path = args.summarize or run(args)

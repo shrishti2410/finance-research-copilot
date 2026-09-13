@@ -81,9 +81,9 @@ as `docker-compose.gpu.yml`.
 
 ## Measured on this laptop
 
-### Every number here is qwen2.5:1.5b, not the production qwen2.5:7b
+### Which model each number comes from
 
-**All of these measurements used `qwen2.5:1.5b`, not the app's production
+**The replica comparison used `qwen2.5:1.5b`, not the app's production
 `qwen2.5:7b` model. Two 7b replicas cannot fit in this machine's 15.7 GB of RAM
 alongside the OS and the other running services.** Measured, not estimated:
 
@@ -97,9 +97,18 @@ alongside the OS and the other running services.** Measured, not estimated:
 - With one 1.5b copy on each replica and nothing else loaded, 4.0 GB stayed
   free.
 
-So what follows is measured on 1.5b and transfers to 7b in direction only. The
-production model decodes at 2.8–4.2 tok/s on this host, against 1.5b's ~20, and
-none of the ratios below were measured on it.
+**What was measured at 7b, and what was not:**
+
+- **Two 7b replicas: not run in any form.** They cannot be loaded at the same
+  time, so neither their throughput nor their combined memory was measured.
+  Wherever this document gives "+5,318 MB" for a second 7b replica, that is one
+  7b runner's measured private memory. It stands for what a second, unshared
+  copy would need; it is not a reading of two loaded together.
+- **One 7b replica at `NUM_PARALLEL=1` vs `NUM_PARALLEL=2`: memory and
+  throughput both measured.** That configuration fits (5,768 MB), so it was
+  measured instead of assumed. See the 7b table under the recommendation.
+
+Every throughput figure not labelled 7b is from 1.5b.
 
 ### Setup
 
@@ -216,6 +225,36 @@ memory. For that it buys roughly three times the throughput gain (1.32x against
 1.10x at c=8). Median time to first token at c=8 drops from 45s to 28s, and a
 lone request gives up nothing measurable.
 
+**At 7b, the production model, most of the throughput gain disappears.** One
+replica of qwen2.5:7b, 128 max tokens, 3/4/8 requests at c=1/2/4, two rounds in
+ABBA order, 0 failures in 60 requests (`replica_ab.py --model qwen2.5:7b`):
+
+| qwen2.5:7b | c=1 | c=2 | c=4 |
+|---|---|---|---|
+| NUM_PARALLEL=1, tok/s [min–max] | 5.0 [5.0–5.0] | 5.2 [5.0–5.3] | 5.0 [4.6–5.4] |
+| NUM_PARALLEL=2, tok/s [min–max] | 5.3 [5.2–5.4] | 5.6 [5.6–5.6] | 5.2 [4.8–5.6] |
+| throughput ratio | 1.05x | 1.08x | 1.03x |
+| median TTFT, NUM_PARALLEL=1 → 2 | 1.50 → 1.44 s | **19.24 → 0.45 s** | **70.4 → 48.1 s** |
+
+The gain is 1.03–1.08x, and at c=4 the two settings' ranges overlap. Compare
+1.29–1.34x at 1.5b. One possible reason, which was not measured: at 7b each token
+is compute-bound as well as bandwidth-bound, so a second sequence in the batch
+costs real compute instead of riding along on weight reads that were happening
+anyway.
+
+What survives is **latency**. With two requests at once, the second no longer
+waits for the first to finish: its time to first token falls from 19 s to under
+half a second. At c=4 the median wait falls from 70 s to 48 s. At the production
+model, then, `NUM_PARALLEL=2` is a latency setting more than a throughput
+setting.
+
+| trade-off | extra memory | throughput | time to first token under load |
+|---|---|---|---|
+| NUM_PARALLEL=2 at 1.5b | +224 MB | 1.29–1.34x | 45 s → 28 s at c=8 |
+| NUM_PARALLEL=2 at 7b | +450 MB | 1.03–1.08x | 19 s → 0.45 s at c=2, 70 s → 48 s at c=4 |
+| second replica at 1.5b | +1,412 MB | ≤1.10x, inside noise | 45 s → 34 s at c=8 |
+| second replica at 7b | +5,318 MB | not measurable: does not fit | – |
+
 The alternatives lose for different reasons:
 - **A second replica** pays for a full copy of the weights and gets nothing back
   that can be measured on this CPU.
@@ -224,8 +263,10 @@ The alternatives lose for different reasons:
 
 Limits of this recommendation:
 
-- **Throughput was measured on 1.5b only.** The 7b memory cost is measured; the 7b
-  throughput gain from `NUM_PARALLEL=2` is not.
+- **The throughput case is a 1.5b result.** At 7b, the model that writes the app's
+  answers, `NUM_PARALLEL=2` measured 1.03–1.08x: a latency improvement, not a
+  capacity one. Two 7b replicas were tested for neither throughput nor combined
+  memory, because they do not fit.
 - **The app's normal pair gets tight.** Running 7b and 1.5b together, both at
   `NUM_PARALLEL=2`, adds about 674 MB. That leaves roughly 0.4 GB of the 1.05 GB
   that was free on this laptop. It fits, with little margin. On a GPU VM it would
