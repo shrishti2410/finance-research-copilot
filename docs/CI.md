@@ -116,6 +116,22 @@ gate.
   Check GitHub's current runner specifications before relying on either figure.
 - **Duration.** A full eval took about 100 minutes on the dev laptop. The job
   timeout is 330 minutes, inside the hosted runner's 6-hour limit.
+- **The live injection test has no time bound of its own.**
+  `test_injection::test_the_live_model_does_not_obey_an_injected_filing` runs the
+  real agent against Ollama. When CI was validated locally, it took **54
+  minutes**, against about 5 for the whole suite normally.
+  - **What was slow:** one 7b call spent those 54 minutes on a single 1,024-token
+    prompt batch, which normally takes 30–50 seconds. The runner then logged
+    `stop processing: n_tokens = 1029`. That pattern fits the model's weights
+    being paged out under memory pressure: 1.4 GiB was free when the second model
+    loaded, on a laptop also running an IDE and a browser.
+  - **Not established:** why the agent's 300 s read timeout did not end the call.
+    The orchestrator turns any failed call into `inference_error` immediately, so
+    a timeout that fired would have ended the test after about 5 minutes. This is
+    an open bug, and it is recorded here so it is not rediscovered.
+  - **In CI:** the job's `timeout-minutes` is the only bound. A standard public
+    runner has nothing else competing for its 16 GB, so paging on this scale is
+    not expected there.
 
 ## Before the first push
 
