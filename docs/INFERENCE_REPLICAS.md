@@ -271,14 +271,13 @@ Limits of this recommendation:
   `NUM_PARALLEL=2`, adds about 674 MB. That leaves roughly 0.4 GB of the 1.05 GB
   that was free on this laptop. It fits, with little margin. On a GPU VM it would
   not matter.
-- **It has not been measured through the agent.** 1.3x is a queue that moves
-  about 30% faster. It can raise the full-stack ceiling in
-  `benchmarks/LOAD_TEST_RESULTS.md` (between 5 and 10 users) by at most that
-  factor.
+- **Through the agent, it could not be shown.** The full-stack comparison below
+  came out inconclusive, because this host paged heavily in three of its four
+  cells.
 - **Only 1 and 2 were tested.** `NUM_PARALLEL` 3 or higher was not.
 - **Not applied.** `OLLAMA_NUM_PARALLEL` stays 1 in `docker-compose.yml` and in the
-  local setup. Changing it means accepting the memory trade-off above, and that is
-  a decision rather than a default.
+  local setup. The full-stack test that would have justified changing it was
+  inconclusive; see below.
 
 The router still earns its place, for everything except throughput on one CPU. It
 is the component that turns "one replica per GPU" into a single endpoint. It
@@ -371,6 +370,77 @@ what puts the ceiling of about 10,000 tok/s in part 1 above.
 python benchmarks/router_overhead.py synthetic    # ~16 min
 python benchmarks/router_overhead.py ollama       # ~20 min
 ```
+
+### Full stack, NUM_PARALLEL=1 vs 2 through the agent: inconclusive, not applied
+
+This is the measurement that decides a default. The raw-inference results above
+do not. It was run with
+[`benchmarks/parallel_ab.py`](../benchmarks/parallel_ab.py) on 2026-09-13:
+- **Models:** the app's real setup, 7b writing answers and 1.5b routing, on one
+  Ollama.
+- **Harness:** the corrected Locust harness, with a fresh account pool and fresh
+  tokens for every cell.
+- **Cells:** 20 minutes each, in ABBA order, with each runner's `-np` checked.
+
+**Decision rule, fixed before the run:**
+- `NUM_PARALLEL=2` has to deliver at least 1.15x the answers per minute *and* a
+  lower median latency, at both 2 and 5 users, with no more failures.
+- Any cell averaging more than 500 hard page-ins per second makes the result
+  inconclusive. Idle on this host reads 30–80.
+
+| NUM_PARALLEL | users | runs done | failed | answers | answers/min | median total | median TTFT | min free RAM | page-ins/s mean / max | cell took |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 2 | 9 | 0 | 9 | 0.52 | 238 s | 83 s | 469 MB | 111 / 3,693 | 22 min |
+| 2 | 2 | 5 | 3 | 2 | 0.08 | 491 s | 124 s | 195 MB | **1,119** / 26,596 | 26 min |
+| 1 | 5 | 5 | 5 | 0 | 0.00 | 1,501 s | – | 1,595 MB | **4,463** / 9,307 | 76 min |
+| 2 | 5 | 5 | 5 | 0 | 0.00 | 14,122 s | – | 363 MB | **4,670** / 26,201 | **297 min** |
+
+No model reloaded mid-cell in any of the four.
+
+**Verdict: inconclusive.** Three of the four cells paged heavily, so they
+measured the pagefile rather than `NUM_PARALLEL`:
+- **Only one cell is clean:** `NUM_PARALLEL=1` at 2 users.
+- **Taken at face value, the numbers go against `NUM_PARALLEL=2`.** At 2 users it
+  delivered 0.08 answers per minute against 0.52. But that cell paged at ten times
+  the clean cell's rate, with 195 MB free, so it cannot be read as the setting's
+  effect.
+- **At 5 users, both settings delivered nothing,** and both paged.
+
+The practical answer for *this* host is plain even without a clean comparison.
+With 7b and 1.5b loaded, `NUM_PARALLEL=2` does not leave enough memory to run the
+agent without paging.
+
+**Not applied.** `OLLAMA_NUM_PARALLEL` stays `1` in `docker-compose.yml`, and
+`.env.example` and `docs/DEPLOYMENT.md` are unchanged. The raw-inference results
+above stand as benchmark findings, not as a recommended setting. Settling it needs
+the same run on a host with headroom: either a machine the size of the 16 GB CI
+runner with nothing else open, or this laptop with the IDE and browser closed.
+
+### Found along the way: inference calls that outlive the 300 s timeout
+
+`INFERENCE_READ_TIMEOUT` is 300 s, and the load-test write-ups treat it as the
+bound on how long an inference call can take. Under memory pressure it was not:
+
+- **`NUM_PARALLEL=2`, 5 users:** five Ollama requests lasted **3 h 53 min** each
+  and ended in 500. The 20-minute cell ran for 297 minutes.
+- **`NUM_PARALLEL=1`, 5 users:** five requests lasted **24 min 55 s** each.
+- **`NUM_PARALLEL=2`, 2 users:** one request ended at **exactly 5 min 0 s**. That
+  is the timeout working, on the same code path.
+- **During CI validation** the live injection test waited 54 minutes on one call
+  (see `docs/CI.md`).
+
+What is known is the timeout's type. httpx's read timeout limits *silence between
+bytes*, not the length of a call. One mechanism fits most of the evidence: a
+model starved by paging emits a token every few minutes, and each token resets the
+read timer. 512 tokens at ~27 s each is ~3.8 hours, close to the 3 h 53 min
+observed. It does not fit the 54-minute case cleanly, because that runner was still
+in prompt processing and had emitted nothing. **So the cause is not established.**
+
+Why it matters: under memory pressure, one user's turn can take hours, and a load
+test can run many times longer than its configured duration. The fix direction is
+a total deadline on each inference call, separate from the read timeout. It has
+not been implemented; it is a behaviour change to the agent, and it should be made
+deliberately.
 
 ## What changes on real GPU hardware (not run)
 

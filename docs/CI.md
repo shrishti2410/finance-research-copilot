@@ -129,6 +129,11 @@ gate.
     The orchestrator turns any failed call into `inference_error` immediately, so
     a timeout that fired would have ended the test after about 5 minutes. This is
     an open bug, and it is recorded here so it is not rediscovered.
+  - **Reproduced through the full stack.** The `NUM_PARALLEL` load test held five
+    requests for 3 h 53 min each, and another five for 25 minutes, all under heavy
+    paging. The evidence and the leading hypothesis are in
+    `docs/INFERENCE_REPLICAS.md`: httpx's read timeout limits silence between
+    bytes, not total call time.
   - **In CI:** the job's `timeout-minutes` is the only bound. A standard public
     runner has nothing else competing for its 16 GB, so paging on this scale is
     not expected there.
