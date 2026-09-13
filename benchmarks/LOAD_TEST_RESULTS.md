@@ -121,6 +121,90 @@ allow, not `db_pool_size + db_max_overflow`. Pinned by
 `tests/test_ask_endpoint.py::test_no_connection_is_held_across_the_agent_run`,
 which fails if a session is ever open across `run_agent` again.
 
+## Re-measured after both fixes: the full sweep
+
+Run 2026-09-13 on a freshly provisioned pool, 10 minutes per level, same harness.
+Two things changed between this run and the original, and both were checked before
+trusting a number:
+
+- **The machine rebooted in between** for a Windows update, and Ollama
+  auto-updated from 0.32.15 to 0.34.0. The M2 batching probe reads 1.00/1.16/1.15x
+  at concurrency 1/2/4 on 0.34.0 against 1.00/1.06/1.15x on 0.32.15 — identical at
+  saturation — and single-user speed is unchanged (below).
+- **The sweep's own c=1 level is too thin to scale against.** It caught two runs
+  of the same question at 471s and 69s: the first wandered through
+  `get_stock_price` and `search_filings` before `calculate_ratio`, the second went
+  straight there. That is 6.8x from agent path choice alone. The ratios below use a
+  separate 20-minute single-user run on a fresh account instead: 13 runs, all
+  delivered, median 86s, TTFT 37s, **0.68 answers/min**. The original sweep's c=1
+  was 88s and 0.62/min on the pre-fix code, which is the check that neither fix
+  touched single-user performance.
+
+Throughput is **delivered** throughput — runs that returned a response — not
+Locust's request rate, which counts inference timeouts as completed work (bug 5 in
+`README.md`; the first reading of this sweep said 7.95x at 20 users).
+
+### Failures, by kind
+
+| users | | tried | completed | delivered | QueuePool | 500s | inference_error |
+|---|---|---|---|---|---|---|---|
+| 5 | before | 4 | 4 | 3 | 0 | 0 | 1 |
+| 5 | after | 4 | 4 | 4 | 0 | 0 | 0 |
+| 10 | before | 63 | 4 | 2 | **25** | **33** | 2 |
+| 10 | after | 8 | 8 | 1 | **0** | **0** | 7 |
+| 20 | before | 284 | 0 | 0 | **37** | **231** | 0 |
+| 20 | after | 16 | 16 | 2 | **0** | **0** | 14 |
+
+### Scaling, against the 20-minute single-user baseline
+
+| users | delivered/min | vs 1 user | latency median | vs 1 user | TTFT median | vs 1 user |
+|---|---|---|---|---|---|---|
+| 1 | 0.68 | 1.00x | 86s | 1.00x | 37s | 1.00x |
+| 5 | 0.42 | 0.62x | 178s | 2.07x | 129s | 3.49x |
+| 10 | 0.11 | 0.17x | 399s | 4.64x | 360s | 9.72x |
+| 20 | 0.22 | 0.33x | 460s | 5.35x | 281s | 7.59x |
+
+**The 500 wall is gone.** Zero pool timeouts and zero 500s at every level. At
+twenty users every run now completes, where before none did.
+
+**The new ceiling is between five and ten users, and it is the model.** Five
+concurrent users ran with no failures. At ten, seven of eight runs ended
+`inference_error`; at twenty, fourteen of sixteen. Median time to first token at
+ten users is 360s — past the 300s per-call read timeout — so most requests are
+timing out while still waiting for the model. Six through nine were not run, so
+the exact point is not measured.
+
+**Delivered throughput did not improve, and past saturation it falls below one
+user.** 0.68 answers/min at one user, 0.42 at five, 0.11 at ten, 0.22 at twenty.
+Before and after are within noise wherever both delivered anything. This is
+goodput collapse: a run that times out has usually already spent model time on its
+earlier iterations, so accepting more concurrent work than the model can finish
+reduces how much finishes. The fixes removed a failure mode in the application;
+they could not create inference capacity.
+
+Two comparisons this data does not support:
+
+- **Latency before vs after at 10 and 20 users.** The original figures there are
+  survivorship-biased: most requests failed in about 30 seconds on the pool, and
+  the latencies come from the few that got a connection. After the fix every
+  request waits its turn, so the after-latencies are the honest ones.
+- **Latency at five users** (371s before, 178s after). Four samples each, against
+  6.8x of agent-path variance on a single repeated question.
+
+The focused 10- and 20-user re-run in the previous section used a pool reused from
+earlier sweeps, so its latency figures carry the history-replay inflation described
+as bug 4 in `README.md`. Its conclusion — no pool timeouts, no 500s — does not
+depend on prompt length and is reconfirmed here.
+
+**What this changes about serving 20 users.** Admission control moves up the list
+below. A request turned away at the door with a 503 costs nothing; a request
+accepted and timed out minutes later costs model time that queued work needed. The
+measurements predict that capping in-flight runs near five would deliver roughly
+the five-user rate (0.42/min) under a twenty-user load, rather than the 0.22/min
+that accepting all twenty did — a prediction, not something this sweep tested. A
+batching inference server remains the only change here that raises the ceiling
+itself.
+
 ### 1. A database connection was held for the entire agent run — fixed
 
 `/ask` and `/ask/stream` both took `session: AsyncSession = Depends(get_session)`.

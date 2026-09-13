@@ -92,7 +92,7 @@ than a defect. What it can still answer precisely: where the queue forms, how
 latency and time-to-first-token diverge as it grows, and at what concurrency the
 stack starts failing rather than merely slowing.
 
-### Four bugs this harness had, all found by running it
+### Five bugs this harness had, all found by running it
 
 Kept here because each produced a plausible-looking wrong answer, which is the
 failure mode a load test is most prone to.
@@ -127,6 +127,15 @@ keep their history between sweeps, and the replayed window makes every later run
 slower for reasons outside the code under test. Caught by noticing that a
 single-user median had tripled after a change that only touched connection
 lifetimes — which could not plausibly have slowed generation down.
+
+**5. Locust's request rate counts timeouts as throughput.** `Requests/s` counts
+every *finished* run, and an `inference_error` finishes. So under saturation the
+rate keeps rising while users receive nothing. The first post-fix sweep reported
+**7.95x** throughput at 20 users when 14 of its 16 runs had timed out; the rate
+of runs that actually delivered a response was **0.99x**. `summarize_sweep.py`
+now prints `runs/min` and `ok/min` side by side and scales on the delivered rate.
+Caught because 8x throughput from a server measured at 1.15x batching is not a
+result, it is a unit error.
 
 ### Why accounts are pre-provisioned
 
