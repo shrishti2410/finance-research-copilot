@@ -1,0 +1,131 @@
+# The eval gate: a change to the agent, retrieval or tools must not make the
+# agent measurably less accurate than the saved baseline.
+#
+# "Measurably" is eval.compare's noise band, not any single flipped case. The
+# eval is not deterministic -- two runs of unchanged code disagreed on 5 of 18
+# cases -- so a gate on any drop at all would fail unchanged commits. The band is
+# EVAL_MIN_CASES below; see docs/CI.md before changing it.
+#
+# Slow by nature: 40 questions through the full /ask path on a CPU runner, about
+# 100 minutes on the dev laptop. That is why it runs only when behaviour-bearing
+# code changes, and why it is a separate workflow from the test suite.
+
+name: eval-gate
+
+on:
+  push:
+    paths:
+      - "agent/**"
+      - "rag/**"
+      - "tools/**"
+      - "eval/**"
+      - ".github/workflows/eval-gate.yml"
+      - ".github/actions/prepare-stack/**"
+  pull_request:
+    paths:
+      - "agent/**"
+      - "rag/**"
+      - "tools/**"
+      - "eval/**"
+      - ".github/workflows/eval-gate.yml"
+      - ".github/actions/prepare-stack/**"
+
+concurrency:
+  group: eval-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    # Hosted runners stop a job at 6 hours. Leave room to upload the report.
+    timeout-minutes: 330
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: finance_copilot
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d finance_copilot"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/finance_copilot
+      REDIS_URL: redis://127.0.0.1:6379/0
+      INFERENCE_BASE_URL: http://127.0.0.1:11434/v1
+      INFERENCE_MODEL: qwen2.5:1.5b
+      AGENT_MODEL: qwen2.5:7b
+      AGENT_ROUTER_MODEL: qwen2.5:1.5b
+      PYTHONUNBUFFERED: "1"
+      # Net cases a run must lose before it counts as worse. One case is 2.5
+      # points of 40. Lowering this makes the gate fail on noise.
+      EVAL_MIN_CASES: "2"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: stack
+        uses: ./.github/actions/prepare-stack
+        with:
+          sec-edgar-user-agent: ${{ secrets.SEC_EDGAR_USER_AGENT }}
+
+      - name: Start the API
+        run: |
+          # A fresh secret per run: the eval signs up throwaway accounts, and the
+          # public dev default must never sign a token on a network-reachable host.
+          export JWT_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+          nohup python -m uvicorn api.main:app --host 127.0.0.1 --port 8000 \
+            > "$RUNNER_TEMP/api.log" 2>&1 &
+          for _ in $(seq 120); do
+            if [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/health)" = "200" ]; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::The API did not become healthy in 120s"
+          cat "$RUNNER_TEMP/api.log"
+          curl -s http://127.0.0.1:8000/health || true
+          exit 1
+
+      - name: Eval against the saved baseline
+        run: |
+          # Exit codes: 0 better or flat, 1 worse beyond the band, 2 the eval
+          # could not run. All non-zero codes fail the build: an eval that did
+          # not run has not shown the change is safe.
+          python -m eval.compare --min-cases "$EVAL_MIN_CASES" --out eval_run.json \
+            | tee eval_compare.txt
+          exit "${PIPESTATUS[0]}"
+
+      - name: Put the verdict on the run page
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo '## Eval vs baseline'
+            echo '```'
+            cat eval_compare.txt 2>/dev/null || echo "(the comparison did not run)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the per-case report and logs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: |
+            eval_run.json
+            eval_compare.txt
+            ${{ runner.temp }}/api.log
+            ${{ runner.temp }}/ollama.log
+          if-no-files-found: ignore

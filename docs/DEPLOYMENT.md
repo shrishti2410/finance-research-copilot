@@ -707,6 +707,9 @@ Honest list, because finding these at 2am is worse than reading them now.
 - **Postgres password defaults to `postgres`.** Not published beyond the compose
   network, but set `POSTGRES_PASSWORD` anyway.
 - **`data/edgar` and `pgdata` grow without bound.** Nothing prunes either.
-- **The eval harness is not wired into the deployment.** `python -m eval.compare`
-  works in the container and is how you find out whether a config change helped;
-  a full run is 60–90 minutes and nothing schedules it.
+- **The eval gates changes, not the running deployment.** CI runs
+  `python -m eval.compare` on every change to `agent/`, `rag/`, `tools/` or `eval/`
+  and fails the build on a regression ([`docs/CI.md`](CI.md)). Nothing runs it
+  against a live deployment on a schedule. Running it by hand against the deployed
+  API is the rollback signal, and `docs/CI.md` has the procedure for returning to
+  the last known-good commit.

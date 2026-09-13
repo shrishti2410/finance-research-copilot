@@ -1,0 +1,105 @@
+name: Prepare the stack
+description: >-
+  Python dependencies, models, Ollama, migrations and the NVDA/AAPL index --
+  everything the test suite and the eval need, so that neither can pass by
+  skipping what it could not reach. Expects the job to provide Postgres
+  (pgvector) and Redis as service containers, and DATABASE_URL / REDIS_URL.
+
+inputs:
+  sec-edgar-user-agent:
+    description: >-
+      SEC EDGAR User-Agent: a name and a reachable contact, as SEC requires.
+      Pass secrets.SEC_EDGAR_USER_AGENT; never write the value into a workflow.
+    required: true
+  ollama-version:
+    description: Pinned to the version this repo's benchmarks measured.
+    default: "0.34.0"
+
+runs:
+  using: composite
+  steps:
+    - name: Free disk space for the models
+      shell: bash
+      run: |
+        # ~5.7 GB of models plus torch does not fit in what ubuntu-latest leaves
+        # free by default. None of these toolchains is used here.
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        df -h /
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+        cache: pip
+        cache-dependency-path: requirements.txt
+
+    - name: Install Python dependencies (CPU torch)
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        # The CPU wheel first, as the Dockerfile does. Left to requirements.txt,
+        # Linux pip pulls ~2.5 GB of CUDA libraries a GPU-less runner cannot use.
+        pip install torch --index-url https://download.pytorch.org/whl/cpu
+        pip install -r requirements.txt
+
+    - name: Cache Hugging Face models (bge-small, Qwen tokenizer)
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/huggingface
+        key: hf-bge-small-qwen-tokenizer-v1
+
+    - name: Cache Ollama models
+      uses: actions/cache@v4
+      with:
+        path: ~/.ollama/models
+        key: ollama-qwen2.5-7b-1.5b-v1
+
+    - name: Start Ollama
+      shell: bash
+      env:
+        OLLAMA_VERSION: ${{ inputs.ollama-version }}
+      run: |
+        curl -fsSL https://ollama.com/install.sh | sh
+        # The installer starts a system service that keeps models under
+        # /usr/share/ollama -- outside the cache above -- with none of this app's
+        # settings. Replace it with a server run as the runner user.
+        sudo systemctl disable --now ollama || true
+        # Same settings as docker-compose.yml's CPU defaults, so CI measures the
+        # configuration that ships.
+        OLLAMA_HOST=127.0.0.1:11434 \
+        OLLAMA_CONTEXT_LENGTH=8192 \
+        OLLAMA_NUM_PARALLEL=1 \
+        OLLAMA_MAX_LOADED_MODELS=2 \
+        OLLAMA_KEEP_ALIVE=-1 \
+          nohup ollama serve > "$RUNNER_TEMP/ollama.log" 2>&1 &
+        for _ in $(seq 60); do
+          curl -fs http://127.0.0.1:11434/api/version && break
+          sleep 1
+        done
+        ollama pull qwen2.5:7b
+        ollama pull qwen2.5:1.5b
+
+    - name: Require the EDGAR User-Agent secret
+      shell: bash
+      env:
+        SEC_EDGAR_USER_AGENT: ${{ inputs.sec-edgar-user-agent }}
+      run: |
+        if [ -z "$SEC_EDGAR_USER_AGENT" ]; then
+          echo "::error::Repository secret SEC_EDGAR_USER_AGENT is not set. SEC requires a name and a reachable contact. Pull requests from forks do not receive secrets. See docs/CI.md."
+          exit 1
+        fi
+
+    - name: Cache EDGAR filings
+      uses: actions/cache@v4
+      with:
+        path: data/edgar
+        key: edgar-nvda-aapl-10k-v1
+
+    - name: Migrate
+      shell: bash
+      run: alembic upgrade head
+
+    - name: Index NVDA and AAPL
+      shell: bash
+      env:
+        SEC_EDGAR_USER_AGENT: ${{ inputs.sec-edgar-user-agent }}
+      run: python scripts/index_filings.py NVDA AAPL

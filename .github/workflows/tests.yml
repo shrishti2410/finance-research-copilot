@@ -1,0 +1,83 @@
+# The test gate: the full suite on every push and pull request, with the stack it
+# needs actually present -- and a skipped test treated as a failure, because on a
+# runner a skip means a dependency did not come up. See docs/CI.md.
+
+name: tests
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: finance_copilot
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d finance_copilot"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/finance_copilot
+      REDIS_URL: redis://127.0.0.1:6379/0
+      INFERENCE_BASE_URL: http://127.0.0.1:11434/v1
+      INFERENCE_MODEL: qwen2.5:1.5b
+      AGENT_MODEL: qwen2.5:7b
+      AGENT_ROUTER_MODEL: qwen2.5:1.5b
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: stack
+        uses: ./.github/actions/prepare-stack
+        with:
+          sec-edgar-user-agent: ${{ secrets.SEC_EDGAR_USER_AGENT }}
+
+      # First and on its own, so a violated safety property is a red check with
+      # its own name rather than one failure among nine hundred.
+      - name: Safety properties (pytest -m safety)
+        run: python -m pytest -m safety -p no:cacheprovider -q --junitxml=junit-safety.xml
+
+      - name: Everything else
+        if: ${{ !cancelled() && steps.stack.outcome == 'success' }}
+        run: python -m pytest -m "not safety" -p no:cacheprovider -q --junitxml=junit-rest.xml
+
+      # Floors: just under the current counts. Removing tests on purpose means
+      # lowering them in the same change -- that is the point of having them.
+      - name: No skipped tests, no missing tests
+        if: ${{ !cancelled() && steps.stack.outcome == 'success' }}
+        run: >-
+          python scripts/ci_check_junit.py --min-tests 900 --min-safety 100
+          junit-safety.xml junit-rest.xml
+
+      - name: Keep the reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            junit-*.xml
+            ${{ runner.temp }}/ollama.log
+          if-no-files-found: ignore
