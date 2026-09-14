@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     # a CPU-hosted model can take many seconds before the first token appears.
     inference_connect_timeout: float = 5.0
     inference_read_timeout: float = 300.0
+    # The read timeout above bounds *silence*: every byte restarts it, so a stream
+    # that keeps trickling is never stopped by it. This bounds one model call's
+    # total wall-clock time instead, and the agent ends the turn as an
+    # inference_error. 900s is 2.2x the slowest call that ever completed on the dev
+    # host with the machine awake (411s, of 1,859 logged) and 4x the slowest
+    # uncontended one (225s). See docs/INFERENCE.md for the data.
+    inference_call_deadline: float = Field(default=900.0, gt=0)
 
     @field_validator("inference_base_url")
     @classmethod

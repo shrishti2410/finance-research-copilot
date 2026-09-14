@@ -272,8 +272,8 @@ Limits of this recommendation:
   that was free on this laptop. It fits, with little margin. On a GPU VM it would
   not matter.
 - **Through the agent, it could not be shown.** The full-stack comparison below
-  came out inconclusive, because this host paged heavily in three of its four
-  cells.
+  came out inconclusive, because the laptop went into standby during three of its
+  four cells.
 - **Only 1 and 2 were tested.** `NUM_PARALLEL` 3 or higher was not.
 - **Not applied.** `OLLAMA_NUM_PARALLEL` stays 1 in `docker-compose.yml` and in the
   local setup. The full-stack test that would have justified changing it was
@@ -397,50 +397,47 @@ do not. It was run with
 
 No model reloaded mid-cell in any of the four.
 
-**Verdict: inconclusive.** Three of the four cells paged heavily, so they
-measured the pagefile rather than `NUM_PARALLEL`:
-- **Only one cell is clean:** `NUM_PARALLEL=1` at 2 users.
-- **Taken at face value, the numbers go against `NUM_PARALLEL=2`.** At 2 users it
-  delivered 0.08 answers per minute against 0.52. But that cell paged at ten times
-  the clean cell's rate, with 195 MB free, so it cannot be read as the setting's
-  effect.
-- **At 5 users, both settings delivered nothing,** and both paged.
+**Verdict: inconclusive, but not for the reason first recorded.** Only
+`NUM_PARALLEL=1` at 2 users is a valid measurement. The other three cells spanned
+laptop Modern Standby. Two independent records show it: the Windows power log, and
+gaps in the driver's own 15-second memory samples.
 
-The practical answer for *this* host is plain even without a clean comparison.
-With 7b and 1.5b loaded, `NUM_PARALLEL=2` does not leave enough memory to run the
-agent without paging.
+| cell | standby inside it | sampling gap |
+|---|---|---|
+| NUM_PARALLEL=2, 2 users | 16:46:30 → 16:59:34 | 13.3 min |
+| NUM_PARALLEL=2, 5 users | 17:03:52 → 20:57:34, then sleep until 21:57 | 293.5 min |
+| NUM_PARALLEL=1, 5 users | 21:59:39 → 23:13:44, in three stretches | 25.2 + 49.3 min |
+
+Nothing ran while the machine was suspended, so those cells measured standby. The
+page-in averages that tripped the paging guard are the resume: Windows faults
+memory back in when it wakes. **This section first called it heavy paging, and
+claimed `NUM_PARALLEL=2` cannot run on this host without paging. Neither is
+established.** Memory is tight (the `NUM_PARALLEL=2`, 2-user cell dipped to 195 MB
+free), but whether the host pages while awake was not measured.
 
 **Not applied.** `OLLAMA_NUM_PARALLEL` stays `1` in `docker-compose.yml`, and
 `.env.example` and `docs/DEPLOYMENT.md` are unchanged. The raw-inference results
 above stand as benchmark findings, not as a recommended setting. Settling it needs
-the same run on a host with headroom: either a machine the size of the 16 GB CI
-runner with nothing else open, or this laptop with the IDE and browser closed.
+the same run on a machine that stays awake. `parallel_ab.py` now asks Windows not
+to sleep for the length of the run, and marks any cell with a sampling gap as
+suspended.
 
-### Found along the way: inference calls that outlive the 300 s timeout
+### Found along the way: the long calls were standby, and the timeout had a real gap
 
-`INFERENCE_READ_TIMEOUT` is 300 s, and the load-test write-ups treat it as the
-bound on how long an inference call can take. Under memory pressure it was not:
+Three sets of calls looked like `INFERENCE_READ_TIMEOUT` failing to fire:
+- 3 h 53 min, at 5 users with `NUM_PARALLEL=2`
+- 24 min 55 s, at 5 users with `NUM_PARALLEL=1`
+- 54 min, the live injection test during CI validation
 
-- **`NUM_PARALLEL=2`, 5 users:** five Ollama requests lasted **3 h 53 min** each
-  and ended in 500. The 20-minute cell ran for 297 minutes.
-- **`NUM_PARALLEL=1`, 5 users:** five requests lasted **24 min 55 s** each.
-- **`NUM_PARALLEL=2`, 2 users:** one request ended at **exactly 5 min 0 s**. That
-  is the timeout working, on the same code path.
-- **During CI validation** the live injection test waited 54 minutes on one call
-  (see `docs/CI.md`).
+**Every one spanned standby.** The 54-minute call ended one second after the
+machine woke. Across all 1,859 chat calls logged on this host, none that stayed
+clear of standby ran longer than 411 s.
 
-What is known is the timeout's type. httpx's read timeout limits *silence between
-bytes*, not the length of a call. One mechanism fits most of the evidence: a
-model starved by paging emits a token every few minutes, and each token resets the
-read timer. 512 tokens at ~27 s each is ~3.8 hours, close to the 3 h 53 min
-observed. It does not fit the 54-minute case cleanly, because that runner was still
-in prompt processing and had emitted nothing. **So the cause is not established.**
-
-Why it matters: under memory pressure, one user's turn can take hours, and a load
-test can run many times longer than its configured duration. The fix direction is
-a total deadline on each inference call, separate from the read timeout. It has
-not been implemented; it is a behaviour change to the agent, and it should be made
-deliberately.
+The investigation did find a real gap. The read timeout bounds silence between
+bytes, so a stream that keeps trickling is never stopped by it. Real Ollama is
+silent until its first token, so that was not the cause here, but nothing bounded
+the case either. `INFERENCE_CALL_DEADLINE` (900 s) now caps each model call's
+wall-clock time; the evidence, and why 900, are in `docs/INFERENCE.md`.
 
 ## What changes on real GPU hardware (not run)
 

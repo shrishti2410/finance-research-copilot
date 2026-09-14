@@ -70,10 +70,13 @@ MODELS = ("qwen2.5:7b", "qwen2.5:1.5b")      # AGENT_MODEL, AGENT_ROUTER_MODEL
 CELLS = [(1, 2), (2, 2), (2, 5), (1, 5)]    # (NUM_PARALLEL, users), ABBA
 MIN_GAIN = 1.15
 # Sustained hard page-ins per second above which a cell measured disk reads, not
-# NUM_PARALLEL. Idle on this host reads 30-80. The failure this guards against was
-# observed: a 7b prompt batch that normally takes ~40s took 54 minutes with the
-# weights paged out. 500 pages/s is ~2 MB/s of sustained reads from the pagefile.
+# NUM_PARALLEL. Idle on this host reads 30-80; 500 pages/s is ~2 MB/s of sustained
+# reads from the pagefile.
 PAGING_LIMIT = 500.0
+# Longest gap between the 15-second memory samples before a cell counts as
+# suspended. This script's first run lost 321 of its 423 minutes to laptop
+# standby, and the resume showed up as page-in spikes that were misread as paging.
+SUSPEND_GAP_S = 120
 OLLAMA_DIR = pathlib.Path(os.path.expandvars(r"%LOCALAPPDATA%\Programs\Ollama"))
 
 
@@ -191,10 +194,23 @@ class MemorySampler(threading.Thread):
 # Run
 # ─────────────────────────────────────────────────────────────────────────────
 
+def keep_awake() -> None:
+    """Ask Windows not to sleep or blank the display until this process exits.
+
+    Best effort: closing the lid still sleeps the machine, which is why the
+    summary checks for sampling gaps instead of trusting this.
+    """
+    if os.name == "nt":
+        import ctypes
+        es_continuous, es_system, es_display = 0x80000000, 0x00000001, 0x00000002
+        ctypes.windll.kernel32.SetThreadExecutionState(es_continuous | es_system | es_display)
+
+
 def run(args) -> pathlib.Path:
     bash = shutil.which("bash")
     if not bash:
         raise SystemExit("bash is required to drive run_sweep.sh")
+    keep_awake()
     root = OUT_ROOT / dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     root.mkdir(parents=True)
     meta = {"host": args.host, "duration": args.duration, "models": MODELS,
@@ -256,6 +272,8 @@ def summarize(root: pathlib.Path) -> None:
         paging = [float(m["pages_input_per_s"]) for m in mem if m.get("pages_input_per_s")]
         d["paging_mean"] = sum(paging) / len(paging) if paging else float("nan")
         d["paging_max"] = max(paging) if paging else float("nan")
+        times = [int(m["unix_time"]) for m in mem]
+        d["suspended_min"] = sum(b - a for a, b in zip(times, times[1:]) if b - a > SUSPEND_GAP_S) / 60
         d["answers"] = d["outcomes"].get("final_answer", 0)
         d["runners"] = c["runners"]
         # Each model load starts a llama-server. Two are the warm-up; any more
@@ -271,13 +289,13 @@ def summarize(root: pathlib.Path) -> None:
     print("=" * 112)
     print(f"{'NUM_PARALLEL':>12} {'users':>5} {'tried':>6} {'done':>5} {'failed':>7} {'answers':>8} "
           f"{'ok/min':>7} {'total med':>10} {'total p95':>10} {'TTFT med':>9} "
-          f"{'min free':>9} {'swap +':>7} {'reloads':>8} {'page-ins/s mean/max':>20}")
+          f"{'min free':>9} {'swap +':>7} {'reloads':>8} {'page-ins/s mean/max':>20} {'asleep':>7}")
     for (parallel, users), d in sorted(rows.items(), key=lambda kv: (kv[0][1], kv[0][0])):
         print(f"{parallel:>12} {users:>5} {d['attempts']:>6} {d['requests']:>5} {d['failures']:>7} "
               f"{d['answers']:>8} {d['delivered_per_min']:>7.2f} {secs(d['total_med']):>10} "
               f"{secs(d['total_p95']):>10} {secs(d['ttft_med']):>9} "
               f"{d['min_available_mb']:>7} MB {d['swap_growth_mb']:>4} MB {d['reloads']:>8} "
-              f"{d['paging_mean']:>10.0f} / {d['paging_max']:<7.0f}")
+              f"{d['paging_mean']:>10.0f} / {d['paging_max']:<7.0f} {d['suspended_min']:>5.0f}m")
 
     print("\nOutcomes by stop_reason")
     for (parallel, users), d in sorted(rows.items(), key=lambda kv: (kv[0][1], kv[0][0])):
@@ -302,7 +320,13 @@ def summarize(root: pathlib.Path) -> None:
               f"{'PASS' if ok else 'FAIL'}")
     reloaded = [k for k, d in rows.items() if d["reloads"] > 0]
     paged = [k for k, d in rows.items() if d["paging_mean"] > PAGING_LIMIT]
-    if paged:
+    suspended = {k: d["suspended_min"] for k, d in rows.items() if d["suspended_min"] > 0}
+    if suspended:
+        print("\nVerdict: INCONCLUSIVE -- the machine was suspended during "
+              + ", ".join(f"NUM_PARALLEL={k[0]}/{k[1]} users ({m:.0f} min)"
+                          for k, m in sorted(suspended.items()))
+              + ". Nothing runs while it is; keep it awake and re-run.")
+    elif paged:
         print(f"\nVerdict: INCONCLUSIVE -- sustained paging (> {PAGING_LIMIT:.0f} page-ins/s "
               f"on average) in {sorted(paged)}; those cells measured the pagefile, not "
               f"NUM_PARALLEL. Free memory and re-run.")

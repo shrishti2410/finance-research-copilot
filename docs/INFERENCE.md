@@ -298,3 +298,72 @@ median ~57) and binds only on a runaway. Lower caps do reduce latency, but only
 by cutting the answer off mid-sentence: at 128 the model stopped at
 `"…we can use the net income and revenue figures provided"`, with
 `done_reason: length` and no figure. That is a missing answer, not a fast one.
+
+### `INFERENCE_CALL_DEADLINE=900` — a cap on the call, not on the silence
+
+`INFERENCE_READ_TIMEOUT=300` is an httpx read timeout: it bounds the gap between
+bytes, not the length of a call. This was measured, not read from the docs. A fake
+upstream on a real socket was driven through the agent's own call functions,
+directly and through the real API proxy, with the read timeout shrunk to 2 s and a
+12 s cap:
+
+| upstream behaviour | streamed call | router call | buffered call |
+|---|---|---|---|
+| silent | ends at 2.1 s | 2.1 s | 2.1 s |
+| headers, then silent | 2.1–2.2 s | 2.2 s | 2.1 s |
+| one byte every second | **never** | **never** | never directly; 2.1 s via the proxy, which sends nothing downstream until the upstream finishes |
+
+**Real Ollama is silent until its first token.** Headers, first byte and first
+data line arrived together: at 101 s for a lone 5,361-token prompt, and at 208 s
+for one queued behind it. So a slow or queued call is caught by the read timeout.
+A stream that keeps moving is caught by nothing.
+
+`settings.inference_call_deadline` wraps every model call the agent makes: each
+answer-writing call, each router call, each escalation, each grounding retry. Each
+call gets its own clock. A call that runs past it ends the turn with:
+- `stop_reason="inference_error"`
+- a final step reading `inference call stopped at the 900s per-call deadline`
+- an answer saying the model did not finish in time. It does not say the model was
+  unreachable, because it was reached.
+
+Tool results gathered before the stopped call stay in the trace, and the answer
+says so. Cancelling closes the HTTP response, so the proxy sees the disconnect and
+closes its request upstream.
+
+**Why 900 s.** The data is every Ollama request log on this host: 1,859 chat
+calls, 10–14 September. Any call that overlapped laptop standby was removed (see
+below).
+
+| completed calls, machine awake | n | p99 | max |
+|---|---|---|---|
+| uncontended | 290 | 223 s | 225 s |
+| queued behind other users | 1,390 | 306 s | 411 s |
+
+- **Against completions:** 900 s is 2.2x the slowest completion on record, and 4x
+  the slowest uncontended one.
+- **Against failures:** no call that failed while the machine was awake ran past
+  313 s.
+- **What that means:** across that history, the deadline would never have cut off a
+  call that was going to finish. It exists for the trickling stream, the one case
+  the read timeout cannot end.
+
+**The long calls on record were standby, not a broken timeout.** Three sets of
+calls ran far past 300 s:
+- 54 minutes, the live injection test during CI validation
+- 24 min 55 s, the full-stack load test at 5 users
+- 3 h 53 min, also at 5 users
+
+They were first blamed on the timeout, then on paging. **Both explanations were
+wrong.** The Windows power log shows every one spanned Modern Standby. The
+54-minute call started at 15:09:25, the laptop entered standby at 15:10:33 and woke
+at 16:03:28, and the call ended one second later. Nothing runs while the machine
+is suspended, the deadline included. The page-in spikes that looked like paging
+were Windows faulting memory back in on resume.
+
+Long measurements on a laptop need the power log checked
+(`Get-WinEvent` on Kernel-Power events 506/507 and 42/107), or their own sampling
+gaps watched. `benchmarks/parallel_ab.py` now does the latter.
+
+The GPU overlay leaves this at 900 s. That is loose for a GPU, and should come
+down once there are measured GPU call times, the same way `INFERENCE_READ_TIMEOUT`
+does there.

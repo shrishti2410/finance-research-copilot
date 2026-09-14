@@ -28,6 +28,7 @@ model can read and retry, not as an exception.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -191,6 +192,41 @@ def _merge_tool_call_delta(acc: dict[int, dict], delta: dict) -> None:
         slot["function"]["name"] = function["name"]
     if function.get("arguments"):
         slot["function"]["arguments"] += function["arguments"]
+
+
+class InferenceDeadlineExceeded(Exception):
+    """One model call ran past settings.inference_call_deadline and was stopped."""
+
+    def __init__(self, seconds: float) -> None:
+        super().__init__(f"stopped after {seconds:.0f}s, the per-call deadline")
+        self.seconds = seconds
+
+
+async def _within_deadline(call: Awaitable[Any], seconds: float) -> Any:
+    """Await one model call, and stop it after `seconds` of wall-clock time.
+
+    INFERENCE_READ_TIMEOUT cannot do this, because it bounds *silence*, not
+    duration: every byte that arrives restarts it. Measured against a fake
+    upstream sending one byte a second under a 2s read timeout, streamed and
+    router calls never ended -- directly and through the real API proxy alike.
+    (A silent upstream is caught by the read timeout at every layer; the gap is
+    specifically a stream that keeps moving.)
+
+    Cancellation lands inside the call, whose `finally` closes the HTTP response.
+    The proxy sees the disconnect and closes its upstream request, so the
+    inference server can stop generating for a caller that has gone.
+
+    Only this timer's own expiry is reported as a deadline. A TimeoutError raised
+    from inside the call is something else and propagates unchanged.
+    """
+    scope = asyncio.timeout(seconds)
+    try:
+        async with scope:
+            return await call
+    except TimeoutError:
+        if scope.expired():
+            raise InferenceDeadlineExceeded(seconds) from None
+        raise
 
 
 async def _stream_message(client, payload, on_token) -> dict:
@@ -543,6 +579,16 @@ async def run_agent(
     )
 
     async def one_call(call_model: str, cap: int, stream: bool) -> dict:
+        """One chat completion, stopped at the per-call deadline.
+
+        Each call gets the whole deadline: an escalation or a grounding retry is a
+        new call with a new clock, so a turn of several legitimate calls is never
+        cut short by the sum of them.
+        """
+        return await _within_deadline(_one_call(call_model, cap, stream),
+                                      settings.inference_call_deadline)
+
+    async def _one_call(call_model: str, cap: int, stream: bool) -> dict:
         """One chat completion. Accumulates usage; raises on transport failure."""
         nonlocal prompt_tokens, completion_tokens, usage_measured
         payload = {
@@ -585,11 +631,11 @@ async def run_agent(
             try:
                 if use_router:
                     router_calls += 1
-                    routed = await _router_message(client, {
+                    routed = await _within_deadline(_router_message(client, {
                         "model": router_model, "messages": messages,
                         "tools": registry.schemas(), "temperature": temperature,
                         "max_tokens": router_max_tokens,
-                    })
+                    }), settings.inference_call_deadline)
                     if routed is not None:
                         message = routed
                     else:
@@ -607,18 +653,35 @@ async def run_agent(
                     message = await one_call(model, max_tokens, stream_tokens)
             except Exception as exc:  # noqa: BLE001 - upstream down, timeout, bad JSON
                 model_ms = (time.perf_counter() - call_started) * 1000
-                log.error("agent: inference call failed on iteration %d: %s", iteration, exc)
-                steps.append(Step(
-                    iteration=iteration, tool="final_answer", arguments={},
-                    result=f"inference call failed: {type(exc).__name__}: {exc}",
-                    latency_ms=model_ms, model_latency_ms=model_ms, ok=False,
-                ))
-                return AgentResult(
-                    answer=(
+                if isinstance(exc, InferenceDeadlineExceeded):
+                    # Not "couldn't reach the model": it was reached, and it was
+                    # still going. Saying so is what lets someone tell a slow
+                    # host from a dead one.
+                    log.error("agent: inference call on iteration %d stopped at the "
+                              "%.0fs deadline", iteration, exc.seconds)
+                    failure = f"inference call stopped at the {exc.seconds:.0f}s per-call deadline"
+                    answer = (
+                        f"The model did not finish within {exc.seconds:.0f} seconds, so "
+                        f"the call was stopped. Nothing was answered; this is an "
+                        f"infrastructure failure, not a result."
+                    )
+                    if any(s.ok and s.tool != "final_answer" for s in steps):
+                        answer += " The tool results gathered before it are kept in the trace."
+                else:
+                    log.error("agent: inference call failed on iteration %d: %s", iteration, exc)
+                    failure = f"inference call failed: {type(exc).__name__}: {exc}"
+                    answer = (
                         f"I couldn't reach the model to answer this "
                         f"({type(exc).__name__}). Nothing was answered; this is an "
                         f"infrastructure failure, not a result."
-                    ),
+                    )
+                steps.append(Step(
+                    iteration=iteration, tool="final_answer", arguments={},
+                    result=failure,
+                    latency_ms=model_ms, model_latency_ms=model_ms, ok=False,
+                ))
+                return AgentResult(
+                    answer=answer,
                     steps=steps, iterations=iteration, completed=False,
                     stop_reason="inference_error", model=model,
                     router_model=router_model, router_calls=router_calls,
