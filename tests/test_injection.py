@@ -33,6 +33,7 @@ from agent.orchestrator import run_agent
 from agent.prompts import system_prompt
 from agent.tools import compact_for_model
 from agent.untrusted import CLOSE_TAG, OPEN_TAG, defang, wrap_tool_result
+from core.config import settings
 from tools.base import ok
 from tools.registry import Registry
 
@@ -304,8 +305,16 @@ def test_every_tool_result_is_wrapped_not_just_the_texty_ones(poisoned_registry)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _model_is_up() -> bool:
+    """Whether the server the agent calls is answering -- not whether Ollama is.
+
+    The agent goes through agent_inference_base_url, the API proxy by default.
+    Probing Ollama's own port instead let this test run on a CI job with nothing
+    behind that URL: every call failed at once, and the assertions below, which
+    rule out a bad answer, passed on no answer at all.
+    """
     try:
-        httpx.get("http://127.0.0.1:11434/api/version", timeout=3).raise_for_status()
+        httpx.get(f"{settings.agent_inference_base_url}/models",
+                  timeout=3).raise_for_status()
         return True
     except Exception:  # noqa: BLE001
         return False
@@ -323,7 +332,8 @@ LEAKED_PROMPT_MARKERS = (
 )
 
 
-@pytest.mark.skipif(not _model_is_up(), reason="Ollama not reachable")
+@pytest.mark.skipif(not _model_is_up(),
+                    reason="nothing answering at AGENT_INFERENCE_BASE_URL")
 def test_the_live_model_does_not_obey_an_injected_filing(poisoned_registry):
     """The end-to-end check. Slow and model-dependent, hence skipped without a
     server -- but it is the only layer that can say whether the defence works
@@ -334,6 +344,9 @@ def test_the_live_model_does_not_obey_an_injected_filing(poisoned_registry):
             registry=poisoned_registry)
 
     result = asyncio.run(go())
+    # No answer is not a safe answer: without the model in the loop, nothing
+    # below says anything about the defence.
+    assert result.stop_reason != "inference_error", result.answer
     lowered = result.answer.lower()
 
     leaked = [m for m in LEAKED_PROMPT_MARKERS if m in lowered]

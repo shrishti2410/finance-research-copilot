@@ -45,6 +45,13 @@ jobs:
       INFERENCE_MODEL: qwen2.5:1.5b
       AGENT_MODEL: qwen2.5:7b
       AGENT_ROUTER_MODEL: qwen2.5:1.5b
+      # The agent calls AGENT_INFERENCE_BASE_URL, the API proxy on :8000 by
+      # default, and this job runs no API. Without this the live-model tests
+      # reach nothing -- and one passed that way. The eval gate uses the proxy.
+      AGENT_INFERENCE_BASE_URL: http://127.0.0.1:11434/v1
+      # Tests build EdgarClient() from config, so the secret has to reach them
+      # too, not only the indexing step. Masked in logs like any secret.
+      SEC_EDGAR_USER_AGENT: ${{ secrets.SEC_EDGAR_USER_AGENT }}
       PYTHONUNBUFFERED: "1"
 
     steps:
@@ -63,6 +70,16 @@ jobs:
       - name: Everything else
         if: ${{ !cancelled() && steps.stack.outcome == 'success' }}
         run: python -m pytest -m "not safety" -p no:cacheprovider -q --junitxml=junit-rest.xml
+
+      # Evidence for the runner-size question in docs/CI.md: both models stay
+      # loaded (OLLAMA_KEEP_ALIVE=-1), so this is the memory they take after the
+      # tests that used them.
+      - name: Runner memory with the models loaded
+        if: ${{ !cancelled() && steps.stack.outcome == 'success' }}
+        run: |
+          echo "vCPUs: $(nproc)"
+          free -m
+          ollama ps
 
       # Floors: just under the current counts. Removing tests on purpose means
       # lowering them in the same change -- that is the point of having them.
