@@ -108,14 +108,39 @@ gate.
   Google News. Stock-price answers change between runs, and cloud IP ranges can
   be rate-limited. A tool that fails on the runner shows up as a worse eval, and
   the per-case report shows which tool.
-- **Runner size.** At the time of writing, GitHub's standard hosted Linux runner
-  has 4 vCPUs and 16 GB of RAM for public repositories, and 2 vCPUs and 7 GB for
-  private ones. The two models need about 6.7 GB before the API, Postgres and
-  torch. **On a private repository both workflows are expected to run out of
-  memory on the standard runner** and need a larger or self-hosted runner.
-  Check GitHub's current runner specifications before relying on either figure.
-- **Duration.** A full eval took about 100 minutes on the dev laptop. The job
-  timeout is 330 minutes, inside the hosted runner's 6-hour limit.
+- **Runner size: both models fit on the public runner, measured.** The
+  repository is public, which gets GitHub's 4 vCPU / 16 GB standard runner (a
+  private one gets 2 vCPUs and 7 GB). CI therefore runs the production
+  configuration, 7b for answers and 1.5b for routing, rather than dropping to 1.5b
+  only. The `Runner memory with the models loaded` step of the first green tests
+  run
+  ([34932117628](https://github.com/shrishti2410/finance-research-copilot/actions/runs/34932117628))
+  recorded, after the suite:
+
+  | vCPUs | RAM total | used | available | swap used | loaded |
+  |---|---|---|---|---|---|
+  | 4 | 15,989 MB | 7,818 MB | 8,171 MB | 0 | qwen2.5:7b 5.5 GB, qwen2.5:1.5b 1.4 GB |
+
+  **On a private repository, expect both workflows to run out of memory on the
+  standard runner.** Either use a larger or self-hosted runner, or set
+  `AGENT_MODEL=qwen2.5:1.5b` in both workflows. That second option also means
+  re-baselining from a CI run, because a 1.5b run is not comparable to the 7b
+  baseline, and `eval.compare` flags that mismatch in its report.
+- **A test that probes one server and calls another passes on nothing.** On the
+  first CI run, the live injection test checked Ollama's port, but the agent
+  calls `AGENT_INFERENCE_BASE_URL`, the API proxy on :8000, and the tests job runs
+  no API. The call failed in 0.02 s and the test passed without a model in the
+  loop. It now probes the URL the agent uses and fails on an `inference_error`.
+  The tests job points the agent at Ollama directly; on the fixed run the test
+  took 170 s and made three real completions.
+- **Duration, measured.**
+  - **Eval gate:** 50.6 minutes for the 40 cases on the runner, 56 minutes for
+    the whole job
+    ([34933037261](https://github.com/shrishti2410/finance-research-copilot/actions/runs/34933037261)).
+    The dev laptop took about 100 minutes.
+  - **Test gate:** about 12 minutes, 6.5 of them the suite.
+  - **Limits:** the eval job timeout is 330 minutes, inside the hosted runner's
+    6-hour limit.
 - **A laptop that sleeps mid-run makes a test look hung.** During local
   validation, the live injection test
   (`test_injection::test_the_live_model_does_not_obey_an_injected_filing`) took 54
@@ -134,14 +159,31 @@ gate.
 1. **Create the repository and add the secret.** In the repository settings, add
    `SEC_EDGAR_USER_AGENT` under *Secrets and variables → Actions*, with a name
    and a contact SEC can reach, e.g. `finance-research-copilot/0.1 (you@yourdomain)`.
+   Or from the CLI, reading the value from `.env` so it never appears on a command
+   line or in a log:
+   `grep '^SEC_EDGAR_USER_AGENT=' .env | cut -d= -f2- | tr -d '"\r' | gh secret set SEC_EDGAR_USER_AGENT -R <owner>/<repo>`.
+   Add it before the first push. Otherwise the first runs fail at *Require the
+   EDGAR User-Agent secret*.
    It is only ever read from the secret, never written into a workflow file.
    Pull requests from forks do not receive secrets, so on those the stack
    preparation fails and says why. That is intended: an index built without a
    valid User-Agent is not something to test against.
-2. **Expect the first run to be slow.** Nothing is cached yet. The models alone
-   are about 5.7 GB.
+2. **The first run is not much slower.** Nothing was cached, but the runner
+   pulled the 4.7 GB model in 23 seconds, and preparing the whole stack took 3–5
+   minutes.
 3. **Watch the first eval-gate run's verdict against the laptop baseline.** It is
    the evidence for or against the first known risk above.
+   - **Result:** the first run, on `012aaa3`, scored 50.0% (20/40) against the
+     baseline's 45.0% (18/40): UP by 2 net cases, exactly the band's edge.
+     3 cases started passing, 1 stopped, and 8 moved between wrong and no
+     number.
+   - **What it means:** that commit changed only the comparison report, so the
+     movement is run-to-run variation, not an improvement. One run gives no sign
+     that the runner scores lower than the laptop, so the laptop baseline
+     stands.
+   - **Not yet shown on GitHub:** the gate failing a run. The failure path is
+     covered by `tests/test_compare.py` (two broken cases exit 1), and the step
+     fails on any non-zero exit.
 
 ## Rollback: returning to the last known-good commit
 
