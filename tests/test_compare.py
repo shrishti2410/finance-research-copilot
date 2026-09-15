@@ -15,6 +15,7 @@ import pytest
 from eval.compare import (
     build_baseline,
     compare,
+    configuration_differences,
     drifted_ground_truth,
     load_baseline,
     render,
@@ -269,3 +270,47 @@ def test_the_report_says_when_the_scorer_has_changed_since_the_baseline(cases):
 
     assert "scorer has changed" in text
     assert "still like-for-like" in text
+
+
+SEVEN_B = {"agent_model": "qwen2.5:7b", "agent_router_model": "qwen2.5:1.5b",
+           "agent_max_tokens": 512, "recorded_by_the_run": True}
+
+
+def test_the_report_names_the_models_on_both_sides(cases):
+    """"Better than what?" answered on the page, not left to the reader."""
+    rows = [row("a", "71.07%")]
+    baseline = build_baseline(rows, "ref", cases=cases, system=dict(SEVEN_B))
+    text = render(compare(rows, rows, cases=cases), baseline, rows, cases,
+                  current_system=dict(SEVEN_B))
+
+    assert text.count("agent qwen2.5:7b, router qwen2.5:1.5b") == 2
+    assert "not configured like the baseline" not in text
+
+
+def test_a_run_on_other_models_is_flagged_not_silently_compared(cases):
+    """A CI run on 1.5b against a 7b laptop baseline would otherwise read as the
+    code getting worse."""
+    rows = [row("a", "71.07%")]
+    baseline = build_baseline(rows, "ref", cases=cases, system=dict(SEVEN_B))
+    current = dict(SEVEN_B, agent_model="qwen2.5:1.5b")
+    text = render(compare(rows, rows, cases=cases), baseline, rows, cases,
+                  current_system=current)
+
+    assert "not configured like the baseline" in text
+    assert "agent_model: qwen2.5:7b -> qwen2.5:1.5b" in text
+    assert configuration_differences(baseline["system"], current) == [
+        "agent_model: qwen2.5:7b -> qwen2.5:1.5b"]
+
+
+def test_an_unrecorded_configuration_is_said_so_not_guessed(cases):
+    rows = [row("a", "71.07%")]
+    baseline = build_baseline(rows, "ref", cases=cases)     # recorded_by_the_run False
+    text = render(compare(rows, rows, cases=cases), baseline, rows, cases)
+
+    assert "not recorded by the run" in text
+    assert "this run  not recorded" in text
+    # Missing on one side is unrecorded, not different -- and bookkeeping is not
+    # configuration.
+    assert configuration_differences(baseline["system"], None) == []
+    assert configuration_differences(dict(SEVEN_B, recorded_by_the_run=False),
+                                     SEVEN_B) == []

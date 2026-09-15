@@ -234,8 +234,36 @@ def by_category(rows: list[dict],
 ARROW = {"better": "UP", "worse": "DOWN", "flat": "FLAT"}
 
 
+def configuration_differences(baseline_system: dict | None,
+                              current_system: dict | None) -> list[str]:
+    """Settings both sides recorded, with different values.
+
+    A difference means the delta is between two configurations -- a laptop
+    baseline on one model and a run on another -- not the effect of a change to
+    the code. Nothing recorded on one side is not a difference; it is reported as
+    unrecorded instead. recorded_by_the_run is bookkeeping, not configuration.
+    """
+    if not baseline_system or not current_system:
+        return []
+    return [f"{key}: {baseline_system[key]} -> {current_system[key]}"
+            for key in sorted(set(baseline_system) & set(current_system))
+            if key != "recorded_by_the_run"
+            and baseline_system[key] != current_system[key]]
+
+
+def _models(system: dict | None) -> str:
+    if not system:
+        return "not recorded"
+    text = (f"agent {system.get('agent_model') or '?'}, "
+            f"router {system.get('agent_router_model') or '(none)'}")
+    if system.get("recorded_by_the_run") is False:
+        text += "  (settings at promotion, not recorded by the run)"
+    return text
+
+
 def render(comparison: Comparison, baseline: dict, current_rows: list[dict],
-           cases: dict[str, Case] | None = None) -> str:
+           cases: dict[str, Case] | None = None, *,
+           current_system: dict | None = None) -> str:
     lines: list[str] = []
     add = lines.append
     bar = "=" * 92
@@ -247,6 +275,8 @@ def render(comparison: Comparison, baseline: dict, current_rows: list[dict],
     add(f"  baseline  {baseline.get('name', '(unnamed)')}  "
         f"taken {(baseline.get('created') or '?')[:19]}  "
         f"commit {(baseline.get('git_commit') or '?')[:12]}")
+    add(f"  models    baseline  {_models(baseline.get('system'))}")
+    add(f"            this run  {_models(current_system)}")
     add(f"  compared over {comparison.shared} shared case(s); "
         f"a direction needs {comparison.min_cases}+ net cases")
     add("")
@@ -262,6 +292,15 @@ def render(comparison: Comparison, baseline: dict, current_rows: list[dict],
         add(f"        eval/metrics.py. The scorer has changed since. Both sides "
             f"are rescored, so the")
         add(f"        comparison above is still like-for-like.")
+        add("")
+
+    differences = configuration_differences(baseline.get("system"), current_system)
+    if differences:
+        add("  WARNING: this run was not configured like the baseline:")
+        for item in differences:
+            add(f"    {item}")
+        add("  so the delta above is between two configurations, not the effect "
+            "of one code change.")
         add("")
 
     drift = drifted_ground_truth(baseline.get("cases") or [], cases)
@@ -475,7 +514,7 @@ def main(argv: list[str] | None = None) -> int:
     baseline = load_baseline(args.baseline)
 
     if args.report:
-        current_rows, _, _ = rows_from_report(args.report)
+        current_rows, _, current_system = rows_from_report(args.report)
     else:
         # Imported here so --promote and --report work with no API running.
         from eval import run_eval
@@ -487,7 +526,7 @@ def main(argv: list[str] | None = None) -> int:
         code = run_eval.main(argv_run)
         if code != 0:
             return code
-        current_rows, _, _ = rows_from_report(out)
+        current_rows, _, current_system = rows_from_report(out)
 
     if not current_rows:
         print("this run produced no cases to compare", file=sys.stderr)
@@ -496,7 +535,8 @@ def main(argv: list[str] | None = None) -> int:
     comparison = compare(baseline.get("cases") or [], current_rows,
                          min_cases=args.min_cases)
     print()
-    print(render(comparison, baseline, current_rows))
+    print(render(comparison, baseline, current_rows,
+                 current_system=current_system))
     return comparison.exit_code()
 
 
