@@ -1,273 +1,320 @@
 # Finance Research Copilot
 
-An LLM-powered agent that answers questions about public companies by combining
-**retrieval over SEC filings (RAG)** with **live tools** (stock price, financial
-ratio calculation, news search).
+An LLM agent that answers questions about public companies. It combines
+**retrieval over SEC 10-K filings** with **live tools** for stock prices,
+financial ratios and news, and it will not state a figure that a tool did not
+return in the same turn.
+
+This document describes what the code does today. Deliberate behaviour that
+looks like a defect is covered in [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md);
+the subsystem docs are linked at the end.
+
+_Last brought in line with the code on 2026-11-10, at commit `cea0dd7`._
 
 ---
 
 ## 1. What it does
 
-A user asks a natural-language question, e.g.:
+A signed-in user asks a question in the web client, for example:
 
-> "How has Apple's gross margin trended over the last three years, and how does
-> today's valuation compare to that trend?"
+> "What was NVIDIA's gross margin, and how does Apple's compare?"
 
-The copilot:
+The agent decides which tools it needs. It can search the indexed filings, fetch
+prices, compute ratios or pull headlines, and it runs several calls in parallel
+when they are independent. It then answers in prose, stating each figure with
+its company and period. The answer streams to the browser as it is written, and
+the whole turn is stored with its full trace.
 
-1. Decides which knowledge sources it needs (filings, live market data, news).
-2. Retrieves relevant passages from indexed SEC filings.
-3. Calls live tools for anything time-sensitive or computational.
-4. Synthesizes a grounded answer with citations back to the source filing and
-   the tool outputs it used.
+**Scope today:**
+- **Filings:** two filings are indexed, NVIDIA's FY2026 10-K (period ending
+  2026-01-25) and Apple's FY2025 10-K (period ending 2025-09-27). From each,
+  only Item 1A (Risk Factors), Item 7 (MD&A) and the consolidated income
+  statement are ingested.
+- **Live tools:** prices, ratios and news work for any listed ticker.
+- **Hard-coded scope:** the system prompt names these two filings and their
+  fiscal years (`agent/prompts.py`). Re-indexing a newer filing therefore also
+  means updating the prompt and regenerating `eval/questions.json`.
+
+**What it will not do:** give investment advice. Questions about whether to buy,
+sell or hold, valuation verdicts and price forecasts are redirected. See
+§3.3.
 
 ---
 
-## 2. High-level architecture
+## 2. Architecture
 
 ```
-                         ┌─────────────────────────┐
-   HTTP request  ───────▶│          api/           │  FastAPI: request/response,
-                         │  (transport + schemas)  │  auth, streaming, sessions
-                         └───────────┬─────────────┘
-                                     │
-                                     ▼
-                         ┌─────────────────────────┐
-                         │         agent/          │  Orchestration loop:
-                         │  plan → act → observe   │  routing, tool selection,
-                         │        → answer         │  memory, final synthesis
-                         └───┬─────────────┬───────┘
-                             │             │
-                 ┌───────────▼──┐      ┌───▼───────────────┐
-                 │     rag/     │      │      tools/       │
-                 │  retrieval   │      │  stock price,     │
-                 │  over the    │      │  ratio calc,      │
-                 │  vector DB   │      │  news search      │
-                 └───────┬──────┘      └──────────────────┘
-                         │
-                 ┌───────▼──────┐
-                 │  ingestion/  │  Offline pipeline: fetch filings from EDGAR,
-                 │  (offline)   │  parse, chunk, embed, write to vector store
-                 └──────────────┘
-
-   eval/  ── exercises the whole stack against a fixed question set + metrics
+  Browser ── Next.js client (frontend/)
+     │  JWT bearer token, POST /ask/stream (SSE over fetch)
+     ▼
+  ┌──────────────────────────── FastAPI process (api/) ─────────────────────────────┐
+  │  RateLimitMiddleware (Redis sliding window)  →  routes                          │
+  │    /auth/*  /conversations/*  /ask  /ask/stream  /health*  /v1/* (proxy)       │
+  │                     │                                                           │
+  │                     ▼                                                           │
+  │              agent/orchestrator.run_agent ──── HTTP ───▶ /v1/chat/completions ──┼──▶ Ollama
+  │                │            │                         (this same process)      │   qwen2.5:7b
+  │                ▼            ▼                                                   │   qwen2.5:1.5b
+  │        rag/ (search_filings)   tools/ (price, ratio, news)                      │
+  └────────────────┼────────────────────┼───────────────────────────────────────────┘
+                   ▼                    ▼
+        Postgres: users, conversations,  yfinance, Google News RSS
+        messages, filing_chunks
+                   ▲
+                   │ offline
+        ingestion/ ── EDGAR → parse → chunk → embed (bge-small, CPU) → upsert
 ```
 
 **Two runtimes:**
+- **Offline:** `scripts/index_filings.py` drives `ingestion/pipeline.py` to build
+  the `filing_chunks` table. Nothing schedules it; it is run by hand, and by CI
+  on every run.
+- **Online:** the API serves requests. The agent calls the inference server
+  through the app's own `/v1` proxy rather than calling Ollama directly, so the
+  same timeouts and logging apply to it. It sends a per-process `X-Internal-Token`
+  header so its own calls are not counted against the user's rate limit.
 
-- **Offline / batch** — `ingestion/` builds and refreshes the filing index. Run
-  on a schedule (e.g. nightly, or on new-filing webhooks).
-- **Online / request-time** — `api/` → `agent/` → (`rag/` + `tools/`) serves user
-  questions.
+**Optional:** `inference_router/` is a separate round-robin process that can sit
+between the proxy and several identical inference replicas. It was built and
+measured but is not used by default; see
+[INFERENCE_REPLICAS.md](INFERENCE_REPLICAS.md).
 
 ---
 
-## 3. Request lifecycle (online path)
+## 3. Request lifecycle
 
-1. **`api/`** receives the question, validates it, resolves the session, and
-   hands a normalized request to the agent.
-2. **`agent/`** runs its reasoning loop:
-   - Plan: what does answering this require?
-   - Retrieve: query `rag/` for filing context.
-   - Act: call `tools/` for live price, ratios, or news as needed.
-   - Observe: fold results back into context; loop if more is needed.
-   - Answer: synthesize a cited response.
-3. **`api/`** streams or returns the answer plus structured citations.
+### 3.1 The endpoint (`api/routes.py`)
+
+`POST /ask` returns the finished turn. `POST /ask/stream` reports the same run as
+Server-Sent Events. Both use the database in three phases, and hold no
+connection during the slow middle one:
+
+1. **Read** (milliseconds). Check that the caller owns the conversation, and
+   load the last `AGENT_HISTORY_MESSAGES` (10) user and assistant messages.
+2. **Think** (minutes on CPU). Run the agent with no database connection held.
+3. **Write** (milliseconds). Store the question and the answer in one
+   transaction, with the trace in `messages.meta`. This step is retried on
+   pool exhaustion, because the answer cannot be regenerated cheaply.
+
+The stream's run is a background task that is **not** cancelled when the client
+disconnects. A refresh does not lose a finished answer; it can produce
+duplicate turns instead (see KNOWN_LIMITATIONS.md).
+
+Stream event types: `iteration`, `escalate`, `tool_start`, `tool_result`,
+`token`, `discarded`, `unverified`, `blocked`, `budget`, `done`, `error`.
+
+### 3.2 The agent loop (`agent/orchestrator.py`)
+
+One iteration is one model call plus every tool call that model call asked for.
+
+- **Two models.** The 1.5b router model picks tools. The moment it starts
+  writing prose instead, the turn is handed to the 7b model to write the
+  answer. The 7b model also takes over the step after any failed tool call,
+  and after a grounding retry, because the 1.5b model was measured unable to
+  recover from a bad-input error. Setting `AGENT_ROUTER_MODEL=""` runs every
+  step on 7b.
+- **Limits:**
+  - `AGENT_MAX_ITERATIONS=5` model round-trips.
+  - `AGENT_MAX_TOOL_CALLS_PER_ITERATION=8`. Calls beyond the budget are not
+    run, and the turn ends with an explicit "too many calls" message.
+  - `max_tokens` is 512 for 7b and 128 for the router.
+  - `INFERENCE_CALL_DEADLINE=900` s caps each model call's wall-clock time.
+- **Tool results are compacted** before the model sees them
+  (`agent/tools.py`): at most 8 headlines, a price summary instead of the
+  daily bars, and filing excerpts cut to 700 characters. The full result is
+  kept in the trace.
+- **Tool results are framed as untrusted** (`agent/untrusted.py`). Each one is
+  wrapped in `<tool_result>` tags, and any tag sequence inside the content is
+  escaped, so a filing or headline cannot close the block and speak as the
+  operator.
+- **Every ending is labelled** with a `stop_reason`:
+  - `final_answer`
+  - `unverified_figures`
+  - `investment_advice`
+  - `tool_call_budget`
+  - `max_iterations`
+  - `inference_error`
+  - `empty_response`
+
+  `completed` is true only for a clean `final_answer`.
+
+### 3.3 The two output guards
+
+**Grounding** (`agent/grounding.py`, backed by `core/numerics.py`):
+- **What counts as a figure:** every number in a draft answer, except dates,
+  years and form names such as "10-K".
+- **What supports a figure:** it must be traceable to the *output* of a tool
+  call that succeeded *in this turn*. Rescaling counts (0.7107 matches 71.07%,
+  dollars match the same amount in billions). So does one arithmetic step over
+  two evidence values, such as revenue derived as gross profit divided by
+  margin.
+- **What does not count:** arguments the model passed, failed calls and earlier
+  turns.
+- **On failure:** the draft is discarded once, and the model is told exactly
+  which figures failed. If figures are still unsupported after that retry, the
+  answer is returned with an `[Unverified: ...]` prefix and
+  `completed=false`.
+
+**Advice** (`agent/advice.py`):
+- **What it matches:** regexes for directives ("you should buy"), verdicts
+  ("a strong buy", "undervalued") and price forecasts.
+- **What it lets through:** attributed statements ("analysts rate it...") and
+  the model's own refusals.
+- **What happens on a match:** the answer is *replaced* with a redirection that
+  lists whatever the tools did establish. There is no retry.
+
+The system prompt asks for both behaviours too. The guards exist because the
+prompt alone was measured not to hold.
+
+### 3.4 The tools
+
+| tool | source | notes |
+|---|---|---|
+| `search_filings` | `rag/retriever.py` over `filing_chunks` | BGE query embedding, SQL-side filters (company, section), over-fetch then hybrid re-rank (lexical overlap + table boost for figure-seeking questions) |
+| `get_stock_price` | yfinance | inclusive `end_date`, optional; split/dividend-adjusted; summary fields always cover the full range |
+| `calculate_ratio` | yfinance statements | 7 ratios; returns formula and raw inputs; `pe_ratio` from Yahoo's trailing P/E |
+| `search_news` | Google News RSS | no API key; `days_back` is filtered locally, not by the feed |
+
+Schemas are generated from each function's signature and docstring
+(`tools/registry.py`). `Literal` types become enums, and arguments are coerced
+toward their declared types. Every tool returns an `{"ok": ...}` envelope and
+never raises. Sync tools run in a thread so they do not block the event loop.
 
 ---
 
 ## 4. Folder responsibilities
 
-| Folder        | Layer            | Responsibility |
-|---------------|------------------|----------------|
-| `ingestion/`  | Offline pipeline | Pull filings from SEC EDGAR, parse HTML/XBRL, clean, chunk, embed, and persist to the vector store. Owns the "how do documents get into the index" problem. |
-| `rag/`        | Retrieval        | Everything about turning a query into relevant filing passages: embedding the query, vector search, filtering by company/form/period, re-ranking, and packaging context for the agent. |
-| `tools/`      | Live capabilities| Discrete, callable functions the agent can invoke: current/historical stock price, financial-ratio computation, news search. Each tool has a typed input/output contract and no knowledge of the agent. |
-| `agent/`      | Orchestration    | The decision-making core: prompt construction, tool routing, the plan/act/observe loop, conversation memory, and final answer synthesis with citations. |
-| `api/`        | Transport        | FastAPI application: HTTP routes, request/response schemas, validation, auth, session handling, streaming. Thin — delegates all thinking to `agent/`. |
-| `eval/`       | Quality          | Regression and quality harness: curated question sets, expected-answer/ground-truth data, and metrics (retrieval hit rate, answer faithfulness, tool-call correctness, latency). Runs the full stack. |
+| path | responsibility |
+|---|---|
+| `api/` | FastAPI app (`main.py`), auth / conversation / agent routes, the OpenAI-compatible inference proxy, the rate-limit middleware |
+| `agent/` | loop, system prompt, tool wiring and compaction, conversation memory, grounding and advice guards, untrusted-content framing |
+| `rag/` | BGE embeddings (no sentence-transformers), vector store with pgvector or `real[]` fallback, retriever and re-ranker |
+| `ingestion/` | EDGAR client (validated User-Agent, rate limit, retry, disk cache), 10-K parser, token-accurate chunker |
+| `tools/` | the three live tools, the result envelope, the schema-deriving registry, yfinance network settings |
+| `auth/`, `db/` | bcrypt + HS256 JWT; async SQLAlchemy engine, sessions, ORM models |
+| `core/` | typed settings (`config.py`), shared number extraction (`numerics.py`), retry with jittered backoff (`retry.py`) |
+| `migrations/` | Alembic: `0001` users/conversations/messages, `0002` `filing_chunks` (probes for pgvector, falls back to `real[]`) |
+| `inference_router/` | optional round-robin router over inference replicas |
+| `eval/` | 40-case numeric question set, end-to-end runner, deterministic scorer, baseline comparison, retrieval-only eval, groundedness judge |
+| `frontend/` | Next.js 16 / React 19 chat client: login, signup, conversation sidebar, streamed answers with sources |
+| `scripts/` | demos (ingest, chunk, search, agent), indexing, smoke and deployment checks, migration drift check, CI JUnit gate |
+| `benchmarks/` | Locust full-stack load test, replica and `NUM_PARALLEL` A/B drivers, written-up results |
+| `deploy/`, `docker-compose*.yml`, `Dockerfile` | container stack (CPU default, GPU and vLLM overlays) and a RunPod fallback script |
+| `.github/` | `tests.yml` and `eval-gate.yml`, sharing the `prepare-stack` composite action |
 
-Dependency direction: `api/ → agent/ → {rag/, tools/}`; `rag/` consumes what
-`ingestion/` produces (via the vector store, not a direct import). `eval/` sits
-on the outside and drives `api/`/`agent/`.
+Dependencies point one way: `api/` → `agent/` → {`rag/`, `tools/`}. `rag/`
+reads what `ingestion/` wrote, through the database only. `eval/` drives the
+running API over HTTP.
 
 ---
 
-## 5. External dependencies (planned)
+## 5. External dependencies, as actually used
 
-- **SEC EDGAR** — filing source (full-text search + document API).
-- **Vector store** — pluggable; local (e.g. Chroma/FAISS) for dev, hosted for prod.
-- **Embedding model** — provider-configurable via env.
-- **LLM** — defaults to Claude (`claude-sonnet-5`); provider/model set via env.
-- **Market data API** — stock price / fundamentals (e.g. an equities data vendor).
-- **News API** — headline/article search.
+| dependency | used for | notes |
+|---|---|---|
+| **Ollama** serving `qwen2.5:7b` and `qwen2.5:1.5b` | all inference | any OpenAI-compatible server works behind the proxy; CI pins Ollama 0.34.0 |
+| **SEC EDGAR** | filings | no key; requires a real contact in `SEC_EDGAR_USER_AGENT`, which is validated structurally |
+| **yfinance** | prices, statements, P/E | its built-in retry loop is switched on (it ships disabled) |
+| **Google News RSS** | headlines | no key |
+| **PostgreSQL 16** (+ pgvector when available) | app data and vectors | one database for both |
+| **Redis** | rate limiting | fails open by default |
+| **`BAAI/bge-small-en-v1.5`** | embeddings, CPU | 384 dimensions |
+| **Qwen2.5 tokenizer** | chunk sizing | Hugging Face |
 
-All credentials come from environment variables — see `.env.example`.
+**Not used**, despite appearing in setup files:
+- **Claude / Anthropic.** `anthropic` is in `requirements.txt` but nothing
+  imports it, and earlier versions of this document named Claude as the default
+  LLM.
+- **Unread `.env.example` settings.** `ANTHROPIC_API_KEY`, `LLM_MODEL`,
+  `EMBEDDING_*`, `VECTOR_STORE*`, `MARKET_DATA_*`, `NEWS_API_*`, `API_HOST`,
+  `API_PORT` and `LOG_LEVEL` are not read by `core/config.py`.
 
 ---
 
 ## 6. Status
 
-Last updated 2026-09-04, after milestone 5's retrieval layer landed.
-**This section is behind the code**: milestone 6 (tools, the agent loop and
-`POST /ask`) and audit fixes F1-F4 and F7 have since landed. See the git log
-until this is rewritten.
+### Built and working end to end
 
-Deliberate behaviour that looks like a defect until you know why is in
-[KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md), not here; this section is for
-what is and is not built.
-
-### Milestones 0-3 — complete
-
-**M0 — Project setup.** Package layout above, `docs/`, `pyproject.toml`,
-`requirements.txt`, `.env.example`, and a `.gitignore` that excludes `.env`
-(verified via `git check-ignore`). Under git as of the milestone 0-3 commit.
-
-**M1 — Inference path understanding.** `llm-internals/transformer_walkthrough.py`
-(a sibling directory, *not* part of this repo): tokenization, a single forward
-pass with `output_hidden_states`, and a hand-written greedy decode loop —
-`model.generate()` deliberately unused. Verified end to end on
-`Qwen/Qwen2.5-1.5B-Instruct`, float32 on CPU: 29 hidden states of shape
-`(1, 35, 1536)`, a `(1, 2, 35, 128)` per-layer KV cache across 28 layers, and the
-cache growing exactly one row per decode step. `--compare-nocache` measured
-3,398 ms cached vs 8,259 ms uncached for 12 tokens.
-
-**M2 — Inference server.** `api/inference_proxy.py` fronts any OpenAI-compatible
-server: liveness (`/health`) split from upstream readiness (`/v1/health`),
-`/v1/models` passthrough, and buffered plus streaming `/v1/chat/completions`.
-SSE is relayed byte-for-byte and verified token-by-token against a live model
-(~40 ms between frames, `X-Accel-Buffering: no`, no `Content-Length`).
-`scripts/load_test.py` measures TTFT/TPOT/throughput with a concurrency sweep;
-`scripts/smoke_test.py` gates CI.
-
-**M3 — Backend: users, auth, chat history.** Postgres via async SQLAlchemy 2.0
-with Alembic (`0001_initial`: `users`, `conversations`, `messages`); JWT signup /
-login / me with bcrypt; conversation and message endpoints with keyset-paginated
-history; Redis sliding-window rate limiting as ASGI middleware. Cross-user
-isolation is enforced and tested — `tests/test_user_isolation.py`. See
-`docs/DATABASE.md` and `docs/RATE_LIMITING.md`.
-
-### Milestone 4 — ingestion: in progress
-
-Implemented, for two tickers (NVDA, AAPL) and their most recent 10-K each:
-
-**`ingestion/edgar_client.py`** — ticker → CIK via SEC's ticker map, latest
-filing via `data.sec.gov/submissions/`, document download from `/Archives/`.
-Rate limited below SEC's published 10 req/s ceiling; filings cached under
-`data/edgar/` (gitignored) so reruns cost SEC nothing. Exact form matching, so a
-`10-K/A` amendment is never returned in place of the 10-K.
-
-**`ingestion/parser.py`** — sections located by document structure, not by regex
-over flattened text. The real Item heading is a body-level block with no
-`<table>` ancestor; the table-of-contents copy is always inside a table. Extracts
-Item 1A, Item 7, and the consolidated income statement as separate structured
-objects. Page furniture (bare page numbers, "Table of Contents", running
-footers, and any short line repeated ≥5×) is stripped, and sentences the filing
-split across a page boundary are stitched back together.
-
-**`ingestion/chunker.py`** — prose packed to ~500 tokens with ~50 token overlap
-using the real Qwen2.5-1.5B-Instruct tokenizer, on paragraph/sentence
-boundaries. Financial tables are emitted as exactly one chunk each and never
-split. Every chunk carries `company`, `filing_type`, `fiscal_period`, `section`,
-`chunk_index`, plus provenance back to the sec.gov URL.
-
-Current output: **NVDA 72 chunks, AAPL 41**, zero mid-sentence splits.
-
-**`ingestion/pipeline.py`** — fetch → parse → chunk → embed → store, for one
-ticker. Idempotent: chunk ids derive from the accession number and the store
-upserts on them, so re-running after a chunker change updates rows in place
-instead of leaving two generations competing for the top-k.
-
-Multi-year and multi-ticker coverage is deferred; the current scope is
-deliberately two filings.
-
-### Milestone 5 — retrieval: embeddings, vector store, retriever
-
-**`rag/embeddings.py`** — `BAAI/bge-small-en-v1.5`, 384 dimensions, 33M
-parameters, on CPU. No `sentence-transformers` dependency: for this model that
-library's forward pass is CLS pooling plus an L2 norm. Two entry points, because
-BGE is asymmetric — queries take the retrieval instruction prefix, passages do
-not, and getting it backwards costs recall without erroring.
-
-Chunks are sized in *Qwen* tokens and BGE's tokenizer disagrees, so ~13% of them
-overflow its 512-token limit (longest measured: 560). Rather than let the
-tokenizer drop the tail, an over-long passage is embedded in overlapping windows
-and pooled into one renormalized vector.
-
-**`rag/vector_store.py`** — one `filing_chunks` table in the existing Postgres.
-No separate vector service: at this size it would be pure operational cost, and
-co-locating vectors with metadata makes a filter a WHERE clause the planner
-applies *before* the top-k rather than a post-filter over an approximate result
-set.
-
-**`rag/retriever.py`** — `search_filings(query, company=None, section=None)`.
-Filters push into SQL; `company` accepts a ticker or a name substring and
-`section` accepts shorthand (`"risk"`, `"mdna"`, `"income"`).
-
-Measured on this machine, 113 chunks from the two filings:
-
-| stage | measurement |
+| | what |
 |---|---|
-| embedding, 113 chunks | **19.9 s** — 176 ms/chunk, 5.7 chunks/s, CPU |
-| encoder load (once per process) | 11.7 s |
-| query latency, warm | 33-36 ms (embed + search) |
-| first query after load | ~2.0 s (torch's first forward pass) |
+| M0–M3 | scaffold; inference proxy with byte-for-byte SSE relay; users, JWT auth, conversations, keyset-paginated history; Redis sliding-window rate limiting; cross-user isolation tests |
+| M4 | EDGAR ingestion for NVDA and AAPL: structure-based section location, per-row unit scaling on the income statement, page-furniture stripping, sentence-boundary chunking (~500 Qwen tokens, ~50 overlap), tables kept whole with a natural-language caption |
+| M5 | embeddings, vector store, retriever with SQL-side filters and hybrid re-ranking |
+| M6 | the three tools, the registry, the agent loop, `POST /ask` |
+| audit fixes F1–F4, F7 | per-row table scale, table captions + re-ranking, structural User-Agent validation, tool-call budget, conversation memory |
+| after M6 | streaming endpoint and Next.js client; per-figure grounding guard; router/answer model split; advice and injection guards; explicit timeouts and retries; pool-exhaustion 503 and connection-free agent runs; per-call inference deadline; containerisation; CI test and eval gates |
 
-**Retrieval quality is good on prose and weak on tables.** "What are the main
-competitive risks?" returns three on-topic Risk Factors passages (0.719-0.722),
-and the same query filtered to NVDA returns NVDA's risk-factor summary first
-(0.690). But "What was total revenue?" ranks the income statement **5th**
-(0.646) behind MD&A prose *about* revenue (0.740) — a rendered table is mostly
-digits, and a conversational question embeds close to sentences, not to numbers.
-`content_type="table"` reaches it directly, and a hybrid keyword/vector retrieval
-or a table-aware summary line is the real fix. Not done yet.
+### Measured
 
-### pgvector, and the fallback this machine runs
+These numbers are taken from the documents and commits named in the last
+column. Most were measured on the Windows CPU laptop described in
+[INFERENCE.md](INFERENCE.md).
 
-The intended column type is `vector(384)` with an HNSW index, and that is what
-`alembic upgrade head --sql` emits. **The development host cannot install
-pgvector** — it is a C extension, the portable Postgres 16.9 here has no
-`vector.control`, there is no MSVC toolchain to build it, and no Docker. So
-migration `0002` probes `pg_available_extensions` and falls back to a plain
-`real[]` column, over which `rag/vector_store.py` computes the dot product in
-SQL.
+| what | result | where recorded |
+|---|---|---|
+| eval accuracy, baseline (Run A) | **18/40 = 45.0%** | `eval/baselines/current.json`. Ran at `787276f` on 7b for every step, before the router split; its configuration block is reconstructed, not recorded by the run |
+| eval accuracy, first CI run (`012aaa3`) | 20/40 = 50.0%, read as run-to-run noise | [CI.md](CI.md) |
+| eval noise, same system twice | 38.9% vs 33.3% on the first 18 cases | `eval/compare.py`, [baselines README](../eval/baselines/README.md) |
+| retrieval, 29 filing cases, hybrid ranker | hit@3 86.2%, hit@5 100% (69.0% / 96.6% without re-rank) | commit `2f4ef31` message only; no saved output |
+| single-user latency, full stack | median 86 s per answer, TTFT 37 s, 0.68 answers/min (13 runs) | [LOAD_TEST_RESULTS.md](../benchmarks/LOAD_TEST_RESULTS.md) |
+| concurrency | delivered throughput does not rise with users. Raw Ollama gives 1.15x throughput at 4x concurrency | same |
+| router model | routing step 13.7 s → 3.7 s; 1.5b decodes 13.9 tok/s vs 7b's 2.8 | `core/config.py` comment |
+| embedding | 113 chunks in 19.9 s; warm query 33–36 ms | earlier revision of this file, 2026-09-04 |
+| CI duration | eval gate 50.6 min on the 4 vCPU / 16 GB public runner; test gate ~12 min | [CI.md](CI.md) |
 
-Because embeddings are L2-normalized, cosine similarity equals the inner
-product, and **both backends return identical scores** — the fallback changes
-how fast a search runs, not what it returns, which is what makes the numbers
-above worth reporting. What it does not have is an ANN index: every search is a
-sequential scan. Fine at 113 rows, useless at a million. **HNSW is therefore
-unverified**, exactly like continuous batching below.
+### Built but never executed
 
-### Milestones 6+ — not started
+- **vLLM and any GPU path.** `docker-compose.vllm.yml`,
+  `docker-compose.gpu.yml` and `deploy/pod-bootstrap.sh` exist, but the dev
+  host cannot run vLLM ([INFERENCE.md](INFERENCE.md)), so continuous batching
+  is unverified.
+- **The `docker-compose.yml` CPU stack.** It is not yet run. Docker is not
+  installed on the dev host ([DEPLOYMENT.md](DEPLOYMENT.md) §8), and every
+  load test ran against host processes.
+- **The pgvector HNSW index.** The dev host runs the `real[]` fallback.
+  pgvector is present in CI's Postgres image, but its performance there has not
+  been measured.
+- **`OLLAMA_NUM_PARALLEL=2`.** The full-stack A/B was inconclusive because the
+  laptop went into standby during the run, so the setting was not applied
+  ([INFERENCE_REPLICAS.md](INFERENCE_REPLICAS.md)).
 
-`tools/`, `agent/`, `eval/`, and `api/routes.py` are still docstring-only stubs.
-**There is no `/ask` endpoint** — the copilot's actual product surface. Retrieval
-now works end to end from the command line, but nothing serves it over HTTP and
-no agent reasons over what it returns.
+### Not built
 
-### Inference backend: Ollama, not vLLM
+- **Coverage:** filings beyond two tickers and one 10-K each, and the balance
+  sheet and cash-flow statement from filings. Balance-sheet ratios come only
+  from yfinance.
+- **Scheduled re-ingestion:** none. The index is rebuilt only by hand or by CI.
+- **Token revocation:** none (stateless JWTs, 30-minute expiry), and no refresh
+  tokens.
+- **In-flight run deduplication:** none.
+- **Citations as structured fields:** the stored trace carries `source_url`
+  for filing hits, but the API response has no citation list.
 
-**vLLM cannot run on this machine and never has.** It ships Linux-only wheels
-with no native Windows build, and its CPU backend must be compiled from source
-on Linux. The development host is Windows 11 with Intel Iris Xe integrated
-graphics — no NVIDIA GPU, no WSL. Separately, Qwen2.5-7B at bf16 is ~15.2 GB of
-weights against 15.7 GB of system RAM.
+### Tests and CI
 
-**Ollama is the inference backend until a later milestone deploys to a cloud
-GPU.** `docker-compose.vllm.yml` and the vLLM sections of `docs/INFERENCE.md`
-are committed configuration that has **never been executed** — treat them as a
-deployment target, not a verified path.
+`pytest` collects **926 tests**, 106 of them marked `safety`. Safety tests are
+properties the agent must never violate, and a failure blocks a release.
 
-The practical consequence is that Ollama serves requests one at a time. Measured
-through the proxy against `qwen2.5:1.5b` on CPU:
+Every external dependency becomes a skip when it is absent. That covers
+Postgres, Redis, Ollama, the models and the index, so a laptop run is partial
+unless the whole stack is up.
 
-| concurrency | mean TTFT | p95 TTFT | system throughput |
-|---|---|---|---|
-| 1 | 0.40 s | 0.40 s | 16.1 tok/s |
-| 5 | 13.10 s | 27.11 s | 16.1 tok/s |
-| 10 | 25.06 s | 50.28 s | 21.0 tok/s |
+CI runs on GitHub Actions; see [CI.md](CI.md):
+- **`tests.yml`** runs on every push. It fails on any failure, on any skip, and
+  on fewer than 900 tests.
+- **`eval-gate.yml`** runs on changes to `agent/`, `rag/`, `tools/` or `eval/`.
+  It fails when accuracy falls below the baseline by more than the 2-case noise
+  band.
 
-Flat throughput with TTFT rising linearly is the signature of a queue, not a
-batch. **Continuous batching is therefore unverified**, and these numbers are the
-baseline that will make the eventual vLLM comparison meaningful.
+---
+
+## 7. Further reading
+
+- [DATABASE.md](DATABASE.md): schema, auth, migrations, where the local Postgres lives
+- [RATE_LIMITING.md](RATE_LIMITING.md): the sliding-window limiter and its fail-open policy
+- [INFERENCE.md](INFERENCE.md): inference servers, Ollama settings and the per-call deadline
+- [INFERENCE_REPLICAS.md](INFERENCE_REPLICAS.md): the replica router and the `NUM_PARALLEL` measurements
+- [DEPLOYMENT.md](DEPLOYMENT.md): containers and cloud GPU hosts
+- [CI.md](CI.md): the two gates and how to roll back
+- [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md): deliberate trade-offs
+- [../benchmarks/LOAD_TEST_RESULTS.md](../benchmarks/LOAD_TEST_RESULTS.md): the full-stack load test
