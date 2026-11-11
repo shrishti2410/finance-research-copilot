@@ -136,6 +136,7 @@ async def _store_turn(session, conversation, question, result, history_messages=
                 "iterations": result.iterations,
                 "completed": result.completed,
                 "stop_reason": result.stop_reason,
+                "final_figure": result.final_figure,
                 "total_ms": round(result.total_ms, 1),
                 "tools_called": [step.tool for step in result.tool_calls],
                 "prompt_tokens": result.prompt_tokens,
@@ -228,6 +229,7 @@ async def ask(
         completion_tokens=result.completion_tokens,
         total_tokens=result.total_tokens,
         usage_measured=result.usage_measured,
+        final_figure=result.final_figure,
         steps=[step.to_dict() for step in result.steps] if body.include_trace else None,
     )
 
@@ -324,6 +326,7 @@ async def _run_and_store(*, conversation_id, user_id, question, history, queue, 
             "user_message_id": user_message.id,
             "assistant_message_id": assistant_message.id,
             "answer": result.answer,
+            "final_figure": result.final_figure,
             "completed": result.completed,
             "stop_reason": result.stop_reason,
             "iterations": result.iterations,

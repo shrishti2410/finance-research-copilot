@@ -123,3 +123,97 @@ rather than multiplying load.
 and why), `_run_and_store` (the independent session), and `_RUNS` (which keeps
 the tasks from being garbage-collected mid-flight). `tests/test_ask_endpoint.py`
 pins all three, including that finished runs are released from the registry.
+
+---
+
+## A round invented figure equal to the difference of two unrelated percentages passes the grounding guard
+
+**What happens.** The grounding guard accepts a figure that is one arithmetic
+step away from two figures in the turn's tool results. Since 2026-11-11 the
+operands must be figures (not bare integers from prose or labels, not the
+tool's own bookkeeping) and the result must match to the answer's own
+precision. That closes the case found in eval run-b, where "29% increase in
+compensation" minus the 7 in "Item 7" let an invented **21.93%** through.
+
+It does not close this one: retrieved text says "compensation rose 29% while
+headcount grew 7%", and a draft invents "the net margin was **22%**". Both
+operands are real percentages, 29 − 7 = 22 exactly, and a figure written as
+"22%" claims only ±0.5. The guard accepts it. "21.9%" is refused (precision),
+and so is anything that needs the item number, but a round figure that happens
+to equal the difference, sum, product or quotient of two unrelated figures in
+the evidence goes through. `tests/test_grounding_derivation.py::
+test_known_limitation_a_round_figure_equal_to_two_unrelated_percentages_passes`
+pins the current behaviour so that closing it is a visible change.
+
+**Why.** The derivation allowance exists for arithmetic the model should be
+free to show: revenue from gross profit and a margin, market cap from shares
+and a price, the gap between two margins. The guard cannot tell a related pair
+of operands from an unrelated one by their values alone, and a rule that tried
+to ("both operands from the same result", say) would refuse market cap, whose
+operands come from two tools. The change made on 2026-11-11 took the cheap
+ground -- what counts as an operand, and how closely the result must match --
+and stopped where the next step costs correct answers.
+
+**What it would take to fix properly.** Require a derived figure's operands to
+come from `calculate_ratio`'s own output (its `value` and `inputs`), or from
+the structured rows of a statement chunk, and never from numbers in retrieved
+prose. Prose figures would then support only what they state directly. That is
+the planned fix; it needs the statement rows in the evidence first (the
+excerpt-cut work in `agent/tools.py`), and a measurement of how many correct
+answers derive from prose today.
+
+**When to revisit.** When a trace shows an unsupported figure reaching a user
+through this gap, or once statement rows are in the evidence and the
+measurement above is cheap to take.
+
+**Where the code is.** `agent/grounding.py`: `derivation_operands`,
+`_walk_figures`, `_derivable`, and the `half_ulp` on `Figure`.
+
+---
+
+## The grounding guard checks that a figure traces to a tool result, not that it is the right figure
+
+**What happens.** The guard verifies provenance: every figure in an answer
+must come directly, or by one arithmetic step, from figures that a tool call
+returned in this turn. It does not verify that the figures used are the ones
+the question needs.
+
+Eval case nvda-implied-market-cap, re-run on 2026-11-11, shows the gap. Asked
+for an implied market cap from the diluted share count and a closing price,
+the agent searched with `section="mdna"`, so the search excluded the income
+statement. It found "we repurchased 282 million shares", used that as the
+share count, and stated 282 M × $223.71 = $62.999 billion. The real figure is
+24,514 M diluted shares, about $5.49 trillion.
+
+On that run the guard did flag the figure, but only because the agent had
+rounded the price (223.71 against the tool's 223.7097). Had it used the exact
+price, the product of a buyback count and a share price would have passed.
+Both operands are real figures from tool results, and the arithmetic is right.
+
+The guard has no notion of what a number *is*. A buyback count, a share count
+and a headcount are all "a number of shares-like things in a tool result", and
+nothing in the evidence says which one a market cap needs.
+
+**Why.** Provenance is checkable mechanically. Semantic fitness is not
+checkable from the text: telling "282 million shares repurchased" from "24,514
+million diluted shares" needs the meaning of each figure, and the guard sees
+values.
+
+The first instance of this class, an item number used as an operand, was
+narrowed on 2026-11-11 (see the entry above on round invented figures). That
+change made "what counts as an operand" stricter. It cannot make "which
+operand is right" checkable.
+
+**What it would take to fix properly.** Structured facts, planned for the next
+phase (step 3 of the plan): a tool that returns line items by name and fiscal
+year (`diluted_weighted_average_shares`, FY2026) with their units. A figure is
+then traceable to a *named* fact, and a check can require that a market cap's
+share operand is a share-count fact rather than any number of shares that
+appeared in the turn.
+
+**When to revisit.** When the structured-facts tool lands.
+
+**Where the code is.** `agent/grounding.py` (`unsupported_figures`,
+`derivation_operands`). The case above is in
+`benchmarks/results/2026-11-11-fixes/excerpt_rerun_traces.json` and is written
+up in `benchmarks/EXCERPT_CUT.md`.

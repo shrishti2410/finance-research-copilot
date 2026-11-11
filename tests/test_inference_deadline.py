@@ -75,6 +75,15 @@ class Upstream:
     def __init__(self, *script) -> None:
         self.script = list(script)
         self.trickled = 0
+        # When each trickled byte was written, so a test can assert on the gaps
+        # the upstream actually produced rather than on how many bytes a given
+        # machine managed to send in a window.
+        self.sent_at: list[float] = []
+        # When the request that trickles arrived, so a test can time the
+        # deadline-bounded call itself -- from its request reaching the server to
+        # the client hanging up -- rather than the whole run, which also contains
+        # setup and earlier iterations whose length depends on the machine.
+        self.trickle_started_at: float | None = None
         self.disconnected_at: float | None = None
         self.port = _free_port()
         self._loop = asyncio.new_event_loop()
@@ -140,6 +149,7 @@ class Upstream:
                 await writer.drain()
                 return
 
+            self.trickle_started_at = time.monotonic()
             writer.write(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n"
                          b"transfer-encoding: chunked\r\n\r\n")
             await writer.drain()
@@ -152,6 +162,7 @@ class Upstream:
                 writer.write(b"1\r\n \r\n")                   # one body byte, no newline
                 await writer.drain()
                 self.trickled += 1
+                self.sent_at.append(time.monotonic())
         except (ConnectionError, asyncio.IncompleteReadError):
             if self.disconnected_at is None:
                 self.disconnected_at = time.monotonic()
@@ -175,6 +186,59 @@ def ask(**kwargs):
     registry.register(lookup_revenue)
     options = {"model": "answer-model", "router_model": "", "stream_tokens": True}
     return run_agent("What was NVIDIA's revenue?", registry=registry, **{**options, **kwargs})
+
+
+def ask_within(deadline: float, slack: float = 5.0, **kwargs):
+    """Run `ask`, and fail -- rather than hang -- if the deadline does not end it.
+
+    Every test that uses this has a stream only the deadline can stop. With the
+    deadline bypassed, `asyncio.run(ask())` never returns, and the suite stalls
+    until the CI job's own timeout instead of reporting a failure. Measured on
+    2026-11-11 by bypassing `_within_deadline`: the scaled-down test sat for the
+    whole 60s cap it was run under.
+
+    The bound is `slack` above the deadline so a slow machine cannot trip it.
+    The tests' own assertions on elapsed time are tighter than the bound, and
+    they are what measure the deadline; this only guarantees an answer.
+    """
+    bound = deadline + slack
+
+    async def bounded():
+        try:
+            return await asyncio.wait_for(ask(**kwargs), timeout=bound)
+        except asyncio.TimeoutError:
+            pytest.fail(
+                f"the call was still running {bound:.1f}s after it started, "
+                f"{slack:.1f}s past the {deadline:.1f}s per-call deadline: the "
+                f"deadline did not end it"
+            )
+
+    return asyncio.run(bounded())
+
+
+# How long after the deadline the client may take to hang up. Cancelling the
+# call and closing the response is milliseconds; the slack is for a slow loop.
+HANGUP_SLACK = 1.0
+
+
+def assert_call_held_to_the_deadline(upstream, deadline: float) -> None:
+    """The bounded call lasted the deadline, timed where the call is visible.
+
+    Measured from the trickling request reaching the upstream to the client
+    disconnecting. The whole run's wall-clock cannot be bounded above by
+    deadline + a constant: it also holds `run_agent`'s setup and, where the
+    script has one, the first iteration's tool call -- measured on 2026-11-11 at
+    0.55-0.80 s and about 1.5 s on this laptop, against a bounded call that took
+    2.01-2.02 s every time. That made `elapsed < deadline + 1.5` a statement
+    about the machine, and it failed on an idle one.
+    """
+    started = upstream.trickle_started_at
+    ended = upstream.wait_for_disconnect()
+    assert started is not None, "the trickling call never reached the upstream"
+    assert ended is not None, "the client never hung up: the call was abandoned, not closed"
+    held = ended - started
+    assert deadline - 0.1 <= held < deadline + HANGUP_SLACK, (
+        f"the bounded call lasted {held:.2f}s against a {deadline}s deadline")
 
 
 def assert_stopped_honestly(result, deadline: float, tool_ran: bool = True) -> None:
@@ -214,7 +278,7 @@ def test_one_byte_a_minute_under_the_real_read_timeout_is_stopped_at_the_deadlin
     monkeypatch.setattr(settings, "inference_call_deadline", deadline)
     try:
         started = time.monotonic()
-        result = asyncio.run(ask())
+        result = ask_within(deadline, slack=20.0)
         elapsed = time.monotonic() - started
         disconnected = upstream.wait_for_disconnect()
     finally:
@@ -242,26 +306,50 @@ def trickling(monkeypatch):
 
 
 def test_without_the_deadline_the_read_timeout_never_ends_a_trickling_stream(trickling, monkeypatch):
-    """The control. Without this, the tests below could pass for the wrong reason."""
+    """The control. Without this, the tests below could pass for the wrong reason.
+
+    What has to be true is the property in the fixture's docstring: a byte always
+    arrived before the read timer ran out, for longer than one read-timeout
+    window, right up to the moment the client was cut off. That is asserted on
+    the gaps the upstream recorded. It used to be asserted as "at least 15 bytes
+    in 5 seconds", which is the same claim only on a machine whose timers keep
+    to 0.25s and starts the trickle at once. Measured here, the trickle begins
+    about 1.6s into the window -- after the tool call and the first streamed
+    response -- and then keeps a steady 0.26s, so the window holds 14 bytes.
+    The count said nothing about whether the read timeout could have fired.
+    """
     monkeypatch.setattr(settings, "inference_call_deadline", 3600.0)
+    read_timeout = settings.inference_read_timeout
 
     async def bounded():
         return await asyncio.wait_for(ask(), timeout=5.0)
 
     with pytest.raises(asyncio.TimeoutError):
         asyncio.run(bounded())
-    assert trickling.trickled >= 15, "bytes kept arriving the whole time"
+    cut_off = time.monotonic()
+
+    sent = list(trickling.sent_at)
+    assert len(sent) >= 2, "the upstream never got going"
+    gaps = [later - earlier for earlier, later in zip(sent, sent[1:])]
+    assert max(gaps) < read_timeout, (
+        f"a {max(gaps):.2f}s silence between bytes would have tripped the "
+        f"{read_timeout}s read timeout: the scenario was not reproduced on this run")
+    assert sent[-1] - sent[0] >= read_timeout, (
+        f"the stream lasted {sent[-1] - sent[0]:.2f}s, less than one read-timeout "
+        f"window, so surviving it proves nothing")
+    assert cut_off - sent[-1] < read_timeout, (
+        "bytes must still have been arriving when the client was cut off")
 
 
 def test_with_the_deadline_the_same_stream_ends_at_the_bound(trickling, monkeypatch):
     monkeypatch.setattr(settings, "inference_call_deadline", 2.0)
 
     started = time.monotonic()
-    result = asyncio.run(ask())
+    result = ask_within(2.0)
     elapsed = time.monotonic() - started
 
-    assert 2.0 <= elapsed < 3.5, f"ended after {elapsed:.2f}s"
-    assert trickling.wait_for_disconnect() is not None
+    assert elapsed >= 2.0, f"ended after {elapsed:.2f}s, before the deadline"
+    assert_call_held_to_the_deadline(trickling, 2.0)
     assert_stopped_honestly(result, 2.0)
 
 
@@ -272,12 +360,13 @@ def test_a_buffered_call_is_bounded_too(monkeypatch):
     monkeypatch.setattr(settings, "inference_call_deadline", 2.0)
     try:
         started = time.monotonic()
-        result = asyncio.run(ask(stream_tokens=False))
+        result = ask_within(2.0, stream_tokens=False)
         elapsed = time.monotonic() - started
+        assert_call_held_to_the_deadline(upstream, 2.0)
     finally:
         upstream.close()
 
-    assert 2.0 <= elapsed < 3.5
+    assert elapsed >= 2.0
     assert_stopped_honestly(result, 2.0)
 
 
@@ -289,12 +378,13 @@ def test_the_router_call_is_bounded_too(monkeypatch):
     monkeypatch.setattr(settings, "inference_call_deadline", 1.5)
     try:
         started = time.monotonic()
-        result = asyncio.run(ask(router_model="router-model"))
+        result = ask_within(1.5, router_model="router-model")
         elapsed = time.monotonic() - started
+        assert_call_held_to_the_deadline(upstream, 1.5)
     finally:
         upstream.close()
 
-    assert 1.5 <= elapsed < 3.0
+    assert elapsed >= 1.5
     assert_stopped_honestly(result, 1.5, tool_ran=False)
 
 
@@ -322,7 +412,7 @@ def test_the_upstream_is_released_through_the_real_api_proxy(monkeypatch):
         monkeypatch.setattr(settings, "agent_inference_base_url", f"http://127.0.0.1:{port}/v1")
 
         started = time.monotonic()
-        result = asyncio.run(ask())
+        result = ask_within(2.0)
         elapsed = time.monotonic() - started
         disconnected = upstream.wait_for_disconnect()
     finally:
@@ -330,9 +420,10 @@ def test_the_upstream_is_released_through_the_real_api_proxy(monkeypatch):
         thread.join(10)
         upstream.close()
 
-    assert 2.0 <= elapsed < 3.5
-    assert disconnected is not None and disconnected - started < 5.0, \
+    assert elapsed >= 2.0
+    assert disconnected is not None, \
         "the proxy must close its upstream request when the agent gives up"
+    assert_call_held_to_the_deadline(upstream, 2.0)
     assert_stopped_honestly(result, 2.0)
 
 

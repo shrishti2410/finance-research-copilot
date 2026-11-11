@@ -40,8 +40,9 @@ import re
 from dataclasses import dataclass
 
 __all__ = [
-    "extract_number", "Candidate", "candidates", "Outcome", "score_case",
-    "Summary", "summarise", "concluding_spans",
+    "extract_number", "extract_scored", "Candidate", "candidates", "Outcome",
+    "score_case", "Summary", "summarise", "concluding_spans",
+    "FROM_FINAL_FIGURE", "FROM_ANSWER", "FROM_DECLINED",
 ]
 
 # The number-reading primitives live in core/numerics.py, because the grounding
@@ -133,6 +134,38 @@ def extract_number(answer: str, unit: str) -> float | None:
     return usable[0][1]
 
 
+# Where a scored number came from. Reported per case, so a pass that needed the
+# fallback can be told from one the agent stated in its own final-figure line.
+FROM_FINAL_FIGURE = "final_figure"
+FROM_ANSWER = "answer"
+FROM_DECLINED = "declined"
+
+
+def extract_scored(answer: str, final_figure: str | None, unit: str) -> tuple[float | None, str]:
+    """The number to score, and where it came from.
+
+    The agent's own "Final figure:" line first: it is the one place the answer
+    says which of its numbers is the answer, and the regex over the prose was
+    measured getting that wrong in eval run-b -- the price instead of the P/E it
+    produced (cases 38, 39), the first margin instead of the gap (case 40).
+
+    The line is read with the same `extract_number`, so units and scale words
+    are converted exactly as before. A line that holds no usable number in the
+    case's unit falls back to the prose. A line that says "none" is the agent
+    declining, and scores as no number rather than as whatever stray figure the
+    prose happens to mention. With no line at all -- every stored run before
+    this change -- the score is exactly what the prose regex gives.
+    """
+    if final_figure is not None:
+        if final_figure.strip().lower() == "none":
+            return None, FROM_DECLINED
+        value = extract_number(final_figure, unit)
+        if value is not None:
+            return value, FROM_FINAL_FIGURE
+    value = extract_number(answer, unit)
+    return value, (FROM_ANSWER if value is not None else "")
+
+
 # ── scoring ─────────────────────────────────────────────────────────────────
 
 @dataclass(frozen=True)
@@ -157,6 +190,10 @@ class Outcome:
     completed: bool
     stop_reason: str
     error: str = ""
+    # The agent's "Final figure:" line, if it wrote one, and which source the
+    # scored number came from: FROM_FINAL_FIGURE, FROM_ANSWER, FROM_DECLINED.
+    final_figure: str | None = None
+    extracted_from: str = ""
 
     @property
     def verdict(self) -> str:
@@ -171,9 +208,9 @@ class Outcome:
         return self.prompt_tokens + self.completion_tokens
 
 
-def score_case(case, answer: str, **fields) -> Outcome:
-    """Apply the case's tolerance to whatever number the answer gave."""
-    extracted = extract_number(answer, case.unit)
+def score_case(case, answer: str, final_figure: str | None = None, **fields) -> Outcome:
+    """Apply the case's tolerance to the answer's figure. See `extract_scored`."""
+    extracted, source = extract_scored(answer, final_figure, case.unit)
     return Outcome(
         case_id=case.id,
         question=case.question,
@@ -185,6 +222,8 @@ def score_case(case, answer: str, **fields) -> Outcome:
         extracted=extracted,
         answer=answer,
         passed=case.matches(extracted),
+        final_figure=final_figure,
+        extracted_from=source,
         **fields,
     )
 

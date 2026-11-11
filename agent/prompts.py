@@ -70,6 +70,11 @@ than one after the other.
 tool did not return.
 3. When you have enough, answer in prose. Give the figures you used and say \
 which company and period each belongs to.
+4. End the answer with one line on its own, giving the single number that \
+answers the question with its unit, exactly as you stated it above: \
+"Final figure: $1.23 billion", "Final figure: 4.56%", "Final figure: 7.8x". \
+If there is no single figure, or you could not establish it, write \
+"Final figure: none".
 
 Earlier turns in this conversation tell you what a follow-up refers to -- \
 "what about Apple's?" after a question about gross margin is a question \

@@ -54,7 +54,7 @@ from typing import Any
 
 from core.config import settings
 from eval.datasets import Case, load_cases
-from eval.metrics import Outcome, extract_number, summarise
+from eval.metrics import Outcome, extract_scored, summarise
 
 BASELINE_DIR = Path(__file__).parent / "baselines"
 DEFAULT_BASELINE = BASELINE_DIR / "current.json"
@@ -70,8 +70,13 @@ MIN_CASES = 2
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _as_outcome(row: dict, case: Case) -> Outcome:
-    """Rescore one stored row against the case as it is defined *now*."""
-    extracted = extract_number(row.get("answer") or "", case.unit)
+    """Rescore one stored row against the case as it is defined *now*.
+
+    A row stored before final figures existed has none, and rescores exactly as
+    it did -- which is what keeps an older baseline comparable.
+    """
+    extracted, source = extract_scored(row.get("answer") or "",
+                                       row.get("final_figure"), case.unit)
     return Outcome(
         case_id=case.id,
         question=case.question,
@@ -91,6 +96,8 @@ def _as_outcome(row: dict, case: Case) -> Outcome:
         completed=bool(row.get("completed")),
         stop_reason=row.get("stop_reason") or "",
         error=row.get("error") or "",
+        final_figure=row.get("final_figure"),
+        extracted_from=source,
     )
 
 

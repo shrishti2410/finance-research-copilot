@@ -158,6 +158,49 @@ def states_a_figure(answer: str) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# The final figure
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# The system prompt asks every answer to end with "Final figure: <number and
+# unit>". It exists for whoever has to read *the* number out of the prose: the
+# eval's scorer, which had been reading the first plausible number instead --
+# the $171.25 price in "at $171.25 ... a P/E of 21.65x", the 71.07% in "71.07%
+# against 48.79%, a difference of 22.28 points".
+#
+# It is a line of text and not a tool call, because Ollama ignores tool_choice
+# and a final answer cannot be forced through one. It is read *after* both
+# guards have run on the full text, line included, so the figure in it is
+# grounding-checked like any other and is gone if the advice guard replaced
+# the answer. The line is then removed from the answer the user sees and stored
+# as `final_figure`. A model that does not write it costs nothing: the field is
+# None and every consumer falls back to the prose.
+
+_FINAL_FIGURE = re.compile(r"^[ \t*_>-]*final figure\s*[*_]*\s*:\s*[*_]*\s*(.*?)[ \t*_.]*$",
+                           re.I | re.M)
+
+# What a model writes when it has no figure. Kept as the literal "none" so a
+# reader can tell "declined" from "did not follow the format" (None).
+FINAL_FIGURE_NONE = "none"
+_DECLINED = re.compile(r"^(?:none|n/?a|not available|unknown|-|—)$", re.I)
+
+
+def split_final_figure(answer: str) -> tuple[str, str | None]:
+    """(answer without its final-figure line, the figure as written or None).
+
+    The last such line wins: a model that restates its figure after a
+    correction means the second one. Every such line is removed from the text.
+    """
+    matches = list(_FINAL_FIGURE.finditer(answer or ""))
+    if not matches:
+        return answer, None
+    figure = matches[-1].group(1).strip()
+    text = _FINAL_FIGURE.sub("", answer).rstrip()
+    if not figure or _DECLINED.match(figure):
+        return text, FINAL_FIGURE_NONE
+    return text, figure
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Streaming the model call
 # ─────────────────────────────────────────────────────────────────────────────
 #
@@ -370,6 +413,11 @@ class AgentResult:
     model: str = ""
     # Empty when the whole turn ran on `model`. See settings.agent_router_model.
     router_model: str = ""
+    # The figure from the answer's "Final figure:" line, as written ("$215.9
+    # billion"), FINAL_FIGURE_NONE when the model declined, or None when the
+    # line was absent or the answer is not the model's own. See
+    # split_final_figure.
+    final_figure: str | None = None
     total_ms: float = 0.0
     # Summed across every model call in the run. Zero when the upstream did not
     # report usage -- which the streaming path does not -- so a zero here means
@@ -400,6 +448,7 @@ class AgentResult:
             "model": self.model,
             "router_model": self.router_model,
             "router_calls": self.router_calls,
+            "final_figure": self.final_figure,
             "total_ms": round(self.total_ms, 1),
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
@@ -805,6 +854,10 @@ async def run_agent(
                         if findings else REDIRECTION
                     )
 
+                # Read after both guards, so the figure was checked with the
+                # rest of the text; a replaced answer has no line to read.
+                answer, final_figure = split_final_figure(answer)
+
                 steps.append(Step(
                     iteration=iteration, tool="final_answer",
                     arguments={"unverified": [f.text for f in unverified]}
@@ -821,6 +874,7 @@ async def run_agent(
                     ),
                     steps=steps, iterations=iteration,
                     completed=bool(answer) and not unverified and not advice,
+                    final_figure=final_figure,
                     stop_reason=("investment_advice" if advice else
                                  ("unverified_figures" if unverified else
                                   ("final_answer" if answer else "empty_response"))),

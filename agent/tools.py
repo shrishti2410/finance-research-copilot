@@ -17,6 +17,21 @@ debugging or for citation -- it just does not go back through the model.
 
 That is not a workaround for a small context. It is the same reason a person
 reading a 10-K writes down the gross margin rather than the page.
+
+A table is never cut
+--------------------
+Prose excerpts are cut at `EXCERPT_CHARS`; a statement is not. The indexed
+income statements are ~3,100-3,300 characters, and the first ~700 of each are
+the generated caption, so a 700-character excerpt of a table showed the model
+the names of the line items and not one figure. Eval run-b (2026-11-10) lost
+five cases to exactly that: the retriever returned the right chunk at rank 1
+and the model, reading accurately, said the excerpt "lists the line items but
+does not provide the specific number". A table chunk is therefore returned
+whole -- caption, units note, every row -- and its parsed rows ride along in
+the full result (`rows`, with `values_absolute`), so the grounding guard can
+see a share count in absolute units even though the grid prints it in
+millions. The model is shown the rendered grid only: it already carries the
+same numbers under the units note, and on a CPU host tokens are prefill time.
 """
 
 from __future__ import annotations
@@ -30,11 +45,49 @@ from tools.ratios import calculate_ratio
 from tools.registry import Registry
 from tools.stock_price import get_stock_price
 
-# How much of a retrieved filing passage the model sees. Enough to carry the
+# How much of a retrieved *prose* passage the model sees. Enough to carry the
 # claim and its context; short enough that three of them are not the whole turn.
+# Tables are exempt: see the module docstring.
 EXCERPT_CHARS = 700
 MAX_HEADLINES = 8
 MAX_PRICE_BARS = 5
+
+# A prose cut lands on a sentence end when one falls in the back half of the
+# window, so an excerpt does not stop mid-word or mid-figure ("revenue was
+# $215."). The marker says the passage continues.
+_CUT_MARKER = " …"
+_SENTENCE_ENDS = (". ", ".\n", "? ", "! ", "; ")
+
+
+def _excerpt(content: str, content_type: str, limit: int = EXCERPT_CHARS) -> str:
+    """The text of a hit as the model will see it: whole for a table, cut for prose."""
+    if content_type == "table" or len(content) <= limit:
+        return content
+    window = content[:limit]
+    cut = max((window.rfind(end) for end in _SENTENCE_ENDS), default=-1)
+    if cut >= limit // 2:
+        return window[:cut + 1].rstrip() + _CUT_MARKER
+    return window.rstrip() + _CUT_MARKER
+
+
+def _rows(structured: dict | None) -> list[dict[str, Any]]:
+    """A statement chunk's parsed rows, with the fields a reader of the trace needs.
+
+    `values` are as printed (the grid's units); `values_absolute` are in dollars
+    or shares. Heading rows carry no values and are left out.
+    """
+    if not structured:
+        return []
+    return [
+        {
+            "label": row.get("label"),
+            "kind": row.get("kind"),
+            "values": row.get("values"),
+            "values_absolute": row.get("values_absolute"),
+        }
+        for row in structured.get("rows", [])
+        if row.get("kind") != "heading" and row.get("values")
+    ]
 
 
 async def search_filings(
@@ -47,8 +100,11 @@ async def search_filings(
 
     Use this for what a company *said* in its annual report: how it describes
     its risks, its own explanation of results, or the exact wording of a
-    disclosure. This is the company's own language, not a computed figure -- for
-    a number like a margin or a ratio, use calculate_ratio instead.
+    disclosure, and for any reported line item for a specific fiscal year:
+    revenue, gross profit, net income, EPS, share counts, segment revenue. The
+    income statement (section="income") is returned whole, with every figure for
+    each of its three fiscal years. For a current margin or ratio, use
+    calculate_ratio instead.
 
     Only filings that have been indexed are searchable. Currently that is NVIDIA
     (NVDA, fiscal 2026) and Apple (AAPL, fiscal 2025), one 10-K each. A search
@@ -69,26 +125,33 @@ async def search_filings(
     Returns:
         A dict with "ok": True and "results", a list ordered best-match first.
         Each result has "company", "ticker", "fiscal_period", "section",
-        "excerpt" (the matching passage), "score" (0 to 1, higher is closer),
-        and "source_url". An empty list means nothing matched.
+        "content_type" ("text" or "table"), "excerpt" (the matching passage; a
+        table is given whole, with its units note and every row), "score" (0 to
+        1, higher is closer), and "source_url". A table result also carries
+        "units", "periods" and "rows" (label, kind, values as printed, and
+        values_absolute in dollars or shares). An empty list means nothing
+        matched.
     """
     hits = await _search_filings(query, company=company, section=section, k=max(1, min(k, 8)))
-    return ok(
-        query=query,
-        count=len(hits),
-        results=[
-            {
-                "company": hit.company,
-                "ticker": hit.ticker,
-                "fiscal_period": hit.fiscal_period,
-                "section": hit.section,
-                "score": round(hit.score, 4),
-                "excerpt": hit.content[:EXCERPT_CHARS],
-                "source_url": hit.source_url,
-            }
-            for hit in hits
-        ],
-    )
+    results = []
+    for hit in hits:
+        entry: dict[str, Any] = {
+            "company": hit.company,
+            "ticker": hit.ticker,
+            "fiscal_period": hit.fiscal_period,
+            "section": hit.section,
+            "content_type": hit.content_type,
+            "score": round(hit.score, 4),
+            "excerpt": _excerpt(hit.content, hit.content_type),
+            "source_url": hit.source_url,
+        }
+        if hit.content_type == "table":
+            structured = hit.structured or {}
+            entry["units"] = structured.get("units")
+            entry["periods"] = structured.get("periods")
+            entry["rows"] = _rows(structured)
+        results.append(entry)
+    return ok(query=query, count=len(hits), results=results)
 
 
 def build_registry() -> Registry:
@@ -152,12 +215,18 @@ def compact_for_model(name: str, result: dict[str, Any]) -> dict[str, Any]:
         return compact
 
     if name == "search_filings":
+        # The excerpt is whole for a table, so the model reads the statement as
+        # rendered: caption, units note, aligned rows. The parsed `rows` stay in
+        # the full result for the trace and the grounding guard; repeating every
+        # figure a second time as JSON would cost prefill and tell the model
+        # nothing the grid does not.
         return {
             "ok": True,
             "count": result.get("count"),
             "results": [
                 {key: passage[key] for key in
-                 ("ticker", "fiscal_period", "section", "score", "excerpt")}
+                 ("ticker", "fiscal_period", "section", "content_type", "score", "excerpt")
+                 if key in passage}
                 for passage in result.get("results", [])
             ],
         }

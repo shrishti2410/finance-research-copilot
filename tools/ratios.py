@@ -164,6 +164,12 @@ def calculate_ratio(
     valuation. The result includes the formula used and the raw dollar figures
     it was computed from, so the number can be checked rather than trusted.
 
+    It returns only the most recent period of the kind asked for (the latest
+    fiscal year, quarter, or trailing twelve months) and says which in
+    "period_end". It cannot return an earlier year: for a question that names a
+    fiscal year, or for a line item such as revenue, net income, EPS or a share
+    count, use search_filings with section="income" instead.
+
     Args:
         ticker: Stock ticker symbol, e.g. "NVDA" or "AAPL". Case-insensitive.
         ratio_name: Which ratio to compute. One of:
@@ -216,7 +222,8 @@ def calculate_ratio(
     if ratio not in SUPPORTED_RATIOS:
         return error(
             ERROR_UNSUPPORTED,
-            f"Unknown ratio {ratio_name!r}. Supported: {', '.join(SUPPORTED_RATIOS)}.",
+            f"Unknown ratio {ratio_name!r}. Supported: {', '.join(SUPPORTED_RATIOS)}. "
+            "Line items and per-share figures -- revenue, net income, EPS, share counts, tax expense, segment revenue -- are not ratios: they are in the income statement of the indexed 10-K, via search_filings(section=\"income\"). Use search_filings too for any figure tied to a specific fiscal year, because calculate_ratio only returns the most recent period.",
             ticker=symbol,
         )
 
