@@ -133,6 +133,21 @@ def build() -> list[dict]:
         if not data["ok"]:
             raise SystemExit(f"ratio {key} failed: {data.get('message')}")
 
+    def fy(result: dict) -> str:
+        """The fiscal year a ratio result is for, from its own period end.
+
+        Written into the question so the text names the period the value came
+        from. "Most recent" went stale on 2026-11-10: yfinance's latest annual
+        for AAPL rolled from FY2025 to FY2026 after this set was generated, and
+        four expected values stopped matching what the tool returns. Both
+        companies name their fiscal year after the calendar year it ends in
+        (NVDA's FY2026 ended 2026-01-25, AAPL's FY2026 ended 2026-09-30).
+        """
+        end = result.get("balance_sheet_date") or result.get("period_end") or ""
+        if len(end) < 4:
+            raise SystemExit(f"ratio result has no period end: {result}")
+        return f"fiscal {end[:4]}"
+
     def nv(label: str, period: str = "FY2026") -> float:
         return nvda[label][NVDA_PERIODS.index(period)]
 
@@ -357,34 +372,40 @@ def build() -> list[dict]:
 
     # ── tools: ratios ───────────────────────────────────────────────────────
     add("nvda-gross-margin-tool",
-        "What is NVIDIA's most recent annual gross margin?",
+        f"What was NVIDIA's annual gross margin for {fy(ratio[('NVDA', 'gross_margin')])}?",
         round(ratio[("NVDA", "gross_margin")]["value"] * 100, 2), PCT, 0.5,
         RAT, "NVDA",
         f"calculate_ratio('NVDA','gross_margin','annual') = "
-        f"{ratio[('NVDA','gross_margin')]['formatted']}")
+        f"{ratio[('NVDA','gross_margin')]['formatted']} "
+        f"(period_end {ratio[('NVDA','gross_margin')]['period_end']})")
 
     add("aapl-gross-margin-tool",
-        "What is Apple's most recent annual gross margin?",
+        f"What was Apple's annual gross margin for {fy(ratio[('AAPL', 'gross_margin')])}?",
         round(ratio[("AAPL", "gross_margin")]["value"] * 100, 2), PCT, 0.5,
         RAT, "AAPL",
         f"calculate_ratio('AAPL','gross_margin','annual') = "
-        f"{ratio[('AAPL','gross_margin')]['formatted']}")
+        f"{ratio[('AAPL','gross_margin')]['formatted']} "
+        f"(period_end {ratio[('AAPL','gross_margin')]['period_end']})")
 
     add("nvda-debt-to-equity-tool",
-        "What is NVIDIA's debt-to-equity ratio?",
+        f"What was NVIDIA's debt-to-equity ratio at the end of "
+        f"{fy(ratio[('NVDA', 'debt_to_equity')])}?",
         round(ratio[("NVDA", "debt_to_equity")]["value"], 2), X, 0.05,
         RAT, "NVDA",
         f"calculate_ratio('NVDA','debt_to_equity','annual') = "
-        f"{ratio[('NVDA','debt_to_equity')]['formatted']}",
+        f"{ratio[('NVDA','debt_to_equity')]['formatted']} "
+        f"(balance sheet {ratio[('NVDA','debt_to_equity')]['balance_sheet_date']})",
         "Not in the ingested filings -- the balance sheet is not indexed, so "
         "this is only reachable through the tool.")
 
     add("aapl-debt-to-equity-tool",
-        "What is Apple's debt-to-equity ratio?",
+        f"What was Apple's debt-to-equity ratio at the end of "
+        f"{fy(ratio[('AAPL', 'debt_to_equity')])}?",
         round(ratio[("AAPL", "debt_to_equity")]["value"], 2), X, 0.05,
         RAT, "AAPL",
         f"calculate_ratio('AAPL','debt_to_equity','annual') = "
-        f"{ratio[('AAPL','debt_to_equity')]['formatted']}",
+        f"{ratio[('AAPL','debt_to_equity')]['formatted']} "
+        f"(balance sheet {ratio[('AAPL','debt_to_equity')]['balance_sheet_date']})",
         "Balance-sheet only; not answerable from the indexed filings.")
 
     add("nvda-current-ratio-tool",
@@ -396,11 +417,12 @@ def build() -> list[dict]:
         "Balance-sheet only.")
 
     add("aapl-net-margin-tool",
-        "What is Apple's most recent annual net profit margin?",
+        f"What was Apple's annual net profit margin for {fy(ratio[('AAPL', 'net_margin')])}?",
         round(ratio[("AAPL", "net_margin")]["value"] * 100, 2), PCT, 0.5,
         RAT, "AAPL",
         f"calculate_ratio('AAPL','net_margin','annual') = "
-        f"{ratio[('AAPL','net_margin')]['formatted']}")
+        f"{ratio[('AAPL','net_margin')]['formatted']} "
+        f"(period_end {ratio[('AAPL','net_margin')]['period_end']})")
 
     # ── tools: prices (closed historical windows) ───────────────────────────
     nvda_aug, aapl_aug = prices["nvda_aug"], prices["aapl_aug"]
@@ -497,13 +519,16 @@ def build() -> list[dict]:
         f"Computed: ${aapl_close} close / ${ap('Diluted')} FY2025 diluted EPS")
 
     add("nvda-vs-aapl-gross-margin-gap",
-        "How many percentage points higher was NVIDIA's most recent gross "
-        "margin than Apple's?",
+        f"How many percentage points higher was NVIDIA's "
+        f"{fy(ratio[('NVDA', 'gross_margin')])} gross margin than Apple's "
+        f"{fy(ratio[('AAPL', 'gross_margin')])} gross margin?",
         round((ratio[("NVDA", "gross_margin")]["value"]
                - ratio[("AAPL", "gross_margin")]["value"]) * 100, 2),
         "percentage points", 1.0, RAT, "NVDA+AAPL",
-        f"Computed: {ratio[('NVDA','gross_margin')]['formatted']} - "
-        f"{ratio[('AAPL','gross_margin')]['formatted']}",
+        f"Computed: {ratio[('NVDA','gross_margin')]['formatted']} "
+        f"(period_end {ratio[('NVDA','gross_margin')]['period_end']}) - "
+        f"{ratio[('AAPL','gross_margin')]['formatted']} "
+        f"(period_end {ratio[('AAPL','gross_margin')]['period_end']})",
         "Two tool calls in one question; different fiscal year ends, which the "
         "answer should acknowledge.")
 
