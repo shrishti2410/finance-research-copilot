@@ -182,6 +182,34 @@ def ask(**kwargs):
     return run_agent("What was NVIDIA's revenue?", registry=registry, **{**options, **kwargs})
 
 
+def ask_within(deadline: float, slack: float = 5.0, **kwargs):
+    """Run `ask`, and fail -- rather than hang -- if the deadline does not end it.
+
+    Every test that uses this has a stream only the deadline can stop. With the
+    deadline bypassed, `asyncio.run(ask())` never returns, and the suite stalls
+    until the CI job's own timeout instead of reporting a failure. Measured on
+    2026-11-11 by bypassing `_within_deadline`: the scaled-down test sat for the
+    whole 60s cap it was run under.
+
+    The bound is `slack` above the deadline so a slow machine cannot trip it.
+    The tests' own assertions on elapsed time are tighter than the bound, and
+    they are what measure the deadline; this only guarantees an answer.
+    """
+    bound = deadline + slack
+
+    async def bounded():
+        try:
+            return await asyncio.wait_for(ask(**kwargs), timeout=bound)
+        except asyncio.TimeoutError:
+            pytest.fail(
+                f"the call was still running {bound:.1f}s after it started, "
+                f"{slack:.1f}s past the {deadline:.1f}s per-call deadline: the "
+                f"deadline did not end it"
+            )
+
+    return asyncio.run(bounded())
+
+
 def assert_stopped_honestly(result, deadline: float, tool_ran: bool = True) -> None:
     """An inference_error like any other: clean stop, trace kept, a true message."""
     assert result.stop_reason == "inference_error"
@@ -219,7 +247,7 @@ def test_one_byte_a_minute_under_the_real_read_timeout_is_stopped_at_the_deadlin
     monkeypatch.setattr(settings, "inference_call_deadline", deadline)
     try:
         started = time.monotonic()
-        result = asyncio.run(ask())
+        result = ask_within(deadline, slack=20.0)
         elapsed = time.monotonic() - started
         disconnected = upstream.wait_for_disconnect()
     finally:
@@ -286,7 +314,7 @@ def test_with_the_deadline_the_same_stream_ends_at_the_bound(trickling, monkeypa
     monkeypatch.setattr(settings, "inference_call_deadline", 2.0)
 
     started = time.monotonic()
-    result = asyncio.run(ask())
+    result = ask_within(2.0)
     elapsed = time.monotonic() - started
 
     assert 2.0 <= elapsed < 3.5, f"ended after {elapsed:.2f}s"
@@ -301,7 +329,7 @@ def test_a_buffered_call_is_bounded_too(monkeypatch):
     monkeypatch.setattr(settings, "inference_call_deadline", 2.0)
     try:
         started = time.monotonic()
-        result = asyncio.run(ask(stream_tokens=False))
+        result = ask_within(2.0, stream_tokens=False)
         elapsed = time.monotonic() - started
     finally:
         upstream.close()
@@ -318,7 +346,7 @@ def test_the_router_call_is_bounded_too(monkeypatch):
     monkeypatch.setattr(settings, "inference_call_deadline", 1.5)
     try:
         started = time.monotonic()
-        result = asyncio.run(ask(router_model="router-model"))
+        result = ask_within(1.5, router_model="router-model")
         elapsed = time.monotonic() - started
     finally:
         upstream.close()
@@ -351,7 +379,7 @@ def test_the_upstream_is_released_through_the_real_api_proxy(monkeypatch):
         monkeypatch.setattr(settings, "agent_inference_base_url", f"http://127.0.0.1:{port}/v1")
 
         started = time.monotonic()
-        result = asyncio.run(ask())
+        result = ask_within(2.0)
         elapsed = time.monotonic() - started
         disconnected = upstream.wait_for_disconnect()
     finally:
