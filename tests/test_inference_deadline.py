@@ -79,6 +79,11 @@ class Upstream:
         # the upstream actually produced rather than on how many bytes a given
         # machine managed to send in a window.
         self.sent_at: list[float] = []
+        # When the request that trickles arrived, so a test can time the
+        # deadline-bounded call itself -- from its request reaching the server to
+        # the client hanging up -- rather than the whole run, which also contains
+        # setup and earlier iterations whose length depends on the machine.
+        self.trickle_started_at: float | None = None
         self.disconnected_at: float | None = None
         self.port = _free_port()
         self._loop = asyncio.new_event_loop()
@@ -144,6 +149,7 @@ class Upstream:
                 await writer.drain()
                 return
 
+            self.trickle_started_at = time.monotonic()
             writer.write(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n"
                          b"transfer-encoding: chunked\r\n\r\n")
             await writer.drain()
@@ -208,6 +214,31 @@ def ask_within(deadline: float, slack: float = 5.0, **kwargs):
             )
 
     return asyncio.run(bounded())
+
+
+# How long after the deadline the client may take to hang up. Cancelling the
+# call and closing the response is milliseconds; the slack is for a slow loop.
+HANGUP_SLACK = 1.0
+
+
+def assert_call_held_to_the_deadline(upstream, deadline: float) -> None:
+    """The bounded call lasted the deadline, timed where the call is visible.
+
+    Measured from the trickling request reaching the upstream to the client
+    disconnecting. The whole run's wall-clock cannot be bounded above by
+    deadline + a constant: it also holds `run_agent`'s setup and, where the
+    script has one, the first iteration's tool call -- measured on 2026-11-11 at
+    0.55-0.80 s and about 1.5 s on this laptop, against a bounded call that took
+    2.01-2.02 s every time. That made `elapsed < deadline + 1.5` a statement
+    about the machine, and it failed on an idle one.
+    """
+    started = upstream.trickle_started_at
+    ended = upstream.wait_for_disconnect()
+    assert started is not None, "the trickling call never reached the upstream"
+    assert ended is not None, "the client never hung up: the call was abandoned, not closed"
+    held = ended - started
+    assert deadline - 0.1 <= held < deadline + HANGUP_SLACK, (
+        f"the bounded call lasted {held:.2f}s against a {deadline}s deadline")
 
 
 def assert_stopped_honestly(result, deadline: float, tool_ran: bool = True) -> None:
@@ -317,8 +348,8 @@ def test_with_the_deadline_the_same_stream_ends_at_the_bound(trickling, monkeypa
     result = ask_within(2.0)
     elapsed = time.monotonic() - started
 
-    assert 2.0 <= elapsed < 3.5, f"ended after {elapsed:.2f}s"
-    assert trickling.wait_for_disconnect() is not None
+    assert elapsed >= 2.0, f"ended after {elapsed:.2f}s, before the deadline"
+    assert_call_held_to_the_deadline(trickling, 2.0)
     assert_stopped_honestly(result, 2.0)
 
 
@@ -331,10 +362,11 @@ def test_a_buffered_call_is_bounded_too(monkeypatch):
         started = time.monotonic()
         result = ask_within(2.0, stream_tokens=False)
         elapsed = time.monotonic() - started
+        assert_call_held_to_the_deadline(upstream, 2.0)
     finally:
         upstream.close()
 
-    assert 2.0 <= elapsed < 3.5
+    assert elapsed >= 2.0
     assert_stopped_honestly(result, 2.0)
 
 
@@ -348,10 +380,11 @@ def test_the_router_call_is_bounded_too(monkeypatch):
         started = time.monotonic()
         result = ask_within(1.5, router_model="router-model")
         elapsed = time.monotonic() - started
+        assert_call_held_to_the_deadline(upstream, 1.5)
     finally:
         upstream.close()
 
-    assert 1.5 <= elapsed < 3.0
+    assert elapsed >= 1.5
     assert_stopped_honestly(result, 1.5, tool_ran=False)
 
 
@@ -387,9 +420,10 @@ def test_the_upstream_is_released_through_the_real_api_proxy(monkeypatch):
         thread.join(10)
         upstream.close()
 
-    assert 2.0 <= elapsed < 3.5
-    assert disconnected is not None and disconnected - started < 5.0, \
+    assert elapsed >= 2.0
+    assert disconnected is not None, \
         "the proxy must close its upstream request when the agent gives up"
+    assert_call_held_to_the_deadline(upstream, 2.0)
     assert_stopped_honestly(result, 2.0)
 
 
