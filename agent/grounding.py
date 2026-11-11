@@ -73,6 +73,23 @@ alongside the derivations the allowance exists for:
 Direct support keeps its relative tolerance: 0.556025 quoted as 55.60% is the
 same number written to a different precision, and that is what MATCH_RELATIVE
 is for.
+
+Operands the answer itself rounded
+----------------------------------
+A model that computes does so on the numbers it writes down. A tool returns a
+close of 223.7097, the answer says "$223.71", and the market cap it then states
+-- 24,514 million x 223.71 = $5,484.03 billion -- is about $7 million away from
+the product of the exact operands. Matched at the answer's precision against
+the exact operands only, that correct arithmetic was refused.
+
+So a figure the answer shows is also an operand, in the units of the operand it
+rounds, when it *is* a rounding of one: within half a unit of its own last
+place of a real operand (directly or as a percentage). The tolerance on the
+derived figure does not change, and nothing the answer does not show is
+rounded on its behalf: "$5,484.03 billion" with no rounded price in the text is
+still checked against 223.7097. A figure is never an operand in its own check,
+and a figure that rounds nothing in the evidence adds nothing -- which is what
+keeps 21.93% from 29% and Item 7 refused.
 """
 
 from __future__ import annotations
@@ -368,9 +385,30 @@ def answer_figures(answer: str) -> list[Figure]:
     return figures
 
 
+def _shown_rounding(figure: Figure, operands: set[float]) -> float | None:
+    """The operand `figure` rounds, written as the answer wrote it, or None.
+
+    Returned in the operand's units: "71.07%" rounding 0.710681 comes back as
+    0.7107, so arithmetic with it stays in the units the evidence uses.
+    """
+    for factor in DERIVED_RESCALINGS:
+        for known in operands:
+            if _matches_at_precision(figure.value, known * factor, figure.half_ulp):
+                return figure.value / factor
+    return None
+
+
 def unsupported_figures(answer: str, steps) -> list[Figure]:
     """Figures in `answer` that no successful tool result accounts for."""
     evidence = evidence_values(steps)
     operands = derivation_operands(steps)
-    return [f for f in answer_figures(answer)
-            if not supported(f.value, evidence, operands, f.half_ulp)]
+    figures = answer_figures(answer)
+    shown = {id(f): _shown_rounding(f, operands) for f in figures}
+    unsupported = []
+    for figure in figures:
+        # The answer's own roundings of real operands, minus this figure's.
+        own = {value for key, value in shown.items()
+               if value is not None and key != id(figure)}
+        if not supported(figure.value, evidence, operands | own, figure.half_ulp):
+            unsupported.append(figure)
+    return unsupported

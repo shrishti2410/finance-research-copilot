@@ -256,3 +256,66 @@ def test_rounding_to_the_stated_precision_is_allowed():
             "rows": [{"label": "Diluted", "values_absolute": [24514000000.0]}]}]}),
     ]
     assert _texts(unsupported_figures("That is roughly $5.5 trillion.", steps)) == []
+
+
+# ── operands the answer itself rounded ────────────────────────────────────────
+#
+# A model computes on the numbers it writes. The tool says 223.7097, the answer
+# says $223.71, and the product it states is the product of what it wrote. These
+# pin that the guard accepts exactly that rounding and no more.
+
+PRICE_STEP = _ok("get_stock_price", {"ok": True, "ticker": "NVDA",
+                                     "last": {"date": "2026-08-07", "close": 223.7097}})
+SHARES_STEP = _ok("search_filings", {"ok": True, "count": 1, "results": [{
+    "section": "Income Statement", "ticker": "NVDA",
+    "excerpt": "Diluted weighted average shares 24,514",
+    "rows": [{"label": "Diluted", "kind": "share_count", "values": [24514.0],
+              "values_absolute": [24514000000.0]}],
+}]}, iteration=2)
+
+
+def test_a_market_cap_on_the_price_as_the_answer_rounds_it_passes():
+    """24,514 million x 223.71 = $5,484.03 billion. Against the exact close it is
+    $5,484.02 billion, $7.3 million away -- outside half a unit of $0.01 billion."""
+    answer = ("With 24,514 million diluted shares and a close of $223.71, the "
+              "implied market capitalisation is $5,484.03 billion.")
+    assert _texts(unsupported_figures(answer, [PRICE_STEP, SHARES_STEP])) == []
+
+
+def test_the_same_market_cap_written_out_in_full_passes():
+    answer = ("24,514,000,000 shares x $223.71 = $5,484,026,940,000 implied "
+              "market capitalisation.")
+    assert _texts(unsupported_figures(answer, [PRICE_STEP, SHARES_STEP])) == []
+
+
+def test_without_the_rounded_price_in_the_answer_the_exact_close_is_used():
+    """Nothing is rounded on the answer's behalf: it never wrote $223.71, so
+    $5,484.03 billion is checked against 223.7097 and is out by $7.3 million."""
+    answer = "The implied market capitalisation is $5,484.03 billion."
+    assert _flagged("5,484.03", unsupported_figures(answer, [PRICE_STEP, SHARES_STEP]))
+
+
+def test_an_invented_figure_just_outside_the_rounded_product_is_blocked():
+    """$5,484.04 billion is $13.06 million from the rounded product, beyond the
+    $5 million half-unit the answer's own precision allows."""
+    answer = ("With 24,514 million diluted shares and a close of $223.71, the "
+              "implied market capitalisation is $5,484.04 billion.")
+    assert _flagged("5,484.04", unsupported_figures(answer, [PRICE_STEP, SHARES_STEP]))
+
+
+def test_a_pe_from_a_rounded_price_and_a_rounded_eps_passes():
+    """171.25 / 7.91 = 21.650. On the exact inputs, 171.2539 / 7.9123 = 21.644,
+    which reads as 21.64 -- so only the answer's own roundings get it to 21.65."""
+    steps = [_ok("calculate_ratio", {"ok": True, "ticker": "NVDA",
+                                     "inputs": {"price": 171.2539, "trailing_eps": 7.9123}})]
+    answer = ("At a price of $171.25 and trailing EPS of $7.91, the P/E is 21.65x.")
+    assert _texts(unsupported_figures(answer, steps)) == []
+
+
+def test_rounding_does_not_reopen_the_item_number_derivation():
+    """The run-b case again, with the answer quoting the 29% it might have used.
+    29% rounds a real operand; 7 is still not one, so 21.93% stays refused."""
+    steps = [_ok("search_filings", MDNA_HIT)]
+    answer = ("The filing cites a 29% increase in compensation. The net margin "
+              "was 21.93%.")
+    assert _flagged("21.93", unsupported_figures(answer, steps))

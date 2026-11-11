@@ -168,3 +168,52 @@ measurement above is cheap to take.
 
 **Where the code is.** `agent/grounding.py`: `derivation_operands`,
 `_walk_figures`, `_derivable`, and the `half_ulp` on `Figure`.
+
+---
+
+## The grounding guard checks that a figure traces to a tool result, not that it is the right figure
+
+**What happens.** The guard verifies provenance: every figure in an answer
+must come directly, or by one arithmetic step, from figures that a tool call
+returned in this turn. It does not verify that the figures used are the ones
+the question needs.
+
+Eval case nvda-implied-market-cap, re-run on 2026-11-11, shows the gap. Asked
+for an implied market cap from the diluted share count and a closing price,
+the agent searched with `section="mdna"`, so the search excluded the income
+statement. It found "we repurchased 282 million shares", used that as the
+share count, and stated 282 M × $223.71 = $62.999 billion. The real figure is
+24,514 M diluted shares, about $5.49 trillion.
+
+On that run the guard did flag the figure, but only because the agent had
+rounded the price (223.71 against the tool's 223.7097). Had it used the exact
+price, the product of a buyback count and a share price would have passed.
+Both operands are real figures from tool results, and the arithmetic is right.
+
+The guard has no notion of what a number *is*. A buyback count, a share count
+and a headcount are all "a number of shares-like things in a tool result", and
+nothing in the evidence says which one a market cap needs.
+
+**Why.** Provenance is checkable mechanically. Semantic fitness is not
+checkable from the text: telling "282 million shares repurchased" from "24,514
+million diluted shares" needs the meaning of each figure, and the guard sees
+values.
+
+The first instance of this class, an item number used as an operand, was
+narrowed on 2026-11-11 (see the entry above on round invented figures). That
+change made "what counts as an operand" stricter. It cannot make "which
+operand is right" checkable.
+
+**What it would take to fix properly.** Structured facts, planned for the next
+phase (step 3 of the plan): a tool that returns line items by name and fiscal
+year (`diluted_weighted_average_shares`, FY2026) with their units. A figure is
+then traceable to a *named* fact, and a check can require that a market cap's
+share operand is a share-count fact rather than any number of shares that
+appeared in the turn.
+
+**When to revisit.** When the structured-facts tool lands.
+
+**Where the code is.** `agent/grounding.py` (`unsupported_figures`,
+`derivation_operands`). The case above is in
+`benchmarks/results/2026-11-11-fixes/excerpt_rerun_traces.json` and is written
+up in `benchmarks/EXCERPT_CUT.md`.
