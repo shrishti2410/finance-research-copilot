@@ -124,6 +124,7 @@ def run_case(session: Session, case: Case) -> Outcome:
                   ("final_answer", "ungrounded_answer", "tool_call_budget")]
     return score_case(
         case, body["answer"],
+        final_figure=body.get("final_figure"),
         # The server's own measurement, not the client's: it excludes the HTTP
         # round trip and the two database writes, which are not what is being
         # evaluated.
@@ -315,6 +316,8 @@ def main(argv: list[str] | None = None) -> int:
                     "completion_tokens": o.completion_tokens,
                     "completed": o.completed, "stop_reason": o.stop_reason,
                     "error": o.error, "answer": o.answer,
+                    "final_figure": o.final_figure,
+                    "extracted_from": o.extracted_from,
                 }
                 for o in outcomes
             ],

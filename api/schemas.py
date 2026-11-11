@@ -154,4 +154,7 @@ class AskResponse(BaseModel):
     completion_tokens: int = 0
     total_tokens: int = 0
     usage_measured: bool = False
+    # The answer's "Final figure:" line, as written; "none" if the model
+    # declined, null if it did not write one. Not repeated in `answer`.
+    final_figure: str | None = None
     steps: list[AskStep] | None = None
