@@ -100,8 +100,11 @@ async def search_filings(
 
     Use this for what a company *said* in its annual report: how it describes
     its risks, its own explanation of results, or the exact wording of a
-    disclosure. This is the company's own language, not a computed figure -- for
-    a number like a margin or a ratio, use calculate_ratio instead.
+    disclosure, and for any reported line item for a specific fiscal year:
+    revenue, gross profit, net income, EPS, share counts, segment revenue. The
+    income statement (section="income") is returned whole, with every figure for
+    each of its three fiscal years. For a current margin or ratio, use
+    calculate_ratio instead.
 
     Only filings that have been indexed are searchable. Currently that is NVIDIA
     (NVDA, fiscal 2026) and Apple (AAPL, fiscal 2025), one 10-K each. A search
