@@ -123,3 +123,48 @@ rather than multiplying load.
 and why), `_run_and_store` (the independent session), and `_RUNS` (which keeps
 the tasks from being garbage-collected mid-flight). `tests/test_ask_endpoint.py`
 pins all three, including that finished runs are released from the registry.
+
+---
+
+## A round invented figure equal to the difference of two unrelated percentages passes the grounding guard
+
+**What happens.** The grounding guard accepts a figure that is one arithmetic
+step away from two figures in the turn's tool results. Since 2026-11-11 the
+operands must be figures (not bare integers from prose or labels, not the
+tool's own bookkeeping) and the result must match to the answer's own
+precision. That closes the case found in eval run-b, where "29% increase in
+compensation" minus the 7 in "Item 7" let an invented **21.93%** through.
+
+It does not close this one: retrieved text says "compensation rose 29% while
+headcount grew 7%", and a draft invents "the net margin was **22%**". Both
+operands are real percentages, 29 − 7 = 22 exactly, and a figure written as
+"22%" claims only ±0.5. The guard accepts it. "21.9%" is refused (precision),
+and so is anything that needs the item number, but a round figure that happens
+to equal the difference, sum, product or quotient of two unrelated figures in
+the evidence goes through. `tests/test_grounding_derivation.py::
+test_known_limitation_a_round_figure_equal_to_two_unrelated_percentages_passes`
+pins the current behaviour so that closing it is a visible change.
+
+**Why.** The derivation allowance exists for arithmetic the model should be
+free to show: revenue from gross profit and a margin, market cap from shares
+and a price, the gap between two margins. The guard cannot tell a related pair
+of operands from an unrelated one by their values alone, and a rule that tried
+to ("both operands from the same result", say) would refuse market cap, whose
+operands come from two tools. The change made on 2026-11-11 took the cheap
+ground -- what counts as an operand, and how closely the result must match --
+and stopped where the next step costs correct answers.
+
+**What it would take to fix properly.** Require a derived figure's operands to
+come from `calculate_ratio`'s own output (its `value` and `inputs`), or from
+the structured rows of a statement chunk, and never from numbers in retrieved
+prose. Prose figures would then support only what they state directly. That is
+the planned fix; it needs the statement rows in the evidence first (the
+excerpt-cut work in `agent/tools.py`), and a measurement of how many correct
+answers derive from prose today.
+
+**When to revisit.** When a trace shows an unsupported figure reaching a user
+through this gap, or once statement rows are in the evidence and the
+measurement above is cheap to take.
+
+**Where the code is.** `agent/grounding.py`: `derivation_operands`,
+`_walk_figures`, `_derivable`, and the `half_ulp` on `Figure`.
