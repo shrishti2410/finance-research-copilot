@@ -75,6 +75,10 @@ class Upstream:
     def __init__(self, *script) -> None:
         self.script = list(script)
         self.trickled = 0
+        # When each trickled byte was written, so a test can assert on the gaps
+        # the upstream actually produced rather than on how many bytes a given
+        # machine managed to send in a window.
+        self.sent_at: list[float] = []
         self.disconnected_at: float | None = None
         self.port = _free_port()
         self._loop = asyncio.new_event_loop()
@@ -152,6 +156,7 @@ class Upstream:
                 writer.write(b"1\r\n \r\n")                   # one body byte, no newline
                 await writer.drain()
                 self.trickled += 1
+                self.sent_at.append(time.monotonic())
         except (ConnectionError, asyncio.IncompleteReadError):
             if self.disconnected_at is None:
                 self.disconnected_at = time.monotonic()
@@ -242,15 +247,39 @@ def trickling(monkeypatch):
 
 
 def test_without_the_deadline_the_read_timeout_never_ends_a_trickling_stream(trickling, monkeypatch):
-    """The control. Without this, the tests below could pass for the wrong reason."""
+    """The control. Without this, the tests below could pass for the wrong reason.
+
+    What has to be true is the property in the fixture's docstring: a byte always
+    arrived before the read timer ran out, for longer than one read-timeout
+    window, right up to the moment the client was cut off. That is asserted on
+    the gaps the upstream recorded. It used to be asserted as "at least 15 bytes
+    in 5 seconds", which is the same claim only on a machine whose timers keep
+    to 0.25s and starts the trickle at once. Measured here, the trickle begins
+    about 1.6s into the window -- after the tool call and the first streamed
+    response -- and then keeps a steady 0.26s, so the window holds 14 bytes.
+    The count said nothing about whether the read timeout could have fired.
+    """
     monkeypatch.setattr(settings, "inference_call_deadline", 3600.0)
+    read_timeout = settings.inference_read_timeout
 
     async def bounded():
         return await asyncio.wait_for(ask(), timeout=5.0)
 
     with pytest.raises(asyncio.TimeoutError):
         asyncio.run(bounded())
-    assert trickling.trickled >= 15, "bytes kept arriving the whole time"
+    cut_off = time.monotonic()
+
+    sent = list(trickling.sent_at)
+    assert len(sent) >= 2, "the upstream never got going"
+    gaps = [later - earlier for earlier, later in zip(sent, sent[1:])]
+    assert max(gaps) < read_timeout, (
+        f"a {max(gaps):.2f}s silence between bytes would have tripped the "
+        f"{read_timeout}s read timeout: the scenario was not reproduced on this run")
+    assert sent[-1] - sent[0] >= read_timeout, (
+        f"the stream lasted {sent[-1] - sent[0]:.2f}s, less than one read-timeout "
+        f"window, so surviving it proves nothing")
+    assert cut_off - sent[-1] < read_timeout, (
+        "bytes must still have been arriving when the client was cut off")
 
 
 def test_with_the_deadline_the_same_stream_ends_at_the_bound(trickling, monkeypatch):
