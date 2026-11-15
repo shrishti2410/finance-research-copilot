@@ -48,9 +48,17 @@ The full Qwen run of 2026-11-15 found one more of the same kind. `gross_margin`
 was accepted as a spelling of `gross_profit`, because both companies label the
 dollar line "gross margin". Asked "What was NVIDIA's annual gross margin for
 fiscal 2026?", the model called this tool with fact="gross_margin" and
-answered "$153.463 billion" where the ratio tool gives 71.07%. A ratio name is
-now an error here that names both readings: calculate_ratio for the
-percentage, `gross_profit` for the dollars.
+answered "$153.463 billion" where the ratio tool gives 71.07%.
+
+Refusing the name was tried first and was not enough for the 7B model: told
+"that is a ratio, call calculate_ratio", it answered from memory in two of
+three re-asked questions and was only pulled back by the grounding guard, and
+"gross margin in dollars", which had passed, was lost. So a ratio name is
+answered here with the ratio for that fiscal year, computed as calculate_ratio
+computes it, and a `note` that states both readings with their labels: the
+percentage, and the dollar figure it was computed from. One call, and neither
+reading has to be guessed. Ratios with no fiscal-year form (pe_ratio,
+debt_to_equity) are still an error that says where to go.
 
 What is not here
 ----------------
@@ -172,7 +180,7 @@ UNKNOWN_ARGUMENT_HINT = (
 
 # Ratio names a model sends here by mistake -> the calculate_ratio name, and
 # the fact that is the same words in dollars, if there is one. See the module
-# docstring: these are refused, not guessed at.
+# docstring: these are answered as the ratio, with both readings labelled.
 _RATIO_NAMES: dict[str, tuple[str, str | None]] = {
     "gross_margin": ("gross_margin", "gross_profit"),
     "gross_margin_percentage": ("gross_margin", "gross_profit"),
@@ -406,14 +414,16 @@ async def get_financial_fact(ticker: str, fact: FactName, fiscal_year: int) -> d
     name = _fact_name(fact)
     if name is None and _normalized(fact) in _RATIO_NAMES:
         ratio, dollars = _RATIO_NAMES[_normalized(fact)]
-        in_dollars = (f" For the amount in dollars, ask this tool for {dollars!r}."
-                      if dollars else "")
-        return error(
-            ERROR_BAD_INPUT,
-            f"{fact!r} is a ratio, not a reported figure. Call calculate_ratio(ticker="
-            f"{symbol!r}, ratio_name={ratio!r}, fiscal_year=...) for it.{in_dollars}",
-            ticker=symbol,
-        )
+        result = await ratio_for_fiscal_year(symbol, ratio, fiscal_year)
+        if not result.get("ok"):
+            return result
+        note = (f"{ratio} is a ratio, not a reported figure: {result['formatted']} for "
+                f"fiscal {result['fiscal_year']}, computed as {result['formula']}.")
+        if dollars:
+            amount = _formatted(float(result["inputs"][dollars]), "USD")
+            note += (f" The same words in dollars are the fact {dollars!r}: {amount} "
+                     f"for fiscal {result['fiscal_year']}.")
+        return {**result, "asked_for": fact, "note": note, "scope": SCOPE}
     if name is None:
         return error(
             ERROR_BAD_INPUT,

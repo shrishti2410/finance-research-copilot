@@ -93,9 +93,13 @@ A ratio name is not a fact either. `gross_margin` was at first accepted as a
 spelling of `gross_profit`, since both companies label the dollar line "gross
 margin". On the full Qwen run of 2026-11-15 the two questions asking for the
 "annual gross margin" were answered in dollars ($153.463 billion, $233.602
-billion) where the ratio tool gives a percentage. Asking this tool for a ratio
-name is now a `bad_input` error that names both readings: `calculate_ratio`
-for the ratio and, where there is one, the fact that is the dollar amount.
+billion) where the ratio tool gives a percentage. Refusing the name with a
+pointer to `calculate_ratio` was tried first; the 7B model then answered from
+memory and was only stopped by the grounding guard. So a ratio name asked of
+this tool is answered with that year's ratio, computed as `calculate_ratio`
+computes it, plus a `note` that states both readings with their labels: the
+percentage, and the dollar figure (`gross_profit`) it was computed from.
+Ratios with no fiscal-year form (`pe_ratio`, `debt_to_equity`) stay an error.
 
 Failures are the same envelope every tool uses. An unknown fact name lists the
 known ones. A year the company has not reported lists the years it has. A

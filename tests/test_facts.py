@@ -474,21 +474,35 @@ def test_the_description_sends_dividends_buybacks_and_segments_to_the_filing_sea
 
 # -- a ratio name is not a fact ------------------------------------------------
 
-@pytest.mark.parametrize("name, ratio_name, dollars", [
-    ("gross_margin", "gross_margin", "gross_profit"),
-    ("Gross Margin", "gross_margin", "gross_profit"),
-    ("net_margin", "net_margin", "net_income"),
-    ("roe", "return_on_equity", None),
-    ("pe_ratio", "pe_ratio", None),
-])
-def test_a_ratio_name_is_an_error_that_points_at_the_ratio_tool(stored, name, ratio_name, dollars):
+def test_a_ratio_name_is_answered_as_the_ratio_with_both_readings_labelled(stored):
     """Found on the full Qwen run of 2026-11-15: "gross_margin" was a spelling of
     gross_profit, so "annual gross margin" came back as $153.463 billion where
-    the question wanted 71.07%."""
-    result = fact(name, 2026)
-    assert result["error"] == "bad_input" and "value" not in result
-    assert "calculate_ratio" in result["message"] and repr(ratio_name) in result["message"]
-    assert (repr(dollars) in result["message"]) if dollars else ("dollars" not in result["message"])
+    the question wanted 71.07%. Refusing the name made the 7B model answer
+    from memory, so the result now carries both readings, labelled."""
+    for name in ("gross_margin", "Gross Margin", "gross_profit_margin"):
+        result = fact(name, 2025)
+        assert result["ok"] and result["ratio"] == "gross_margin"
+        assert result["formatted"] == "74.99%"
+        assert result["inputs"]["gross_profit"] == 97_858_000_000
+        assert "74.99%" in result["note"] and "$97.858 billion" in result["note"]
+        assert "'gross_profit'" in result["note"] and "ratio, not a reported figure" in result["note"]
+        assert result["accessions"] == ["0009999999-26-000001"]
+
+
+def test_a_ratio_with_no_dollar_twin_says_only_what_it_is(stored):
+    result = fact("current_ratio", 2026)
+    assert result["ok"] and result["ratio"] == "current_ratio"
+    assert "in dollars" not in result["note"]
+
+
+@pytest.mark.parametrize("name", ["pe_ratio", "debt_to_equity"])
+def test_a_ratio_with_no_fiscal_year_form_is_an_error_not_a_dollar_figure(stored, name):
+    result = fact(name, 2020)
+    assert not result["ok"] and "value" not in result
+
+
+def test_a_ratio_name_for_a_year_with_no_facts_is_no_data(stored):
+    assert fact("gross_margin", 1999)["error"] == "no_data"
 
 
 def test_gross_profit_is_still_the_dollar_figure(stored):
