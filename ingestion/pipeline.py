@@ -53,18 +53,34 @@ class IndexResult:
                 + self.embed_seconds + self.store_seconds)
 
 
+# The filings the eval questions, the retrieval markers and the benchmarks were
+# written against, by accession number. Indexing "the latest 10-K" instead
+# changes the corpus the day a company files again: Apple's FY2026 10-K replaced
+# FY2025 as "latest" in 2026, and CI then indexed a filing that no longer holds
+# the FY2023 column one retrieval marker points at. Moving a pin is a corpus
+# change: regenerate the questions with the user's go-ahead (CLAUDE.md rule 3).
+PINNED_FILINGS: dict[str, str] = {
+    "NVDA": "0001045810-26-000021",   # 10-K for fiscal 2026 (period ending Jan 25, 2026)
+    "AAPL": "0000320193-25-000079",   # 10-K for fiscal 2025 (period ending Sep 27, 2025)
+}
+
+
 async def index_ticker(
     conn,
     ticker: str,
     *,
     client: EdgarClient | None = None,
     form: str = "10-K",
+    accession: str | None = None,
     target_tokens: int = TARGET_TOKENS,
     overlap_tokens: int = OVERLAP_TOKENS,
     model: str = EMBEDDING_MODEL,
     progress=None,
 ) -> IndexResult:
-    """Fetch the latest `form` for `ticker`, chunk it, embed it, store it.
+    """Fetch one filing for `ticker`, chunk it, embed it, store it.
+
+    The filing is the one named by `accession` when given, otherwise the latest
+    `form`. Callers that need a stable corpus pass `PINNED_FILINGS[ticker]`.
 
     `conn` is an open async connection -- the caller owns the transaction, so a
     failure part-way through a multi-ticker run does not leave one document
@@ -75,7 +91,8 @@ async def index_ticker(
 
     try:
         started = time.perf_counter()
-        filing = client.latest_filing(ticker, form=form)
+        filing = (client.filing_by_accession(ticker, accession) if accession
+                  else client.latest_filing(ticker, form=form))
         html = client.fetch_document(filing)   # served from data/edgar/ on a rerun
         fetch_seconds = time.perf_counter() - started
 

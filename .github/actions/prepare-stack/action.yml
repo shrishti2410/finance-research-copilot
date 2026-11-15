@@ -92,13 +92,18 @@ runs:
       uses: actions/cache@v4
       with:
         path: data/edgar
-        key: edgar-nvda-aapl-10k-v1
+        # v2: the filings are pinned by accession number (ingestion/pipeline.py).
+        # v1 held whatever was "latest" on the day the cache was first filled.
+        key: edgar-nvda-aapl-10k-pinned-v2
 
     - name: Migrate
       shell: bash
       run: alembic upgrade head
 
-    - name: Index NVDA and AAPL
+    # Pinned by accession number in ingestion/pipeline.py (PINNED_FILINGS), not
+    # "latest": the questions and retrieval markers are written against these two
+    # filings, and "latest" changed under CI when Apple filed its next 10-K.
+    - name: Index NVDA and AAPL (pinned filings)
       shell: bash
       env:
         SEC_EDGAR_USER_AGENT: ${{ inputs.sec-edgar-user-agent }}

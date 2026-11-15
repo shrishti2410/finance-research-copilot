@@ -406,29 +406,55 @@ class EdgarClient:
             if filed_form != form:
                 continue
 
-            accession = recent["accessionNumber"][i]
-            primary_document = recent["primaryDocument"][i]
-            report_date = recent.get("reportDate", [None] * len(forms))[i]
-
-            return Filing(
-                ticker=ticker.upper(),
-                company_name=submissions.get("name", ticker.upper()),
-                cik=cik,
-                form=filed_form,
-                accession=accession,
-                filing_date=date.fromisoformat(recent["filingDate"][i]),
-                report_date=date.fromisoformat(report_date) if report_date else None,
-                primary_document=primary_document,
-                document_url=ARCHIVE_URL.format(
-                    cik_int=int(cik),  # the Archives path uses the CIK unpadded
-                    accession_nodash=accession.replace("-", ""),
-                    document=primary_document,
-                ),
-            )
+            return self._filing_at(ticker, cik, submissions, i)
 
         raise LookupError(
             f"No {form} found for {ticker} in the {len(forms)} most recent filings. "
             f"Older filings live behind the paginated `filings.files` list."
+        )
+
+    def filing_by_accession(self, ticker: str, accession: str) -> Filing:
+        """The one filing with this accession number, whatever has been filed since.
+
+        "Latest" changes the day a company files again, and everything measured
+        against the old filing then silently measures a different document. An
+        accession number names one filing for ever, so a corpus that has to stay
+        put is pinned by it.
+        """
+        cik = self.resolve_cik(ticker)
+        submissions = self._get(SUBMISSIONS_URL.format(cik=cik)).json()
+        recent = submissions.get("filings", {}).get("recent", {})
+        numbers = recent.get("accessionNumber", [])
+        wanted = accession.strip()
+        for i, number in enumerate(numbers):
+            if number == wanted:
+                return self._filing_at(ticker, cik, submissions, i)
+        raise LookupError(
+            f"Accession {wanted} not found for {ticker} in the {len(numbers)} most "
+            f"recent filings. Older filings live behind the paginated `filings.files` list."
+        )
+
+    @staticmethod
+    def _filing_at(ticker: str, cik: str, submissions: dict, i: int) -> Filing:
+        """Build a Filing from row `i` of the submissions' parallel arrays."""
+        recent = submissions["filings"]["recent"]
+        accession = recent["accessionNumber"][i]
+        primary_document = recent["primaryDocument"][i]
+        report_date = recent.get("reportDate", [None] * len(recent["form"]))[i]
+        return Filing(
+            ticker=ticker.upper(),
+            company_name=submissions.get("name", ticker.upper()),
+            cik=cik,
+            form=recent["form"][i],
+            accession=accession,
+            filing_date=date.fromisoformat(recent["filingDate"][i]),
+            report_date=date.fromisoformat(report_date) if report_date else None,
+            primary_document=primary_document,
+            document_url=ARCHIVE_URL.format(
+                cik_int=int(cik),  # the Archives path uses the CIK unpadded
+                accession_nodash=accession.replace("-", ""),
+                document=primary_document,
+            ),
         )
 
     # ── downloading ─────────────────────────────────────────────────────────
