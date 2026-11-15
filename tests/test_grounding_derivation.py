@@ -372,3 +372,80 @@ def test_a_number_after_a_typographic_hyphen_reads_as_it_does_after_a_plain_one(
 def test_an_em_dash_is_not_turned_into_a_minus_sign():
     steps = [_ok("calculate_ratio", RATIO)]
     assert unsupported_figures("Gross margin—71.07% for the year.", steps) == []
+
+
+# ── derivations in a turn with more than DERIVATION_LIMIT operands ────────────
+#
+# Hosted run 1, aapl-gross-margin-pct-derived: the draft computed 195,201 /
+# 416,161 = 46.9% from the statement. Both operands were in the tool results,
+# but the turn held 126 operands against a limit of 120, so no derivation was
+# checked and a correct figure was refused.
+
+def _big_turn():
+    """A statement table and a price series: well over DERIVATION_LIMIT operands."""
+    from agent.grounding import DERIVATION_LIMIT, derivation_operands
+
+    statement = {"ok": True, "results": [{
+        "section": "Income Statement", "units": "USD millions",
+        # As agent/tools.py returns a table: each row as written and in dollars.
+        "rows": [
+            {"label": label, "values": values,
+             "values_absolute": [v * 1e6 for v in values]}
+            for label, values in (
+                ("Total net sales", [416161.0, 391035.0, 383285.0]),
+                ("Gross margin", [195201.0, 180683.0, 169148.0]),
+                ("Net income", [112010.0, 93736.0, 96995.0]),
+            )]}]}
+    prices = {"ok": True, "prices": [
+        {"date": f"2026-{1 + i // 28:02d}-{1 + i % 28:02d}", "close": 201.37 + 0.73 * i}
+        for i in range(200)]}
+    steps = [_ok("search_filings", statement), _ok("get_stock_price", prices, iteration=2)]
+    assert len(derivation_operands(steps)) > DERIVATION_LIMIT
+    return steps
+
+
+def test_a_derivation_from_operands_the_answer_states_passes_in_a_big_turn():
+    answer = ("Apple's gross margin of $195,201 million on total net sales of "
+              "$416,161 million is 46.9%.")
+    assert _texts(unsupported_figures(answer, _big_turn())) == []
+
+
+def test_the_working_shown_as_a_ratio_and_a_percentage_passes_in_a_big_turn():
+    answer = ("Gross margin = 195,201 million / 416,161 million = 0.469, "
+              "which is 46.9%.")
+    assert _texts(unsupported_figures(answer, _big_turn())) == []
+
+
+def test_an_invented_figure_in_a_big_turn_is_still_blocked():
+    """The cap was not raised: more than 120 figures does not make 21.93% derivable."""
+    steps = _big_turn()
+    for answer in ("Apple's net margin was 21.93%.",
+                   "On net sales of $416,161 million, Apple's net margin was 21.93%.",
+                   "Gross margin of $195,201 million on net sales of $416,161 million "
+                   "gives a margin of 52.3%."):
+        assert _flagged("21.93" if "21.93" in answer else "52.3",
+                        unsupported_figures(answer, steps)), answer
+
+
+def test_a_derivation_whose_operands_the_answer_does_not_state_still_falls_under_the_cap():
+    """46.9% is true, but the answer names neither operand, so only the wider
+    set could support it, and the wider set is over the limit. Unchanged."""
+    assert _flagged("46.9", unsupported_figures("Apple's gross margin was 46.9%.", _big_turn()))
+
+
+def test_a_stated_operand_that_no_tool_returned_does_not_count():
+    """Showing working with an invented input does not launder the result."""
+    answer = ("Gross margin of $650,000 million on total net sales of "
+              "$416,161 million is 156.2%.")
+    unsupported = unsupported_figures(answer, _big_turn())
+    assert _flagged("650,000", unsupported) and _flagged("156.2", unsupported)
+
+
+def test_the_stated_operand_rule_changes_nothing_in_a_small_turn():
+    """Under the cap the wider rule already searched these pairs."""
+    steps = [_ok("calculate_ratio", RATIO)]
+    assert unsupported_figures("Gross profit of $153.463 billion on revenue of "
+                               "$215.938 billion is a 71.07% margin.", steps) == []
+    assert _flagged("21.93", unsupported_figures(
+        "Gross profit of $153.463 billion on revenue of $215.938 billion is a "
+        "21.93% margin.", steps))

@@ -436,6 +436,30 @@ def unsupported_figures(answer: str, steps) -> list[Figure]:
         # The answer's own roundings of real operands, minus this figure's.
         own = {value for key, value in shown.items()
                if value is not None and key != id(figure)}
+        if _stated_derivation(figure, evidence, own):
+            continue
         if not supported(figure.value, evidence, operands | own, figure.half_ulp):
             unsupported.append(figure)
     return unsupported
+
+
+def _stated_derivation(figure: Figure, evidence: set[float], own: set[float]) -> bool:
+    """Whether `figure` is one step from two operands the answer itself states.
+
+    `own` holds the answer's other figures that are roundings of real operands,
+    so each traces to a tool result. An answer that shows its working --
+    "gross margin of $195,201 million on net sales of $416,161 million is
+    46.9%" -- names the two numbers its arithmetic used, and that pair can be
+    checked however much else the turn returned.
+
+    This is tried before the wider operand set, and it is what keeps
+    DERIVATION_LIMIT from refusing honest arithmetic: a turn with a whole
+    income statement and one more tool result holds more than 120 operands,
+    and above the limit no derivation was checked at all. The limit itself is
+    unchanged and still governs derivations from operands the answer does not
+    state. Nothing here accepts a figure the wider rule would refuse in a
+    small turn: `own` is a subset of what that rule already searches.
+    """
+    if not evidence or not own:
+        return False
+    return _derivable(figure.value, own, figure.half_ulp)
