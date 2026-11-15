@@ -1,4 +1,4 @@
-"""ORM models: users, conversations, messages.
+"""ORM models: users, conversations, messages, and the XBRL facts.
 
 The full write-up is in docs/DATABASE.md. The short version of the one decision
 that looks inconsistent on purpose:
@@ -13,18 +13,23 @@ that looks inconsistent on purpose:
 """
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Identity,
     Index,
+    Integer,
+    Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
     text,
 )
@@ -154,3 +159,59 @@ class Message(Base):
 
     def __repr__(self) -> str:
         return f"<Message {self.id} {self.role}>"
+
+
+class XbrlFact(Base):
+    """One reported number: a company, a concept, a unit and a fiscal period.
+
+    Filled from SEC's company-facts API by `scripts/index_facts.py`; see
+    `ingestion/xbrl_facts.py` for which of the several reported versions of a
+    number is the one kept. The agent's `get_financial_fact` tool reads it.
+
+    The key is what a question names -- "NVIDIA's diluted EPS for fiscal 2024"
+    is (company, concept, fiscal year) -- so that is the unique constraint, and
+    re-running the ingestion replaces a row rather than adding a second one.
+    """
+
+    __tablename__ = "xbrl_facts"
+    __table_args__ = (
+        UniqueConstraint(
+            "cik", "taxonomy", "concept", "unit", "fiscal_year", "fiscal_period",
+            name="uq_xbrl_facts_company_concept_period",
+        ),
+        # The tool's lookup: WHERE ticker = ? AND concept IN (...) AND fiscal_year = ?
+        Index("ix_xbrl_facts_ticker_concept_year", "ticker", "concept", "fiscal_year"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
+    # SEC's company id, zero-padded to ten digits. The stable key: a ticker can
+    # change, a CIK does not.
+    cik: Mapped[str] = mapped_column(String(10), nullable=False)
+    ticker: Mapped[str] = mapped_column(String(12), nullable=False)
+    # "us-gaap", "dei", "ifrs-full". Part of the key because two taxonomies may
+    # each define a concept of the same name.
+    taxonomy: Mapped[str] = mapped_column(String(32), nullable=False)
+    concept: Mapped[str] = mapped_column(String(255), nullable=False)
+    # "USD", "shares", "USD/shares". A concept can be reported in more than one.
+    unit: Mapped[str] = mapped_column(String(32), nullable=False)
+    # The company's own label for the year: NVIDIA's fiscal 2026 ended in
+    # January 2026. Derived from the period end, not from the filing's `fy`.
+    fiscal_year: Mapped[int] = mapped_column(Integer, nullable=False)
+    # "FY" today. A column rather than an assumption so quarters can be added
+    # without a migration.
+    fiscal_period: Mapped[str] = mapped_column(String(4), nullable=False,
+                                               server_default=text("'FY'"))
+    # NULL for a balance on a day (total assets); set for a flow (revenue).
+    period_start: Mapped[date | None] = mapped_column(Date)
+    period_end: Mapped[date] = mapped_column(Date, nullable=False)
+    # NUMERIC, not float: these are reported figures, and 215938000000 must come
+    # back as exactly that. Six decimals covers per-share amounts.
+    value: Mapped[Decimal] = mapped_column(Numeric(30, 6), nullable=False)
+    # The filing this figure was taken from, e.g. 0001045810-26-000021. It is
+    # the citation the tool returns.
+    accession: Mapped[str] = mapped_column(String(25), nullable=False)
+    form: Mapped[str] = mapped_column(String(12), nullable=False)
+    filed: Mapped[date] = mapped_column(Date, nullable=False)
+
+    def __repr__(self) -> str:
+        return f"<XbrlFact {self.ticker} {self.concept} FY{self.fiscal_year} {self.value}>"

@@ -11,6 +11,8 @@ top-k.
 
 from __future__ import annotations
 
+from datetime import date
+
 import time
 from dataclasses import dataclass, field
 
@@ -63,6 +65,14 @@ PINNED_FILINGS: dict[str, str] = {
     "NVDA": "0001045810-26-000021",   # 10-K for fiscal 2026 (period ending Jan 25, 2026)
     "AAPL": "0000320193-25-000079",   # 10-K for fiscal 2025 (period ending Sep 27, 2025)
 }
+
+
+# The same pin for the structured facts. SEC's company-facts document is not
+# one filing: it grows with every report and a later report can restate an
+# earlier year. The pinned companies' facts are taken as filed through this
+# date, so the figures the eval sees do not move when a company files again.
+# Other companies are not pinned. Moving this date is a corpus change too.
+PINNED_FACTS_THROUGH = date(2026, 11, 15)
 
 
 async def index_ticker(

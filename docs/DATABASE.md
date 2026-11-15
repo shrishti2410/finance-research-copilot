@@ -126,6 +126,37 @@ url}`), token counts, model name, TTFT. This project already measures those in
 **`content` stays inline.** No side table for large bodies — Postgres TOASTs
 oversized text automatically.
 
+### `xbrl_facts`
+
+Reported financial figures from SEC's XBRL company-facts API, one row per
+company, concept, unit and fiscal period. Created by migration
+`0003_xbrl_facts`, filled by `python scripts/index_facts.py`, read by the
+agent's `get_financial_fact` tool. The design is in
+[STRUCTURED_FACTS.md](STRUCTURED_FACTS.md).
+
+| column | type | notes |
+|---|---|---|
+| `id` | `BIGINT` identity | primary key |
+| `cik` | `VARCHAR(10)` | SEC company id, zero-padded. The stable key: a ticker can change |
+| `ticker` | `VARCHAR(12)` | what the tool is asked with |
+| `taxonomy` | `VARCHAR(32)` | `us-gaap`, `dei`, `ifrs-full` |
+| `concept` | `VARCHAR(255)` | e.g. `Revenues`, `EarningsPerShareDiluted` |
+| `unit` | `VARCHAR(32)` | `USD`, `shares`, `USD/shares` |
+| `fiscal_year` | `INTEGER` | the company's own label, derived from the period end |
+| `fiscal_period` | `VARCHAR(4)` | `FY` today; a column so quarters need no migration |
+| `period_start` | `DATE`, nullable | NULL for a balance on a day |
+| `period_end` | `DATE` | |
+| `value` | `NUMERIC(30, 6)` | exact, in the unit above; dollars, not millions |
+| `accession` | `VARCHAR(25)` | the filing the figure was taken from; the tool's citation |
+| `form` | `VARCHAR(12)` | `10-K`, `10-K/A`, `20-F`, `40-F` |
+| `filed` | `DATE` | |
+
+- **Unique** on (`cik`, `taxonomy`, `concept`, `unit`, `fiscal_year`,
+  `fiscal_period`): the key a question names, so a re-index replaces a row.
+- **Index** on (`ticker`, `concept`, `fiscal_year`): the tool's lookup.
+- **`NUMERIC`, not float:** these are reported figures and must come back
+  exactly as filed.
+
 ### Deliberately absent
 
 - **`messages.user_id`** — derivable through the conversation. A second source

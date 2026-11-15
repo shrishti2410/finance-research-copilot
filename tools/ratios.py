@@ -223,7 +223,9 @@ def calculate_ratio(
         return error(
             ERROR_UNSUPPORTED,
             f"Unknown ratio {ratio_name!r}. Supported: {', '.join(SUPPORTED_RATIOS)}. "
-            "Line items and per-share figures -- revenue, net income, EPS, share counts, tax expense, segment revenue -- are not ratios: they are in the income statement of the indexed 10-K, via search_filings(section=\"income\"). Use search_filings too for any figure tied to a specific fiscal year, because calculate_ratio only returns the most recent period.",
+            "Line items and per-share figures -- revenue, net income, EPS, share counts, "
+            "tax expense -- are not ratios: get them with get_financial_fact(ticker, fact, "
+            "fiscal_year). Segment revenue is in the filing text, via search_filings.",
             ticker=symbol,
         )
 

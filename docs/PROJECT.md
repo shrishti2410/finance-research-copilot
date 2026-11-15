@@ -67,8 +67,10 @@ sell or hold, valuation verdicts and price forecasts are redirected. See
 
 **Two runtimes:**
 - **Offline:** `scripts/index_filings.py` drives `ingestion/pipeline.py` to build
-  the `filing_chunks` table. Nothing schedules it; it is run by hand, and by CI
-  on every run.
+  the `filing_chunks` table, and `scripts/index_facts.py` fills `xbrl_facts`
+  from SEC's company-facts API. Nothing schedules them; they are run by hand,
+  and by CI on every run. Both are pinned for the eval companies: the filings
+  by accession number, the facts as filed through a date.
 - **Online:** the API serves requests. The agent calls the inference server
   through the app's own `/v1` proxy rather than calling Ollama directly, so the
   same timeouts and logging apply to it. It sends a per-process `X-Internal-Token`
@@ -170,9 +172,10 @@ prompt alone was measured not to hold.
 
 | tool | source | notes |
 |---|---|---|
+| `get_financial_fact` | `xbrl_facts`, from SEC XBRL company facts | one reported figure by company, named fact and fiscal year; returns the filing's accession number as the citation. Registered first; numeric questions are routed to it. See [STRUCTURED_FACTS.md](STRUCTURED_FACTS.md) |
 | `search_filings` | `rag/retriever.py` over `filing_chunks` | BGE query embedding, SQL-side filters (company, section), over-fetch then hybrid re-rank (lexical overlap + table boost for figure-seeking questions) |
 | `get_stock_price` | yfinance | inclusive `end_date`, optional; split/dividend-adjusted; summary fields always cover the full range |
-| `calculate_ratio` | yfinance statements | 7 ratios; returns formula and raw inputs; `pe_ratio` from Yahoo's trailing P/E |
+| `calculate_ratio` | yfinance statements; `xbrl_facts` when `fiscal_year` is given | 7 ratios; returns formula and raw inputs; `pe_ratio` from Yahoo's trailing P/E. With `fiscal_year`, margins, return on equity and current ratio come from that year's facts |
 | `search_news` | Google News RSS | no API key; `days_back` is filtered locally, not by the feed |
 
 Schemas are generated from each function's signature and docstring
@@ -189,11 +192,11 @@ never raises. Sync tools run in a thread so they do not block the event loop.
 | `api/` | FastAPI app (`main.py`), auth / conversation / agent routes, the OpenAI-compatible inference proxy, the rate-limit middleware |
 | `agent/` | loop, system prompt, tool wiring and compaction, conversation memory, grounding and advice guards, untrusted-content framing |
 | `rag/` | BGE embeddings (no sentence-transformers), vector store with pgvector or `real[]` fallback, retriever and re-ranker |
-| `ingestion/` | EDGAR client (validated User-Agent, rate limit, retry, disk cache), 10-K parser, token-accurate chunker |
-| `tools/` | the three live tools, the result envelope, the schema-deriving registry, yfinance network settings |
+| `ingestion/` | EDGAR client (validated User-Agent, rate limit, retry, disk cache), 10-K parser, token-accurate chunker, XBRL company-facts parser |
+| `tools/` | the three live tools, the structured facts tool and its storage, the result envelope, the schema-deriving registry, yfinance network settings |
 | `auth/`, `db/` | bcrypt + HS256 JWT; async SQLAlchemy engine, sessions, ORM models |
 | `core/` | typed settings (`config.py`), shared number extraction (`numerics.py`), retry with jittered backoff (`retry.py`) |
-| `migrations/` | Alembic: `0001` users/conversations/messages, `0002` `filing_chunks` (probes for pgvector, falls back to `real[]`) |
+| `migrations/` | Alembic: `0001` users/conversations/messages, `0002` `filing_chunks` (probes for pgvector, falls back to `real[]`), `0003` `xbrl_facts` |
 | `inference_router/` | optional round-robin router over inference replicas |
 | `eval/` | 40-case numeric question set, end-to-end runner, deterministic scorer, baseline comparison, retrieval-only eval, groundedness judge |
 | `frontend/` | Next.js 16 / React 19 chat client: login, signup, conversation sidebar, streamed answers with sources |

@@ -353,3 +353,39 @@ def test_table_chunk_content_starts_with_the_caption(tokenizer_available):
     # ...and the grid is still there underneath it.
     assert "215,938" in chunk.content
     assert "Gross profit" in chunk.content
+
+
+# ── net sales by category in the caption ─────────────────────────────────────
+
+BY_CATEGORY = FinancialTable(
+    title="CONSOLIDATED STATEMENTS OF OPERATIONS",
+    units="In millions, except per-share amounts",
+    periods=["September 27, 2025", "September 28, 2024"],
+    rows=[
+        TableRow("Net sales:", []),
+        TableRow("Products", [307003.0, 294866.0]),
+        TableRow("Services", [109158.0, 96169.0]),
+        TableRow("Total net sales", [416161.0, 391035.0]),
+        TableRow("Cost of sales:", []),
+        TableRow("Products", [194116.0, 185233.0]),
+        TableRow("Services", [26844.0, 25119.0]),
+        TableRow("Total cost of sales", [220960.0, 210352.0]),
+        TableRow("Gross margin", [195201.0, 180683.0]),
+    ],
+    row_count=9, numeric_cell_count=14, match_score=5,
+)
+
+
+def test_caption_states_net_sales_by_category_with_full_names():
+    """Two rows are labelled "Services": net sales and cost of sales. The caption
+    names the first unambiguously, for every period, and not the second."""
+    caption = table_caption(BY_CATEGORY, {"company": "Apple Inc.", "ticker": "AAPL",
+                                          "fiscal_period": "FY2025"})
+    assert ("Net sales by category for the periods ending September 27, 2025; "
+            "September 28, 2024: Products net sales 307,003, 294,866; "
+            "Services net sales 109,158, 96,169.") in caption
+    assert "26,844" not in caption and "194,116" not in caption
+
+
+def test_caption_has_no_category_sentence_when_the_statement_has_no_breakdown():
+    assert "by category" not in table_caption(TABLE, BASE_META)

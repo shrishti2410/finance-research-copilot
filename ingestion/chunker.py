@@ -376,6 +376,48 @@ _HEADLINE_LABELS = ("revenue", "net sales", "total net sales", "gross profit",
                     "gross margin", "operating income", "net income")
 
 
+# Headings under which a statement splits its top line by category.
+_SALES_HEADINGS = ("net sales", "revenue", "revenues", "net revenue", "net revenues")
+
+
+def _sales_by_category(table: "FinancialTable") -> str:
+    """Net sales by category, spelled out, when the statement breaks them down.
+
+    Apple's statement of operations has a row "Services" under "Net sales:" and
+    a second row "Services" under "Cost of sales:". In the rendered grid the two
+    differ only by which heading is above them, and eval run-c
+    (aapl-services-fy2025) read the cost row as the revenue. These category
+    figures are not in SEC's company-facts data either, which holds only
+    numbers reported for the whole company, so the structured facts tool cannot
+    answer for them. The caption therefore states each one with its full name
+    -- "Services net sales" -- for every period the statement shows.
+    """
+    heading = ""
+    members: list = []
+    for row in table.rows:
+        label = row.label.strip().rstrip(":").strip()
+        if not row.values:
+            if members:
+                break
+            heading = label if label.lower() in _SALES_HEADINGS else ""
+            continue
+        if not heading:
+            continue
+        if label.lower().startswith("total"):
+            break
+        members.append((label, row.values))
+    if not heading or len(members) < 2:
+        return ""
+
+    def figures(values) -> str:
+        return ", ".join("n/a" if v is None else f"{v:,.0f}" for v in values)
+
+    name = heading[0].lower() + heading[1:]
+    periods = f" for the periods ending {'; '.join(table.periods)}" if table.periods else ""
+    lines = "; ".join(f"{label} {name} {figures(values)}" for label, values in members)
+    return f"{heading} by category{periods}: {lines}."
+
+
 def table_caption(table: "FinancialTable", base_metadata: dict) -> str:
     """A natural-language description of what a table contains.
 
@@ -425,6 +467,10 @@ def table_caption(table: "FinancialTable", base_metadata: dict) -> str:
     if headline:
         unit = table.units or "as reported"
         parts.append(f"Most recent period: {'; '.join(headline[:5])} ({unit}).")
+
+    by_category = _sales_by_category(table)
+    if by_category:
+        parts.append(by_category)
 
     return " ".join(parts)
 

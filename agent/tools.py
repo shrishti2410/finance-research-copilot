@@ -1,7 +1,12 @@
 """The tools this agent may call, and how their results are shown to the model.
 
-Four tools: `search_filings` from `rag/` (Milestone 5) and the three in `tools/`
-(Milestone 6). Schemas are derived from their docstrings by `tools.registry`.
+Five tools: `get_financial_fact` over the XBRL facts table, `search_filings`
+from `rag/` (Milestone 5) and the three in `tools/` (Milestone 6). Schemas are
+derived from their docstrings by `tools.registry`.
+
+`get_financial_fact` is registered first and the descriptions point numeric
+questions at it: a reported figure for a fiscal year is an exact lookup there,
+where `search_filings` returns a grid the model then has to read correctly.
 
 Full results are not what the model sees
 ----------------------------------------
@@ -36,12 +41,20 @@ same numbers under the units note, and on a CPU host tokens are prefill time.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any, Literal
 
 from rag.retriever import search_filings as _search_filings
 from tools.base import ok
+from tools.facts import (
+    UNKNOWN_ARGUMENT_HINT,
+    fiscal_year_end,
+    get_financial_fact,
+    ratio_for_fiscal_year,
+)
 from tools.news_search import search_news
-from tools.ratios import calculate_ratio
+from tools.ratios import Period, RatioName
+from tools.ratios import calculate_ratio as _latest_ratio
 from tools.registry import Registry
 from tools.stock_price import get_stock_price
 
@@ -100,11 +113,12 @@ async def search_filings(
 
     Use this for what a company *said* in its annual report: how it describes
     its risks, its own explanation of results, or the exact wording of a
-    disclosure, and for any reported line item for a specific fiscal year:
-    revenue, gross profit, net income, EPS, share counts, segment revenue. The
-    income statement (section="income") is returned whole, with every figure for
-    each of its three fiscal years. For a current margin or ratio, use
-    calculate_ratio instead.
+    disclosure, and for segment and product figures such as Apple's Services
+    net sales or NVIDIA's Data Center revenue. For a company-wide reported
+    figure for a fiscal year (revenue, net income, EPS, share counts, tax
+    expense), call get_financial_fact first; the income statement
+    (section="income") is here too, returned whole with all three fiscal
+    years. For a margin or ratio, use calculate_ratio.
 
     Only filings that have been indexed are searchable. Currently that is NVIDIA
     (NVDA, fiscal 2026) and Apple (AAPL, fiscal 2025), one 10-K each. A search
@@ -154,9 +168,82 @@ async def search_filings(
     return ok(query=query, count=len(hits), results=results)
 
 
+async def calculate_ratio(
+    ticker: str,
+    ratio_name: RatioName,
+    period: Period = "annual",
+    fiscal_year: int | None = None,
+) -> dict[str, Any]:
+    """Calculate a financial ratio for a company from its reported financials.
+
+    Use this for questions about profitability, leverage, liquidity or
+    valuation. The result includes the formula used and the raw dollar figures
+    it was computed from, so the number can be checked rather than trusted.
+
+    When the question names a fiscal year, pass it as fiscal_year. Without it
+    the result is the most recent period of the kind asked for, named in
+    "period_end", which may not be the year the question means. For a line
+    item such as revenue, net income, EPS or a share count, use
+    get_financial_fact instead.
+
+    Args:
+        ticker: Stock ticker symbol, e.g. "NVDA" or "AAPL". Case-insensitive.
+        ratio_name: Which ratio to compute. One of:
+            "gross_margin" - gross profit / revenue.
+            "operating_margin" - operating income / revenue.
+            "net_margin" - net income / revenue.
+            "return_on_equity" - net income / shareholders' equity.
+            "debt_to_equity" - total debt / shareholders' equity. Returned as a
+                multiple, so 0.07 means debt is 7% of equity. Most recent
+                fiscal year only.
+            "current_ratio" - current assets / current liabilities.
+            "pe_ratio" - share price / trailing twelve-month earnings per
+                share. Always as-of-now, because it depends on the live market
+                price; `period` and `fiscal_year` do not apply to it.
+        period: Which reporting period to use when no fiscal_year is given.
+            "annual" is the most recent completed fiscal year (default),
+            "quarterly" the most recent reported quarter, "ttm" trailing
+            twelve months.
+        fiscal_year: The company's own fiscal year, e.g. 2025, for a ratio of
+            that year. Fiscal years are the company's, not calendar: NVDA's
+            FY2026 ended January 2026. Omit for the most recent period.
+
+    Returns:
+        On success, a dict with "ok": True and: ticker, ratio, period,
+        period_end, value (margins and return_on_equity are fractions, so
+        0.7107 means 71.07%; the others are multiples), formatted, formula,
+        inputs, currency and source. With fiscal_year the result also carries
+        "fiscal_year" and "accessions", the SEC filings its inputs came from.
+
+        On failure, {"ok": False, "error": code, "message": ...}.
+    """
+    if fiscal_year is None or str(fiscal_year).strip() == "":
+        return _latest_ratio(ticker, ratio_name, period)
+    if (ratio_name or "").strip().lower() == "debt_to_equity":
+        # Total debt is Yahoo's definition, which no single XBRL concept
+        # matches, so this ratio has one source. It answers a fiscal-year
+        # question only when that year is the one the source's latest annual
+        # statement covers; the two disagree on the day (Yahoo normalises
+        # NVIDIA's January 25 year end to January 31), not on the month.
+        latest = _latest_ratio(ticker, ratio_name, "annual")
+        ended = await fiscal_year_end(ticker, fiscal_year)
+        if latest.get("ok") and ended and _same_year_end(latest.get("period_end"), ended):
+            return {**latest, "fiscal_year": int(str(fiscal_year).upper().removeprefix("FY"))}
+    return await ratio_for_fiscal_year(ticker, ratio_name, fiscal_year)
+
+
+def _same_year_end(a: str | None, b: str | None) -> bool:
+    """Whether two ISO dates are the same fiscal year end, give or take a week."""
+    try:
+        return abs((date.fromisoformat(a) - date.fromisoformat(b)).days) <= 7
+    except (TypeError, ValueError):
+        return False
+
+
 def build_registry() -> Registry:
     """The default tool set. One registry per process is plenty; it is stateless."""
     registry = Registry()
+    registry.register(get_financial_fact, reject_unknown=UNKNOWN_ARGUMENT_HINT)
     registry.register(search_filings)
     registry.register(get_stock_price)
     registry.register(calculate_ratio)

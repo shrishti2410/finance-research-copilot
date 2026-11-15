@@ -54,7 +54,8 @@ you found, including anything that went wrong.
   reboot. Postgres runs on 55432 (start command in `docs/DATABASE.md`), Redis
   per `REDIS_URL` in `.env`, and Ollama with both `qwen2.5:7b` and
   `qwen2.5:1.5b` pulled. The filings must be indexed with
-  `python scripts/index_filings.py`. Block laptop standby for the run.
+  `python scripts/index_filings.py` and the structured facts with
+  `python scripts/index_facts.py`. Block laptop standby for the run.
 - **If a dependency cannot be brought up,** record the skip count and its
   reasons in the commit or merge message, and say so in your report. Never
   describe such a run as passing.
