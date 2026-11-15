@@ -149,6 +149,32 @@ _FLOAT_SLACK = 1e-9
 
 _DIGITS = re.compile(r"\d[\d,]*(?:\.(\d+))?")
 
+# Hyphens and dashes a model may typeset in place of "-". The answer is read as
+# if it had been typed with the ASCII hyphen, so "10\u2011K" is the form name
+# "10-K" and not the number 10.
+#
+# Found on the first hosted run (2026-11-15, openai/gpt-oss-120b): 35 of 40
+# answers used U+2011 or U+202F, and a correct 71.07% draft was discarded
+# because "Form 10\u2011K" was read as an unsupported 10.
+#
+# One character for one character, so every offset in the text is unchanged.
+# Only characters that are hyphens or already count as a minus sign are mapped.
+# The em dash and the horizontal bar are left alone: they are sentence
+# punctuation, and "margin\u201471%" must not become minus 71.
+_HYPHENS = str.maketrans({
+    "\u2010": "-",   # hyphen
+    "\u2011": "-",   # non-breaking hyphen
+    "\u2012": "-",   # figure dash
+    "\u2013": "-",   # en dash (already a sign in core.numerics)
+    "\u2212": "-",   # minus sign (already a sign in core.numerics)
+    "\ufe63": "-",   # small hyphen-minus
+    "\uff0d": "-",   # fullwidth hyphen-minus
+})
+
+
+def _plain_hyphens(text: str) -> str:
+    return text.translate(_HYPHENS)
+
 # A rendered statement says once, above the grid, what its cells are in:
 # "(In millions, except per share data)". Under that note a bare "68" is a
 # figure -- $68 million -- even though nothing on the cell itself says so. The
@@ -292,6 +318,11 @@ def _matches_at_precision(value: float, computed: float, half_ulp: float) -> boo
     return abs(value - computed) <= half_ulp + abs(value) * _FLOAT_SLACK
 
 
+def _same_quantity(a: float, b: float) -> bool:
+    """Whether `b` is `a` again, as written or as a ratio shown in percent."""
+    return any(_close(a * factor, b) for factor in DERIVED_RESCALINGS)
+
+
 def _derivable(value: float, operands: set[float], half_ulp: float | None) -> bool:
     """Whether one arithmetic step over two operands reaches `value`.
 
@@ -305,7 +336,13 @@ def _derivable(value: float, operands: set[float], half_ulp: float | None) -> bo
         return False
     values = list(operands)
     for i, a in enumerate(values):
-        for b in values[i:]:
+        for b in values[i + 1:]:
+            # One quantity is not two operands. A number against itself, or
+            # against its own rendering in another scale (0.710681 and 71.07%),
+            # derives 1, 100 and 0 from anything: "revenue of 100" passed on
+            # 0.710681 / 0.710681 shown as a percentage.
+            if _same_quantity(a, b):
+                continue
             products = [a * b, a + b, a - b, b - a]
             if b != 0:
                 products.append(a / b)
@@ -366,6 +403,7 @@ def answer_figures(answer: str) -> list[Figure]:
     "fiscal year 2026" and "January 31, 2026" do not become claims that need
     supporting.
     """
+    answer = _plain_hyphens(answer)
     figures: list[Figure] = []
     seen: set[float] = set()
     for candidate in candidates(answer):
@@ -409,6 +447,30 @@ def unsupported_figures(answer: str, steps) -> list[Figure]:
         # The answer's own roundings of real operands, minus this figure's.
         own = {value for key, value in shown.items()
                if value is not None and key != id(figure)}
+        if _stated_derivation(figure, evidence, own):
+            continue
         if not supported(figure.value, evidence, operands | own, figure.half_ulp):
             unsupported.append(figure)
     return unsupported
+
+
+def _stated_derivation(figure: Figure, evidence: set[float], own: set[float]) -> bool:
+    """Whether `figure` is one step from two operands the answer itself states.
+
+    `own` holds the answer's other figures that are roundings of real operands,
+    so each traces to a tool result. An answer that shows its working --
+    "gross margin of $195,201 million on net sales of $416,161 million is
+    46.9%" -- names the two numbers its arithmetic used, and that pair can be
+    checked however much else the turn returned.
+
+    This is tried before the wider operand set, and it is what keeps
+    DERIVATION_LIMIT from refusing honest arithmetic: a turn with a whole
+    income statement and one more tool result holds more than 120 operands,
+    and above the limit no derivation was checked at all. The limit itself is
+    unchanged and still governs derivations from operands the answer does not
+    state. Nothing here accepts a figure the wider rule would refuse in a
+    small turn: `own` is a subset of what that rule already searches.
+    """
+    if not evidence or not own:
+        return False
+    return _derivable(figure.value, own, figure.half_ulp)

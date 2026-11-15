@@ -319,3 +319,168 @@ def test_rounding_does_not_reopen_the_item_number_derivation():
     answer = ("The filing cites a 29% increase in compensation. The net margin "
               "was 21.93%.")
     assert _flagged("21.93", unsupported_figures(answer, steps))
+
+
+# ── typographic hyphens (hosted run 1, 2026-11-15) ────────────────────────────
+#
+# openai/gpt-oss-120b typesets "10-K" with U+2011, a non-breaking hyphen. The
+# form rule in core/numerics.py matches the ASCII hyphen only, so the guard read
+# "Form 10‑K" as the number 10 and discarded a correct answer.
+
+RATIO = {"ok": True, "ratio": "gross_margin", "value": 0.710681, "formatted": "71.07%",
+         "inputs": {"revenue": 215938000000.0, "gross_profit": 153463000000.0}}
+
+
+@pytest.mark.parametrize("hyphen", ["-", "‐", "‑", "‒", "–", "−"])
+def test_a_form_name_is_not_a_figure_whichever_hyphen_it_is_typeset_with(hyphen):
+    steps = [_ok("calculate_ratio", RATIO)]
+    answer = (f"NVIDIA reported a gross margin of 71.07% for fiscal year 2026, "
+              f"as shown in its Form 10{hyphen}K.")
+    assert _texts(unsupported_figures(answer, steps)) == []
+
+
+def test_the_hosted_draft_that_was_discarded_no_longer_flags_the_form_name():
+    """The draft from nvda-gross-margin-pct-mdna, hosted run 1, as written."""
+    steps = [_ok("calculate_ratio", RATIO)]
+    draft = ("NVIDIA reported a gross margin of **71.07%** for its fiscal year 2026, "
+             "as shown in the MD&A section of its Form 10‑K. Gross profit of "
+             "$153.463 billion divided by revenue of $215.938 billion yields "
+             "a gross margin of 0.710681 (71.07%).\n\nFinal figure: 71.07%")
+    assert _texts(unsupported_figures(draft, steps)) == []
+
+
+def test_an_honest_refusal_naming_the_form_with_a_typographic_hyphen_passes():
+    answer = "The filing search failed, so I have nothing to report from the 10‑K."
+    assert unsupported_figures(answer, [_ok("calculate_ratio", RATIO)]) == []
+
+
+def test_an_invented_figure_beside_a_typographic_hyphen_is_still_blocked():
+    steps = [_ok("calculate_ratio", RATIO)]
+    answer = "Per the Form 10‑K, NVIDIA's net‑margin was 21.93%."
+    assert _flagged("21.93", unsupported_figures(answer, steps))
+
+
+def test_a_number_after_a_typographic_hyphen_reads_as_it_does_after_a_plain_one():
+    """Normalising makes the two spellings equal; it adds no new leniency."""
+    steps = [_ok("calculate_ratio", RATIO)]
+    for template in ("The margin was up{h}9.99% on the year.", "A top{h}40 customer list."):
+        plain = _texts(unsupported_figures(template.format(h="-"), steps))
+        typeset = _texts(unsupported_figures(template.format(h="‑"), steps))
+        assert plain == typeset and plain, template
+
+
+def test_an_em_dash_is_not_turned_into_a_minus_sign():
+    steps = [_ok("calculate_ratio", RATIO)]
+    assert unsupported_figures("Gross margin—71.07% for the year.", steps) == []
+
+
+# ── derivations in a turn with more than DERIVATION_LIMIT operands ────────────
+#
+# Hosted run 1, aapl-gross-margin-pct-derived: the draft computed 195,201 /
+# 416,161 = 46.9% from the statement. Both operands were in the tool results,
+# but the turn held 126 operands against a limit of 120, so no derivation was
+# checked and a correct figure was refused.
+
+def _big_turn():
+    """A statement table and a price series: well over DERIVATION_LIMIT operands."""
+    from agent.grounding import DERIVATION_LIMIT, derivation_operands
+
+    statement = {"ok": True, "results": [{
+        "section": "Income Statement", "units": "USD millions",
+        # As agent/tools.py returns a table: each row as written and in dollars.
+        "rows": [
+            {"label": label, "values": values,
+             "values_absolute": [v * 1e6 for v in values]}
+            for label, values in (
+                ("Total net sales", [416161.0, 391035.0, 383285.0]),
+                ("Gross margin", [195201.0, 180683.0, 169148.0]),
+                ("Net income", [112010.0, 93736.0, 96995.0]),
+            )]}]}
+    prices = {"ok": True, "prices": [
+        {"date": f"2026-{1 + i // 28:02d}-{1 + i % 28:02d}", "close": 201.37 + 0.73 * i}
+        for i in range(200)]}
+    steps = [_ok("search_filings", statement), _ok("get_stock_price", prices, iteration=2)]
+    assert len(derivation_operands(steps)) > DERIVATION_LIMIT
+    return steps
+
+
+def test_a_derivation_from_operands_the_answer_states_passes_in_a_big_turn():
+    answer = ("Apple's gross margin of $195,201 million on total net sales of "
+              "$416,161 million is 46.9%.")
+    assert _texts(unsupported_figures(answer, _big_turn())) == []
+
+
+def test_the_working_shown_as_a_ratio_and_a_percentage_passes_in_a_big_turn():
+    answer = ("Gross margin = 195,201 million / 416,161 million = 0.469, "
+              "which is 46.9%.")
+    assert _texts(unsupported_figures(answer, _big_turn())) == []
+
+
+def test_an_invented_figure_in_a_big_turn_is_still_blocked():
+    """The cap was not raised: more than 120 figures does not make 21.93% derivable."""
+    steps = _big_turn()
+    for answer in ("Apple's net margin was 21.93%.",
+                   "On net sales of $416,161 million, Apple's net margin was 21.93%.",
+                   "Gross margin of $195,201 million on net sales of $416,161 million "
+                   "gives a margin of 52.3%."):
+        assert _flagged("21.93" if "21.93" in answer else "52.3",
+                        unsupported_figures(answer, steps)), answer
+
+
+def test_a_derivation_whose_operands_the_answer_does_not_state_still_falls_under_the_cap():
+    """46.9% is true, but the answer names neither operand, so only the wider
+    set could support it, and the wider set is over the limit. Unchanged."""
+    assert _flagged("46.9", unsupported_figures("Apple's gross margin was 46.9%.", _big_turn()))
+
+
+def test_a_stated_operand_that_no_tool_returned_does_not_count():
+    """Showing working with an invented input does not launder the result."""
+    answer = ("Gross margin of $650,000 million on total net sales of "
+              "$416,161 million is 156.2%.")
+    unsupported = unsupported_figures(answer, _big_turn())
+    assert _flagged("650,000", unsupported) and _flagged("156.2", unsupported)
+
+
+def test_the_stated_operand_rule_changes_nothing_in_a_small_turn():
+    """Under the cap the wider rule already searched these pairs."""
+    steps = [_ok("calculate_ratio", RATIO)]
+    assert unsupported_figures("Gross profit of $153.463 billion on revenue of "
+                               "$215.938 billion is a 71.07% margin.", steps) == []
+    assert _flagged("21.93", unsupported_figures(
+        "Gross profit of $153.463 billion on revenue of $215.938 billion is a "
+        "21.93% margin.", steps))
+
+
+# ── stated operands must themselves be grounded ───────────────────────────────
+
+INVENTED_AND_CONSISTENT = [
+    "Revenue was $100 million, costs were $60 million, and profit was $40 million.",
+    "Revenue of 100 less costs of 60 leaves a profit of 40.",
+    "With revenue of $912.5 billion and costs of $547.5 billion, profit was $365.0 billion, "
+    "a 40.0% margin.",
+]
+
+
+@pytest.mark.parametrize("answer", INVENTED_AND_CONSISTENT)
+@pytest.mark.parametrize("turn", ["small", "big"])
+def test_invented_figures_that_agree_with_each_other_are_all_flagged(answer, turn):
+    """Three made-up numbers that add up prove nothing: 100 - 60 = 40 is true
+    arithmetic over operands no tool returned. The answer's own figures count as
+    operands only when each one traces to a tool result, so a consistent
+    invention cannot vouch for itself -- in a small turn or in one with more
+    than DERIVATION_LIMIT figures."""
+    steps = [_ok("calculate_ratio", RATIO)] if turn == "small" else _big_turn()
+    unsupported = unsupported_figures(answer, steps)
+    stated = [f.text for f in __import__("agent.grounding", fromlist=["answer_figures"])
+              .answer_figures(answer)]
+    assert len(stated) >= 3
+    assert _texts(unsupported) == stated, "every invented figure must be flagged"
+
+
+def test_one_real_figure_does_not_vouch_for_two_invented_ones():
+    """Revenue is real; the cost and the profit are invented to fit it."""
+    answer = ("On total net sales of $416,161 million, costs were $400,000 million, "
+              "leaving a profit of $16,161 million.")
+    unsupported = unsupported_figures(answer, _big_turn())
+    assert not _flagged("416,161", unsupported)
+    assert _flagged("400,000", unsupported) and _flagged("16,161 million", unsupported)
