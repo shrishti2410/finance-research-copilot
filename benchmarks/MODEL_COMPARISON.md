@@ -212,6 +212,29 @@ Run 2 was stopped at 07:13:58 UTC after 12 cases. Its log is kept as
 anywhere in this document. The allowance is a rolling 24 hours, so the second
 run is planned for after 06:30 UTC on 2026-11-16.
 
+## Bookkeeping difference between hosted run 1 and run 2
+
+Hosted run 2 will run on code that records, for every model call, how many
+prompt tokens the provider reports as served from its prompt cache
+(`cached_prompt_tokens` and `call_usage` in the stored turn, and
+`cached_prompt_tokens` per case in the eval report). Run 1 was on `1b39944`,
+which did not record this. The change adds fields to what is recorded and
+nothing else: the prompt, the tools, the model settings, the guard and the
+scorer are the same, so the two runs still measure the same system.
+
+Why it was added: whether Groq's prompt cache reduces what counts against the
+daily allowance could not be settled from run 1.
+
+- Groq's documentation says "Cached tokens do not count towards your rate
+  limits" and lists this model as cached automatically
+  (`https://console.groq.com/docs/prompt-caching`, read 2026-11-15).
+- Run 1 sent 376,352 tokens, and after it and twelve more questions the
+  provider reported 197,568 used of 200,000. That is consistent with about half
+  the tokens not counting.
+- Three identical requests of the agent's first-call prompt (2,406 prompt
+  tokens), sent two seconds apart on 2026-11-15, each returned a usage block
+  with no cached tokens (`cache_probe.txt` in the results directory).
+
 ## Not done in this step
 
 - **Hosted router with Qwen answering** was dropped at the user's request, so
