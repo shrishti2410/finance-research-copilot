@@ -31,10 +31,18 @@ the year's total dividends per share, $1.02, stated as the answer where the
 agent had previously declined. "How much was NVIDIA authorized to repurchase?"
 got the cash it spent on buybacks. A question about Data Center revenue was
 sent with a `segment` argument, which the registry drops, and came back as
-total revenue. So every result carries a `scope` line saying the figure is for
-the whole company and the whole fiscal year, the two lookalike facts say what
-they are not in their description, and the tool description names what belongs
-to search_filings.
+total revenue. Wording alone did not hold: with a `scope` line on the result
+and the fact described as "not the quarterly dividend rate", the dividend
+question was still answered with $1.02, now with the claim that Apple had not
+raised its dividend. So:
+
+- Dividends per share, dividends paid and share repurchases are **not** named
+  facts. They are real XBRL figures, but each is one word away from a question
+  this tool cannot answer, and a model that finds a number stops looking.
+  Asking for one is an unknown fact, and the error points to search_filings.
+- The tool is registered to reject arguments it does not have, so `segment`
+  is an error that says there is no segment figure here, not a silent drop.
+- Every result still carries the `scope` line.
 
 What is not here
 ----------------
@@ -56,7 +64,7 @@ from tools.base import ERROR_BAD_INPUT, ERROR_NO_DATA, ERROR_UNSUPPORTED, error,
 
 __all__ = [
     "FACTS", "FactName", "get_financial_fact", "ratio_for_fiscal_year",
-    "fiscal_year_end", "upsert_facts", "FACT_RATIOS",
+    "fiscal_year_end", "upsert_facts", "FACT_RATIOS", "UNKNOWN_ARGUMENT_HINT",
 ]
 
 # name -> (what it is, concepts that mean it in order of preference).
@@ -88,14 +96,6 @@ FACTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "WeightedAverageNumberOfSharesOutstandingBasic",)),
     "shares_diluted": ("Weighted-average diluted shares outstanding", (
         "WeightedAverageNumberOfDilutedSharesOutstanding",)),
-    "dividends_per_share": (
-        "Cash dividends declared per share, total for the whole fiscal year "
-        "(not the quarterly dividend rate)", ("CommonStockDividendsPerShareDeclared",)),
-    "dividends_paid": ("Cash paid in dividends during the fiscal year", ("PaymentsOfDividends",)),
-    "share_repurchases": (
-        "Cash paid to repurchase common stock during the fiscal year (not the size of a "
-        "repurchase program or the amount still authorized)",
-        ("PaymentsForRepurchaseOfCommonStock",)),
     "operating_cash_flow": ("Net cash provided by operating activities", (
         "NetCashProvidedByUsedInOperatingActivities",)),
     "capital_expenditures": ("Payments for property, plant and equipment", (
@@ -117,8 +117,8 @@ FactName = Literal[
     "revenue", "cost_of_revenue", "gross_profit", "research_and_development",
     "selling_general_and_administrative", "operating_expenses", "operating_income",
     "pretax_income", "income_tax_expense", "net_income", "eps_basic", "eps_diluted",
-    "shares_basic", "shares_diluted", "dividends_per_share", "dividends_paid",
-    "share_repurchases", "operating_cash_flow", "capital_expenditures", "total_assets",
+    "shares_basic", "shares_diluted", "operating_cash_flow", "capital_expenditures",
+    "total_assets",
     "total_liabilities", "shareholders_equity", "current_assets", "current_liabilities",
     "cash_and_equivalents", "long_term_debt",
 ]
@@ -141,8 +141,7 @@ _ALIASES = {
     "basic_shares": "shares_basic", "diluted_shares": "shares_diluted",
     "weighted_average_shares_basic": "shares_basic",
     "weighted_average_shares_diluted": "shares_diluted",
-    "dividend_per_share": "dividends_per_share", "buybacks": "share_repurchases",
-    "stock_repurchases": "share_repurchases", "capex": "capital_expenditures",
+    "capex": "capital_expenditures",
     "cash_from_operations": "operating_cash_flow", "assets": "total_assets",
     "liabilities": "total_liabilities", "equity": "shareholders_equity",
     "stockholders_equity": "shareholders_equity", "cash": "cash_and_equivalents",
@@ -152,8 +151,16 @@ _ALIASES = {
 _FILING_URL = "https://www.sec.gov/Archives/edgar/data/{cik_int}/{accession_nodash}/"
 
 # Carried on every result. See the module docstring.
-SCOPE = ("Whole company, whole fiscal year. Not a segment, product, quarter, program "
-         "size or authorization: those are in the filing text, via search_filings.")
+SCOPE = ("Whole company, whole fiscal year. Not a segment, product or quarter: "
+         "those are in the filing text, via search_filings.")
+
+# Given to the registry: what to say when the tool is called with an argument
+# it does not have. See the module docstring.
+UNKNOWN_ARGUMENT_HINT = (
+    "Every figure here is for the whole company and the whole fiscal year: there is "
+    "no segment, product or quarter argument. For a segment or product figure, use "
+    "search_filings."
+)
 
 
 def _fact_name(raw: str) -> str | None:
@@ -330,16 +337,14 @@ async def get_financial_fact(ticker: str, fact: FactName, fiscal_year: int) -> d
     Every figure is for the whole company and the whole fiscal year. It has no
     segment or product argument. Use search_filings instead for segment and
     product figures (Apple's Services net sales, NVIDIA's Data Center
-    revenue), for a quarterly dividend rate, for the size of a share
-    repurchase program or authorization, for anything announced on a date,
-    and for anything a company said in words.
+    revenue), for dividends and share repurchases, for anything announced
+    on a date, and for anything a company said in words.
 
     Args:
         ticker: Stock ticker symbol, e.g. "NVDA" or "AAPL".
         fact: Which figure. "pretax_income" is income before income taxes;
             "shares_basic" and "shares_diluted" are the weighted-average share
-            counts used for EPS; "dividends_per_share" is the total declared
-            for the year; balance-sheet figures are at fiscal year end.
+            counts used for EPS; balance-sheet figures are at fiscal year end.
         fiscal_year: The company's own fiscal year, e.g. 2026. NVIDIA's fiscal
             2026 ended January 2026; Apple's fiscal 2025 ended September 2025.
 
@@ -371,7 +376,8 @@ async def get_financial_fact(ticker: str, fact: FactName, fiscal_year: int) -> d
         return error(
             ERROR_BAD_INPUT,
             f"Unknown fact {fact!r}. Known facts: {', '.join(FACTS)}. Segment and "
-            f"product figures are not structured facts: use search_filings.",
+            f"product figures, dividends and share repurchases are not structured "
+            f"facts: use search_filings.",
             ticker=symbol,
         )
     year = _fiscal_year(fiscal_year)

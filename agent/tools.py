@@ -46,7 +46,12 @@ from typing import Any, Literal
 
 from rag.retriever import search_filings as _search_filings
 from tools.base import ok
-from tools.facts import fiscal_year_end, get_financial_fact, ratio_for_fiscal_year
+from tools.facts import (
+    UNKNOWN_ARGUMENT_HINT,
+    fiscal_year_end,
+    get_financial_fact,
+    ratio_for_fiscal_year,
+)
 from tools.news_search import search_news
 from tools.ratios import Period, RatioName
 from tools.ratios import calculate_ratio as _latest_ratio
@@ -238,7 +243,7 @@ def _same_year_end(a: str | None, b: str | None) -> bool:
 def build_registry() -> Registry:
     """The default tool set. One registry per process is plenty; it is stateless."""
     registry = Registry()
-    registry.register(get_financial_fact)
+    registry.register(get_financial_fact, reject_unknown=UNKNOWN_ARGUMENT_HINT)
     registry.register(search_filings)
     registry.register(get_stock_price)
     registry.register(calculate_ratio)

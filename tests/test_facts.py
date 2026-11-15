@@ -423,16 +423,50 @@ def test_every_result_says_it_is_company_wide_and_for_the_whole_year(stored):
     assert "search_filings" in result["scope"]
 
 
-def test_the_lookalike_facts_say_what_they_are_not():
+def test_the_lookalike_figures_are_not_named_facts(stored):
+    """Dividends and buybacks are one word away from questions this tool cannot
+    answer (a quarterly rate, an authorization). Asking is an error that points
+    at the filing search, not a number."""
     from tools.facts import FACTS
-    assert "not the quarterly dividend rate" in FACTS["dividends_per_share"][0]
-    assert "not the size of a repurchase program" in FACTS["share_repurchases"][0]
+    for name in ("dividends_per_share", "dividends_paid", "share_repurchases"):
+        assert name not in FACTS
+        result = fact(name, 2026)
+        assert result["error"] == "bad_input" and "search_filings" in result["message"]
 
 
-def test_the_description_sends_programs_rates_and_segments_to_the_filing_search():
+def test_an_argument_the_tool_does_not_have_is_an_error_not_a_silent_drop(stored):
+    """`segment="Data Center"` dropped would answer a different question."""
+    from agent.tools import build_registry
+    result = run(build_registry().call("get_financial_fact", {
+        "ticker": TEST_TICKER, "fact": "revenue", "fiscal_year": 2026,
+        "segment": "Data Center"})).result
+    assert not result["ok"] and result["error"] == "bad_input"
+    assert "segment" in result["message"] and "search_filings" in result["message"]
+
+
+def test_other_tools_still_drop_an_unknown_argument():
+    """The default is unchanged: an invented extra on another tool is ignored."""
+    from tools.base import ok
+    from tools.registry import Registry
+
+    def echo(ticker: str) -> dict:
+        """Echo.
+
+        Args:
+            ticker: the symbol.
+        """
+        return ok(ticker=ticker)
+
+    registry = Registry()
+    registry.register(echo)
+    result = run(registry.call("echo", {"ticker": "NVDA", "extra": 1})).result
+    assert result["ok"] and result["ignored_arguments"] == ["extra"]
+
+
+def test_the_description_sends_dividends_buybacks_and_segments_to_the_filing_search():
     from agent.tools import build_registry
     description = " ".join(
         build_registry().get("get_financial_fact").schema()["function"]["description"].split())
-    for phrase in ("no segment or product argument", "quarterly dividend rate",
-                   "repurchase program or authorization", "search_filings"):
+    for phrase in ("no segment or product argument", "dividends and share repurchases",
+                   "search_filings"):
         assert phrase in description

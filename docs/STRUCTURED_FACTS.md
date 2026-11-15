@@ -76,6 +76,19 @@ A result carries `value` and `unit` (dollars, shares, or dollars per share;
 never millions), `period_start` and `period_end`, `concept`, and the citation:
 `accession`, `form`, `filed` and `source_url`.
 
+Three figures that exist in the data are deliberately not named facts:
+dividends per share, dividends paid and share repurchases. On the fast subset
+of 2026-11-15 a question about Apple's *quarterly* dividend was answered with
+the year's total, and a question about NVIDIA's repurchase *authorization* with
+the cash spent. Describing the facts as "not the quarterly rate" did not stop
+it. Asking for one is now an unknown fact that points to `search_filings`.
+
+The tool also rejects an argument it does not have. A call with
+`segment="Data Center"` used to have the segment dropped and return total
+revenue; it is now a `bad_input` error saying there is no segment figure here.
+Every result carries a `scope` line saying it covers the whole company for the
+whole fiscal year.
+
 Failures are the same envelope every tool uses. An unknown fact name lists the
 known ones. A year the company has not reported lists the years it has. A
 company that has not been ingested says so and points at the other tools.

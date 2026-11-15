@@ -265,11 +265,25 @@ class Registry:
 
     def __init__(self) -> None:
         self._tools: dict[str, ToolSpec] = {}
+        # name -> what to say when the tool is called with an unknown argument.
+        self._reject_unknown: dict[str, str] = {}
 
     def register(self, fn: Callable, name: str | None = None,
-                 description: str | None = None, hidden: tuple[str, ...] = ()) -> ToolSpec:
+                 description: str | None = None, hidden: tuple[str, ...] = (),
+                 reject_unknown: str | None = None) -> ToolSpec:
+        """Register a tool.
+
+        `reject_unknown` makes an argument the tool does not accept an error
+        carrying that text, instead of being dropped. Dropping is the default
+        because most invented extras are harmless. It is wrong for a tool where
+        the extra argument changes what was asked: "revenue, segment=Data
+        Center" with the segment dropped is a different question, answered
+        with confidence.
+        """
         spec = build_spec(fn, name, description, hidden)
         self._tools[spec.name] = spec
+        if reject_unknown:
+            self._reject_unknown[spec.name] = reject_unknown
         return spec
 
     def __contains__(self, name: object) -> bool:
@@ -325,6 +339,13 @@ class Registry:
             for key, value in arguments.items() if key in spec.accepted
         }
         ignored = sorted(set(arguments) - spec.accepted)
+        if ignored and name in self._reject_unknown:
+            return finish(error(
+                ERROR_BAD_INPUT,
+                f"{name} has no argument named {', '.join(ignored)}. "
+                f"It accepts: {', '.join(sorted(spec.accepted))}. "
+                f"{self._reject_unknown[name]}",
+            ))
 
         missing = sorted(spec.required - accepted.keys())
         if missing:
