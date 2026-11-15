@@ -8,7 +8,9 @@ rather than silently at the first request.
 import secrets
 from functools import lru_cache
 
-from pydantic import Field, field_validator
+from typing import Literal
+
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Sentinel default so the app still boots for `alembic --sql` and unit tests,
@@ -84,6 +86,20 @@ class Settings(BaseSettings):
     #
     # Empty disables the split and every step runs on agent_model.
     agent_router_model: str = "qwen2.5:1.5b"
+    # Which provider serves each of the two models. "ollama" is whatever
+    # INFERENCE_BASE_URL points at, and is the default so that tests and CI need
+    # no key. "groq" is the hosted provider, reached through the same proxy with
+    # GROQ_API_KEY. The router's provider defaults to the answer model's; set it
+    # to run a hosted router in front of a local answer model, or the reverse.
+    #
+    # A hosted provider only works when the agent calls the app's own proxy
+    # (AGENT_INFERENCE_BASE_URL), because the proxy is what holds the key.
+    agent_provider: Literal["ollama", "groq"] = "ollama"
+    agent_router_provider: Literal["", "ollama", "groq"] = ""
+    # The hosted provider. The key is read from .env and nowhere else; it has no
+    # default, and a provider that needs it refuses to start without it.
+    groq_api_key: str = ""
+    groq_base_url: str = "https://api.groq.com/openai/v1"
     # Generated-token caps. Ollama is unbounded by default, which on a CPU host
     # means one runaway answer can generate for minutes at ~4 tok/s. Across the
     # 40 eval questions the longest final answer was ~368 tokens and the median
@@ -142,6 +158,36 @@ class Settings(BaseSettings):
     # single /ask would spend five of the caller's twenty anonymous requests a
     # minute on the app talking to itself.
     internal_token: str = Field(default_factory=lambda: secrets.token_urlsafe(32))
+
+    @field_validator("internal_token")
+    @classmethod
+    def empty_internal_token_means_generate_one(cls, v: str) -> str:
+        # "INTERNAL_TOKEN=" in a .env is an empty string, not an absent variable,
+        # and an empty token matches nothing: the agent's own calls would then be
+        # rate limited and refused the hosted provider. Empty means unset.
+        return v or secrets.token_urlsafe(32)
+
+    @field_validator("groq_base_url")
+    @classmethod
+    def strip_groq_trailing_slash(cls, v: str) -> str:
+        return v.rstrip("/")
+
+    @property
+    def router_provider(self) -> str:
+        """The router model's provider, resolved: its own setting, or the answer model's."""
+        return self.agent_router_provider or self.agent_provider
+
+    @model_validator(mode="after")
+    def hosted_provider_has_its_key(self) -> "Settings":
+        # Fail at boot, with the fix in the message. Without this the first
+        # question after a deploy is what discovers the missing key, as a 503
+        # from the proxy several layers away from the cause.
+        if "groq" in (self.agent_provider, self.router_provider) and not self.groq_api_key:
+            raise ValueError(
+                "AGENT_PROVIDER or AGENT_ROUTER_PROVIDER is 'groq' but GROQ_API_KEY is "
+                "empty. Set GROQ_API_KEY in .env, or set the provider back to 'ollama'."
+            )
+        return self
 
     @property
     def cors_origin_list(self) -> list[str]:

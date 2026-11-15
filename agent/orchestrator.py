@@ -272,7 +272,15 @@ async def _within_deadline(call: Awaitable[Any], seconds: float) -> Any:
         raise
 
 
-async def _stream_message(client, payload, on_token) -> dict:
+def _rate_limit_wait_ms(response) -> float:
+    """Milliseconds the proxy spent waiting out a provider rate limit for this call."""
+    try:
+        return float(response.headers.get("x-rate-limit-wait-ms") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+async def _stream_message(client, payload, on_token, headers=None, waits=None) -> dict:
     """Run one streaming chat completion and return the assembled message.
 
     Returns the same shape the buffered path pulls out of `choices[0].message`.
@@ -281,8 +289,10 @@ async def _stream_message(client, payload, on_token) -> dict:
     tool_calls: dict[int, dict] = {}
 
     request = client.build_request("POST", "/chat/completions",
-                                   json={**payload, "stream": True})
+                                   json={**payload, "stream": True}, headers=headers)
     response = await client.send(request, stream=True)
+    if waits is not None:
+        waits.append(_rate_limit_wait_ms(response))
     try:
         response.raise_for_status()
         async for line in response.aiter_lines():
@@ -324,7 +334,7 @@ async def _stream_message(client, payload, on_token) -> dict:
     return message
 
 
-async def _router_message(client, payload) -> dict | None:
+async def _router_message(client, payload, headers=None, waits=None) -> dict | None:
     """Run the router's call, abandoning it the moment it starts writing prose.
 
     Returns the assembled tool-call message, or None if the router had no tool
@@ -345,8 +355,10 @@ async def _router_message(client, payload) -> dict | None:
     """
     tool_calls: dict[int, dict] = {}
     request = client.build_request("POST", "/chat/completions",
-                                   json={**payload, "stream": True})
+                                   json={**payload, "stream": True}, headers=headers)
     response = await client.send(request, stream=True)
+    if waits is not None:
+        waits.append(_rate_limit_wait_ms(response))
     prose = False
     try:
         response.raise_for_status()
@@ -413,6 +425,12 @@ class AgentResult:
     model: str = ""
     # Empty when the whole turn ran on `model`. See settings.agent_router_model.
     router_model: str = ""
+    # Which provider served each model: "ollama" or a hosted one.
+    provider: str = ""
+    router_provider: str = ""
+    # Part of total_ms that was the proxy waiting out a hosted provider's rate
+    # limit, not the model working. Zero on a local provider.
+    rate_limit_wait_ms: float = 0.0
     # The figure from the answer's "Final figure:" line, as written ("$215.9
     # billion"), FINAL_FIGURE_NONE when the model declined, or None when the
     # line was absent or the answer is not the model's own. See
@@ -447,9 +465,12 @@ class AgentResult:
             "stop_reason": self.stop_reason,
             "model": self.model,
             "router_model": self.router_model,
+            "provider": self.provider,
+            "router_provider": self.router_provider if self.router_model else "",
             "router_calls": self.router_calls,
             "final_figure": self.final_figure,
             "total_ms": round(self.total_ms, 1),
+            "rate_limit_wait_ms": round(self.rate_limit_wait_ms, 1),
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
             "total_tokens": self.total_tokens,
@@ -537,6 +558,8 @@ async def run_agent(
     registry: Registry | None = None,
     model: str | None = None,
     router_model: str | None = None,
+    provider: str | None = None,
+    router_provider: str | None = None,
     max_tokens: int | None = None,
     router_max_tokens: int | None = None,
     max_iterations: int = MAX_ITERATIONS,
@@ -564,6 +587,11 @@ async def run_agent(
             reserved for writing the answer and for recovering from a failed
             tool call. Defaults to `settings.agent_router_model`; pass "" to run
             every step on `model`.
+        provider: which provider serves `model` -- "ollama" or a hosted one.
+            Defaults to `settings.agent_provider`. Sent to the app's proxy as a
+            header; the proxy holds the key.
+        router_provider: the same for `router_model`. Defaults to
+            `settings.router_provider`, which is the answer model's unless set.
         max_tokens: cap on generated tokens per call to `model`. Unbounded
             generation on a CPU host is a minutes-long tail, not a longer
             answer -- see the note on `settings.agent_max_tokens`.
@@ -595,7 +623,9 @@ async def run_agent(
     # "" is a deliberate opt-out, so `is None` rather than falsiness.
     router_model = (settings.agent_router_model if router_model is None
                     else router_model)
-    if router_model == model:
+    provider = provider or settings.agent_provider
+    router_provider = router_provider or settings.router_provider
+    if router_model == model and router_provider == provider:
         # Nothing is gained by escalating a model to itself, and the escalation
         # would cost a second full call on the answer step.
         router_model = ""
@@ -637,6 +667,15 @@ async def run_agent(
         return await _within_deadline(_one_call(call_model, cap, stream),
                                       settings.inference_call_deadline)
 
+    # Which provider the proxy should use for each model. A header per call
+    # rather than on the client, because the two models can be on different
+    # providers. A server that is not the app's proxy ignores it.
+    # Time the proxy spent waiting out a hosted provider's rate limit, per call.
+    # Inside total_ms, and reported beside it so the two can be told apart.
+    waits: list[float] = []
+    answer_headers = {"X-Inference-Provider": provider}
+    router_headers = {"X-Inference-Provider": router_provider}
+
     async def _one_call(call_model: str, cap: int, stream: bool) -> dict:
         """One chat completion. Accumulates usage; raises on transport failure."""
         nonlocal prompt_tokens, completion_tokens, usage_measured
@@ -649,8 +688,10 @@ async def run_agent(
             "stream": False,
         }
         if stream:
-            return await _stream_message(client, payload, on_token)
-        response = await client.post("/chat/completions", json=payload)
+            return await _stream_message(client, payload, on_token, answer_headers, waits)
+        response = await client.post("/chat/completions", json=payload,
+                                     headers=answer_headers)
+        waits.append(_rate_limit_wait_ms(response))
         response.raise_for_status()
         body = response.json()
         # Ollama reports usage on the buffered path only. Summed across
@@ -684,7 +725,7 @@ async def run_agent(
                         "model": router_model, "messages": messages,
                         "tools": registry.schemas(), "temperature": temperature,
                         "max_tokens": router_max_tokens,
-                    }), settings.inference_call_deadline)
+                    }, router_headers, waits), settings.inference_call_deadline)
                     if routed is not None:
                         message = routed
                     else:
@@ -734,6 +775,8 @@ async def run_agent(
                     steps=steps, iterations=iteration, completed=False,
                     stop_reason="inference_error", model=model,
                     router_model=router_model, router_calls=router_calls,
+                    provider=provider, router_provider=router_provider,
+                    rate_limit_wait_ms=sum(waits),
                     total_ms=(time.perf_counter() - started) * 1000,
                     prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
                     usage_measured=usage_measured,
@@ -879,6 +922,8 @@ async def run_agent(
                                  ("unverified_figures" if unverified else
                                   ("final_answer" if answer else "empty_response"))),
                     model=model, router_model=router_model, router_calls=router_calls,
+                    provider=provider, router_provider=router_provider,
+                    rate_limit_wait_ms=sum(waits),
                     total_ms=(time.perf_counter() - started) * 1000,
                     prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
                     usage_measured=usage_measured,
@@ -1006,6 +1051,8 @@ async def run_agent(
                     answer=answer, steps=steps, iterations=iteration, completed=False,
                     stop_reason="tool_call_budget", model=model,
                     router_model=router_model, router_calls=router_calls,
+                    provider=provider, router_provider=router_provider,
+                    rate_limit_wait_ms=sum(waits),
                     total_ms=(time.perf_counter() - started) * 1000,
                     prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
                     usage_measured=usage_measured,
@@ -1026,6 +1073,8 @@ async def run_agent(
             answer=answer, steps=steps, iterations=max_iterations, completed=False,
             stop_reason="max_iterations", model=model,
             router_model=router_model, router_calls=router_calls,
+                    provider=provider, router_provider=router_provider,
+                    rate_limit_wait_ms=sum(waits),
             total_ms=(time.perf_counter() - started) * 1000,
             prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
             usage_measured=usage_measured,

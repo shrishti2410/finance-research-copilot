@@ -1,0 +1,23 @@
+{
+  "name": "fast",
+  "purpose": "A fixed 15-question subset for quick development runs: python -m eval.run_eval --subset fast. It selects cases from questions.json by id and changes none of them. It is a smoke signal, not a score: 15 cases is below the noise band, so a subset result is never compared with the 40-case baseline, promoted, or quoted as accuracy.",
+  "chosen_from": "the failures of run-c (Qwen 2.5 7B on Ollama, 2026-11-11, benchmarks/RUN_C_ANALYSIS.md) and of hosted run 1 (openai/gpt-oss-120b on Groq, 2026-11-15, benchmarks/MODEL_COMPARISON.md), plus four controls that passed in both",
+  "not_covered": "timeout: no case timed out in either run, and a timeout belongs to the machine or the provider rather than to a question. grader error: the cases that failed for that reason in run-b now pass, so the three it affected (the two implied P/E cases and the margin gap) are represented by the two included here.",
+  "cases": [
+    {"id": "nvda-revenue-fy2026",            "covers": "control",                       "why": "single statement lookup; passed in both runs"},
+    {"id": "nvda-diluted-eps-fy2026",        "covers": "wrong tool or wrong arguments", "why": "run-c: ratio tool called for an EPS question"},
+    {"id": "aapl-net-income-fy2025",         "covers": "wrong tool or wrong arguments", "why": "run-c: latest-year ratio tool used for a question naming FY2025"},
+    {"id": "nvda-gross-margin-pct-mdna",     "covers": "grounding-guard refusal",       "why": "hosted run 1: a correct 71.07% draft was discarded"},
+    {"id": "nvda-buyback-authorization",     "covers": "control",                       "why": "figure stated in MD&A prose; passed in both runs"},
+    {"id": "nvda-datacenter-growth",         "covers": "retrieval miss",                "why": "hosted run 1: the 68% sentence did not reach the model; run-c: wrong section searched"},
+    {"id": "aapl-buyback-program",           "covers": "retrieval miss",                "why": "both runs: the figure sits past the prose excerpt cut"},
+    {"id": "aapl-dividend-per-share",        "covers": "retrieval miss",                "why": "both runs: the figure sits past the prose excerpt cut"},
+    {"id": "nvda-revenue-growth-derived",    "covers": "control",                       "why": "one-step derivation; passed in both runs"},
+    {"id": "aapl-gross-margin-pct-derived",  "covers": "grounding-guard refusal",       "why": "hosted run 1: a correct 46.9% draft was discarded; run-c: wrong tool"},
+    {"id": "aapl-net-margin-tool",           "covers": "wrong tool or wrong arguments", "why": "hosted run 1: declined without calling the ratio tool"},
+    {"id": "nvda-close-2026-08-07",          "covers": "control",                       "why": "price tool lookup; passed in both runs"},
+    {"id": "nvda-implied-market-cap",        "covers": "extraction or arithmetic error", "why": "run-c: right inputs, wrong product"},
+    {"id": "nvda-implied-pe-on-fy2026-eps",  "covers": "wrong tool or wrong arguments", "why": "both runs: live P/E tool instead of close over filing EPS; a run-b grader-error case"},
+    {"id": "nvda-vs-aapl-gross-margin-gap",  "covers": "wrong tool or wrong arguments", "why": "hosted run 1: ratio tool called for one company only; a run-b grader-error case"}
+  ]
+}

@@ -148,6 +148,8 @@ class AskResponse(BaseModel):
     iterations: int
     model: str
     total_ms: float
+    # Part of total_ms spent waiting out a hosted provider's rate limit.
+    rate_limit_wait_ms: float = 0.0
     # Summed over every model call in the run. 0 with usage_measured False means
     # the upstream did not report usage, not that the run was free.
     prompt_tokens: int = 0
