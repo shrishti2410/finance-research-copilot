@@ -143,8 +143,10 @@ async def _store_turn(session, conversation, question, result, history_messages=
                 "rate_limit_wait_ms": round(result.rate_limit_wait_ms, 1),
                 "tools_called": [step.tool for step in result.tool_calls],
                 "prompt_tokens": result.prompt_tokens,
+                "cached_prompt_tokens": result.cached_prompt_tokens,
                 "completion_tokens": result.completion_tokens,
                 "usage_measured": result.usage_measured,
+                "call_usage": list(result.call_usage),
                 # How much prior conversation this answer could see. Without it
                 # a reference-resolving answer is unexplainable after the fact.
                 "history_messages": history_messages,
@@ -230,6 +232,7 @@ async def ask(
         total_ms=round(result.total_ms, 1),
         rate_limit_wait_ms=round(result.rate_limit_wait_ms, 1),
         prompt_tokens=result.prompt_tokens,
+        cached_prompt_tokens=result.cached_prompt_tokens,
         completion_tokens=result.completion_tokens,
         total_tokens=result.total_tokens,
         usage_measured=result.usage_measured,

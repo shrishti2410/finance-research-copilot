@@ -153,6 +153,8 @@ class AskResponse(BaseModel):
     # Summed over every model call in the run. 0 with usage_measured False means
     # the upstream did not report usage, not that the run was free.
     prompt_tokens: int = 0
+    # Of prompt_tokens, how many the provider served from its prompt cache.
+    cached_prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
     usage_measured: bool = False

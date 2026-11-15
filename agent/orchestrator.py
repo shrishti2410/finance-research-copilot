@@ -272,6 +272,19 @@ async def _within_deadline(call: Awaitable[Any], seconds: float) -> Any:
         raise
 
 
+def _cached_prompt_tokens(usage: dict) -> int:
+    """Prompt tokens a provider reports as served from its cache, or 0.
+
+    OpenAI-compatible providers put it in usage.prompt_tokens_details. A
+    provider that omits the block, or a local server that has no cache, is 0.
+    """
+    details = usage.get("prompt_tokens_details") or {}
+    try:
+        return int(details.get("cached_tokens") or 0)
+    except (TypeError, ValueError, AttributeError):
+        return 0
+
+
 def _rate_limit_wait_ms(response) -> float:
     """Milliseconds the proxy spent waiting out a provider rate limit for this call."""
     try:
@@ -447,6 +460,16 @@ class AgentResult:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     usage_measured: bool = False
+    # Of prompt_tokens, how many the provider says it served from its prompt
+    # cache. A hosted provider may not count these against its rate limits, so
+    # this is what separates "tokens sent" from "tokens that used up the
+    # allowance". Zero when the provider reports none or does not cache.
+    cached_prompt_tokens: int = 0
+    # One entry per model call that reported usage, in order:
+    # {"prompt_tokens", "cached_prompt_tokens", "completion_tokens"}. The sums
+    # above hide whether the first call of a turn missed the cache and the
+    # rest hit it; this does not.
+    call_usage: list[dict[str, int]] = field(default_factory=list)
     router_calls: int = 0
 
     @property
@@ -472,9 +495,11 @@ class AgentResult:
             "total_ms": round(self.total_ms, 1),
             "rate_limit_wait_ms": round(self.rate_limit_wait_ms, 1),
             "prompt_tokens": self.prompt_tokens,
+            "cached_prompt_tokens": self.cached_prompt_tokens,
             "completion_tokens": self.completion_tokens,
             "total_tokens": self.total_tokens,
             "usage_measured": self.usage_measured,
+            "call_usage": list(self.call_usage),
             "steps": [step.to_dict() for step in self.steps],
         }
 
@@ -644,8 +669,9 @@ async def run_agent(
     grounding_retries = 0
     escalate_next = False
     router_calls = 0
-    prompt_tokens = completion_tokens = 0
+    prompt_tokens = completion_tokens = cached_prompt_tokens = 0
     usage_measured = False
+    call_usage: list[dict[str, int]] = []
     owns_client = client is None
     client = client or httpx.AsyncClient(
         base_url=settings.agent_inference_base_url,
@@ -678,7 +704,7 @@ async def run_agent(
 
     async def _one_call(call_model: str, cap: int, stream: bool) -> dict:
         """One chat completion. Accumulates usage; raises on transport failure."""
-        nonlocal prompt_tokens, completion_tokens, usage_measured
+        nonlocal prompt_tokens, completion_tokens, cached_prompt_tokens, usage_measured
         payload = {
             "model": call_model,
             "messages": messages,
@@ -700,8 +726,14 @@ async def run_agent(
         usage = body.get("usage") or {}
         if usage:
             usage_measured = True
-            prompt_tokens += int(usage.get("prompt_tokens") or 0)
-            completion_tokens += int(usage.get("completion_tokens") or 0)
+            sent = int(usage.get("prompt_tokens") or 0)
+            written = int(usage.get("completion_tokens") or 0)
+            cached = _cached_prompt_tokens(usage)
+            prompt_tokens += sent
+            completion_tokens += written
+            cached_prompt_tokens += cached
+            call_usage.append({"prompt_tokens": sent, "cached_prompt_tokens": cached,
+                               "completion_tokens": written})
         return ((body.get("choices") or [{}])[0]).get("message") or {}
 
     try:
@@ -780,6 +812,7 @@ async def run_agent(
                     total_ms=(time.perf_counter() - started) * 1000,
                     prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
                     usage_measured=usage_measured,
+                    cached_prompt_tokens=cached_prompt_tokens, call_usage=call_usage,
                 )
             model_ms = (time.perf_counter() - call_started) * 1000
             tool_calls = message.get("tool_calls") or []
@@ -927,6 +960,7 @@ async def run_agent(
                     total_ms=(time.perf_counter() - started) * 1000,
                     prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
                     usage_measured=usage_measured,
+                    cached_prompt_tokens=cached_prompt_tokens, call_usage=call_usage,
                 )
 
             # The assistant's tool-call message has to go into the history
@@ -1056,6 +1090,7 @@ async def run_agent(
                     total_ms=(time.perf_counter() - started) * 1000,
                     prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
                     usage_measured=usage_measured,
+                    cached_prompt_tokens=cached_prompt_tokens, call_usage=call_usage,
                 )
 
         # Budget exhausted with tool calls still outstanding.
@@ -1078,6 +1113,7 @@ async def run_agent(
             total_ms=(time.perf_counter() - started) * 1000,
             prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
             usage_measured=usage_measured,
+                    cached_prompt_tokens=cached_prompt_tokens, call_usage=call_usage,
         )
     finally:
         if owns_client:

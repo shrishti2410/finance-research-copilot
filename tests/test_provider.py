@@ -300,3 +300,54 @@ def test_the_agent_reports_the_wait_the_proxy_reported():
     result = asyncio.run(go())
     assert result.rate_limit_wait_ms == 4200.0
     assert result.to_dict()["rate_limit_wait_ms"] == 4200.0
+
+
+# ── cached prompt tokens ──────────────────────────────────────────────────────
+
+def test_the_agent_records_cached_prompt_tokens_per_call_and_in_total():
+    """A hosted provider may not count cached tokens against its limits, so the
+    run has to say how many there were, and on which call."""
+    reg = Registry()
+
+    def get_margin(ticker: str) -> dict:
+        """Get a margin.
+
+        Args:
+            ticker: the symbol.
+        """
+        return ok(ticker=ticker, value=0.71)
+
+    reg.register(get_margin)
+    tool_call = {"choices": [{"finish_reason": "tool_calls", "message": {
+        "role": "assistant", "content": "", "tool_calls": [{
+            "id": "c1", "type": "function", "function": {
+                "name": "get_margin", "arguments": json.dumps({"ticker": "NVDA"})}}]}}],
+        "usage": {"prompt_tokens": 2406, "completion_tokens": 71}}
+    answer = {"choices": [{"finish_reason": "stop", "message": {
+        "role": "assistant", "content": "The margin was 0.71."}}],
+        "usage": {"prompt_tokens": 2600, "completion_tokens": 40,
+                  "prompt_tokens_details": {"cached_tokens": 2304}}}
+    script = [tool_call, answer]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=script.pop(0))
+
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler),
+                                     base_url="http://model.invalid/v1") as client:
+            return await run_agent("margin?", registry=reg, client=client,
+                                   model="big", router_model="", provider="groq")
+
+    result = asyncio.run(go())
+    assert result.prompt_tokens == 5006 and result.cached_prompt_tokens == 2304
+    assert result.call_usage == [
+        {"prompt_tokens": 2406, "cached_prompt_tokens": 0, "completion_tokens": 71},
+        {"prompt_tokens": 2600, "cached_prompt_tokens": 2304, "completion_tokens": 40},
+    ]
+    as_dict = result.to_dict()
+    assert as_dict["cached_prompt_tokens"] == 2304 and len(as_dict["call_usage"]) == 2
+
+
+def test_a_provider_that_reports_no_cache_block_records_zero():
+    result, _ = _drive(model="big", router_model="", provider="ollama")
+    assert result.cached_prompt_tokens == 0

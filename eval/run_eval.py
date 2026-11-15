@@ -112,6 +112,10 @@ def ask(session: Session, question: str) -> dict:
 # them, so the scorer's Outcome is unchanged.
 RATE_LIMIT_WAITS: dict[str, float] = {}
 
+# case id -> prompt tokens the provider reported as served from its cache.
+# A side table for the same reason: bookkeeping, not something the scorer reads.
+CACHED_PROMPT_TOKENS: dict[str, int] = {}
+
 
 def run_case(session: Session, case: Case) -> Outcome:
     started = time.perf_counter()
@@ -126,6 +130,7 @@ def run_case(session: Session, case: Case) -> Outcome:
         )
 
     RATE_LIMIT_WAITS[case.id] = float(body.get("rate_limit_wait_ms") or 0.0)
+    CACHED_PROMPT_TOKENS[case.id] = int(body.get("cached_prompt_tokens") or 0)
     steps = body.get("steps") or []
     tool_calls = [s for s in steps if s["tool"] not in
                   ("final_answer", "ungrounded_answer", "tool_call_budget")]
@@ -367,6 +372,7 @@ def main(argv: list[str] | None = None) -> int:
                     "rate_limit_wait_ms": RATE_LIMIT_WAITS.get(o.case_id, 0.0),
                     "tool_calls": o.tool_calls,
                     "iterations": o.iterations, "prompt_tokens": o.prompt_tokens,
+                    "cached_prompt_tokens": CACHED_PROMPT_TOKENS.get(o.case_id, 0),
                     "completion_tokens": o.completion_tokens,
                     "completed": o.completed, "stop_reason": o.stop_reason,
                     "error": o.error, "answer": o.answer,
