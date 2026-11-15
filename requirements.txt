@@ -12,6 +12,9 @@ httpx
 
 # Database
 sqlalchemy>=2.0
+greenlet             # SQLAlchemy's asyncio layer needs it and no longer installs it
+                     # by default on every platform; without it `alembic upgrade`
+                     # fails at import on the CI runner
 alembic
 asyncpg              # async driver, used by the app
 psycopg[binary]      # sync driver, for psql-less tooling and scripts
