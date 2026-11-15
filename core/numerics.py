@@ -169,6 +169,56 @@ class Candidate:
         return self.value * self.scale
 
 
+# A year that names a filing or a fiscal period rather than stating a figure,
+# where no date word is in reach to say so.
+#
+# Found on the first hosted run (2026-11-15): "as shown in the MD&A section of
+# its 2026 Form 10-K" has no "fiscal", "year" or month within the window the
+# check below reads, so 2026 was taken for a figure, no tool result held it,
+# and a correct 71.07% answer was discarded by the grounding guard.
+#
+# Two labels, each anchored to the year itself so that nothing else in the
+# sentence is excused:
+#   - the year sits directly against a form name: "2026 Form 10-K",
+#     "2026 annual report on Form 10-K", "10-K for 2026", "10-K (fiscal 2026)";
+#   - the year carries a fiscal-year prefix: "FY2026", "FY 2026", "FY-2026".
+_BEFORE_A_FORM = re.compile(
+    r"^\)?[\s,]*(?:annual\s+report\s+(?:on\s+)?)?(?:form\s+)?$", re.I)
+_AFTER_A_FORM = re.compile(
+    r"^[\s,(]*(?:filing\s+|annual\s+report\s+)?(?:for|of|from|covering)?\s*"
+    r"(?:the\s+)?(?:fiscal\s+)?(?:year\s+)?(?:fy\s*)?$", re.I)
+_FISCAL_PREFIX = re.compile(r"\bFY[\s\-\u2010\u2011\u2012\u2013\u00a0\u202f]?$", re.I)
+# How far a form name may be from the year it labels, in characters.
+_FORM_REACH = 32
+
+
+def _labels_a_filing_or_fiscal_year(match: re.Match, text: str,
+                                    forms: list[tuple[int, int]]) -> bool:
+    start, end = match.start("digits"), match.end("digits")
+    if _FISCAL_PREFIX.search(text[max(0, start - 4):start]):
+        return True
+    for form_start, form_end in forms:
+        if end <= form_start <= end + _FORM_REACH and _BEFORE_A_FORM.match(text[end:form_start]):
+            return True
+        if form_end <= start <= form_end + _FORM_REACH and _AFTER_A_FORM.match(text[form_end:start]):
+            return True
+    return False
+
+
+def _is_a_bare_year(match: re.Match) -> bool:
+    """An undecorated integer from 1900 to 2100: no decimals, grouping, unit or sign of money."""
+    digits = match.group("digits")
+    if "." in digits or "," in digits:
+        return False
+    try:
+        value = int(digits)
+    except ValueError:
+        return False
+    if not (1900 <= value <= 2100):
+        return False
+    return not (match.group("percent") or match.group("currency") or match.group("scale"))
+
+
 def _looks_like_a_year(match: re.Match, text: str) -> bool:
     """A bare 1900-2100 integer near a date word is a date, not an answer."""
     digits = match.group("digits")
@@ -200,6 +250,8 @@ def candidates(answer: str) -> list[Candidate]:
         if inside(match.start("digits"), forms):
             continue
         if _looks_like_a_year(match, answer):
+            continue
+        if _is_a_bare_year(match) and _labels_a_filing_or_fiscal_year(match, answer, forms):
             continue
         digits = match.group("digits")
         try:
