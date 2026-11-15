@@ -211,7 +211,12 @@ then traceable to a *named* fact, and a check can require that a market cap's
 share operand is a share-count fact rather than any number of shares that
 appeared in the turn.
 
-**When to revisit.** When the structured-facts tool lands.
+**When to revisit.** Now possible, not yet done. The structured-facts tool landed on
+2026-11-15 (`get_financial_fact`, [STRUCTURED_FACTS.md](STRUCTURED_FACTS.md)): a share
+count is now available as a named fact with its unit and filing. The guard does not
+use that yet. It still checks that a figure traces to a tool result, not that the
+operand was the right kind of fact. That check is a guard change and needs its own
+approval.
 
 **Where the code is.** `agent/grounding.py` (`unsupported_figures`,
 `derivation_operands`). The case above is in
