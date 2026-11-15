@@ -131,6 +131,33 @@ def test_latest_filing_raises_when_form_absent(client):
         client.latest_filing("NVDA", form="S-1")
 
 
+def test_a_filing_is_found_by_accession_even_when_it_is_not_the_latest(client):
+    """The pin: a newer 10-K being filed must not change which filing is indexed."""
+    filing = client.filing_by_accession("NVDA", "0001045810-25-000023")
+    assert filing.accession == "0001045810-25-000023"
+    assert filing.report_date.isoformat() == "2025-01-26"
+    assert filing.primary_document == "nvda-20250126.htm"
+    assert client.latest_filing("NVDA").accession != filing.accession
+
+
+def test_an_unknown_accession_raises_rather_than_falling_back_to_latest(client):
+    with pytest.raises(LookupError):
+        client.filing_by_accession("NVDA", "0001045810-20-000001")
+
+
+def test_the_indexing_script_pins_the_eval_filings_by_default():
+    from ingestion.pipeline import PINNED_FILINGS
+    from scripts.index_filings import resolve_targets
+
+    assert PINNED_FILINGS == {"NVDA": "0001045810-26-000021", "AAPL": "0000320193-25-000079"}
+    assert resolve_targets(["nvda", "AAPL"]) == [
+        ("NVDA", "0001045810-26-000021"), ("AAPL", "0000320193-25-000079")]
+    # Another ticker has no pin; --latest and an explicit accession both override.
+    assert resolve_targets(["MSFT"]) == [("MSFT", None)]
+    assert resolve_targets(["AAPL"], latest=True) == [("AAPL", None)]
+    assert resolve_targets(["AAPL=0000320193-24-000123"]) == [("AAPL", "0000320193-24-000123")]
+
+
 def test_document_url_uses_unpadded_cik_and_stripped_accession(client):
     """The Archives path wants the CIK without zero padding and the accession
     without dashes, while the submissions API wants the opposite. Getting either

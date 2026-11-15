@@ -1,7 +1,13 @@
 """Fetch, chunk, embed and index filings; report what each stage cost.
 
-    python scripts/index_filings.py                 # NVDA, AAPL
-    python scripts/index_filings.py MSFT --form 10-K
+    python scripts/index_filings.py                 # NVDA, AAPL: the pinned filings
+    python scripts/index_filings.py MSFT --form 10-K            # latest 10-K
+    python scripts/index_filings.py AAPL=0000320193-25-000079   # one exact filing
+    python scripts/index_filings.py AAPL --latest               # ignore the pin
+
+NVDA and AAPL are pinned by accession number (ingestion/pipeline.py,
+PINNED_FILINGS), because the eval questions and the retrieval markers were
+written against those two filings. "Latest" moves when a company files again.
 
 Embedding on CPU is the slow stage by a wide margin, so it is timed separately
 and reported as measured wall-clock, not an estimate.
@@ -19,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from ingestion.pipeline import index_tickers  # noqa: E402
+from ingestion.pipeline import PINNED_FILINGS  # noqa: E402
 from rag.embeddings import EMBEDDING_MODEL, MAX_SEQUENCE_TOKENS  # noqa: E402
 from rag.vector_store import connection, stats  # noqa: E402
 
@@ -34,23 +40,46 @@ def progress_printer(ticker: str):
     return report
 
 
+def resolve_targets(args: list[str], *, latest: bool = False) -> list[tuple[str, str | None]]:
+    """(ticker, accession or None) for each argument.
+
+    `TICKER=ACCESSION` names one filing. A bare ticker gets its pinned filing
+    when it has one, unless `latest` is set; any other ticker gets the latest.
+    """
+    targets = []
+    for arg in args:
+        ticker, _, accession = arg.partition("=")
+        ticker = ticker.strip().upper()
+        accession = accession.strip() or None
+        if accession is None and not latest:
+            accession = PINNED_FILINGS.get(ticker)
+        targets.append((ticker, accession))
+    return targets
+
+
 async def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("tickers", nargs="*", default=["NVDA", "AAPL"])
+    ap.add_argument("tickers", nargs="*", default=["NVDA", "AAPL"],
+                    help="TICKER, or TICKER=ACCESSION for one exact filing")
     ap.add_argument("--form", default="10-K")
+    ap.add_argument("--latest", action="store_true",
+                    help="index the latest filing even for a pinned ticker")
     args = ap.parse_args()
-    tickers = args.tickers or ["NVDA", "AAPL"]
+    wanted = resolve_targets(args.tickers or ["NVDA", "AAPL"], latest=args.latest)
+    tickers = [t for t, _ in wanted]
 
     print(f"{RULE}\nINDEXING {', '.join(tickers)}   embedding model: {EMBEDDING_MODEL}\n{RULE}")
+    for ticker, accession in wanted:
+        print(f"  {ticker}: {accession or 'latest ' + args.form}")
 
     async with connection() as conn:
         results = []
-        for ticker in tickers:
+        for ticker, accession in wanted:
             from ingestion.pipeline import index_ticker
             from ingestion.edgar_client import EdgarClient
             with EdgarClient() as client:
                 results.append(await index_ticker(
-                    conn, ticker, client=client, form=args.form,
+                    conn, ticker, client=client, form=args.form, accession=accession,
                     progress=progress_printer(ticker),
                 ))
 
