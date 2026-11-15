@@ -470,3 +470,27 @@ def test_the_description_sends_dividends_buybacks_and_segments_to_the_filing_sea
     for phrase in ("no segment or product argument", "dividends and share repurchases",
                    "search_filings"):
         assert phrase in description
+
+
+# -- a ratio name is not a fact ------------------------------------------------
+
+@pytest.mark.parametrize("name, ratio_name, dollars", [
+    ("gross_margin", "gross_margin", "gross_profit"),
+    ("Gross Margin", "gross_margin", "gross_profit"),
+    ("net_margin", "net_margin", "net_income"),
+    ("roe", "return_on_equity", None),
+    ("pe_ratio", "pe_ratio", None),
+])
+def test_a_ratio_name_is_an_error_that_points_at_the_ratio_tool(stored, name, ratio_name, dollars):
+    """Found on the full Qwen run of 2026-11-15: "gross_margin" was a spelling of
+    gross_profit, so "annual gross margin" came back as $153.463 billion where
+    the question wanted 71.07%."""
+    result = fact(name, 2026)
+    assert result["error"] == "bad_input" and "value" not in result
+    assert "calculate_ratio" in result["message"] and repr(ratio_name) in result["message"]
+    assert (repr(dollars) in result["message"]) if dollars else ("dollars" not in result["message"])
+
+
+def test_gross_profit_is_still_the_dollar_figure(stored):
+    result = fact("gross_profit", 2025)
+    assert result["ok"] and result["unit"] == "USD" and result["value"] == 97_858_000_000

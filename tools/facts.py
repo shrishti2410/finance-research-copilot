@@ -44,6 +44,14 @@ raised its dividend. So:
   is an error that says there is no segment figure here, not a silent drop.
 - Every result still carries the `scope` line.
 
+The full Qwen run of 2026-11-15 found one more of the same kind. `gross_margin`
+was accepted as a spelling of `gross_profit`, because both companies label the
+dollar line "gross margin". Asked "What was NVIDIA's annual gross margin for
+fiscal 2026?", the model called this tool with fact="gross_margin" and
+answered "$153.463 billion" where the ratio tool gives 71.07%. A ratio name is
+now an error here that names both readings: calculate_ratio for the
+percentage, `gross_profit` for the dollars.
+
 What is not here
 ----------------
 Segment figures. Company-facts holds only numbers reported for the whole
@@ -127,7 +135,6 @@ FactName = Literal[
 _ALIASES = {
     "revenues": "revenue", "total_revenue": "revenue", "net_sales": "revenue", "sales": "revenue",
     "cost_of_sales": "cost_of_revenue", "cogs": "cost_of_revenue",
-    "gross_margin": "gross_profit",
     "rnd": "research_and_development", "r&d": "research_and_development",
     "research_and_development_expense": "research_and_development",
     "sga": "selling_general_and_administrative", "sg&a": "selling_general_and_administrative",
@@ -163,8 +170,33 @@ UNKNOWN_ARGUMENT_HINT = (
 )
 
 
+# Ratio names a model sends here by mistake -> the calculate_ratio name, and
+# the fact that is the same words in dollars, if there is one. See the module
+# docstring: these are refused, not guessed at.
+_RATIO_NAMES: dict[str, tuple[str, str | None]] = {
+    "gross_margin": ("gross_margin", "gross_profit"),
+    "gross_margin_percentage": ("gross_margin", "gross_profit"),
+    "gross_margin_pct": ("gross_margin", "gross_profit"),
+    "gross_profit_margin": ("gross_margin", "gross_profit"),
+    "operating_margin": ("operating_margin", "operating_income"),
+    "net_margin": ("net_margin", "net_income"),
+    "net_profit_margin": ("net_margin", "net_income"),
+    "profit_margin": ("net_margin", "net_income"),
+    "return_on_equity": ("return_on_equity", None),
+    "roe": ("return_on_equity", None),
+    "current_ratio": ("current_ratio", None),
+    "debt_to_equity": ("debt_to_equity", None),
+    "pe_ratio": ("pe_ratio", None),
+    "p/e": ("pe_ratio", None),
+}
+
+
+def _normalized(raw: str) -> str:
+    return (raw or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
 def _fact_name(raw: str) -> str | None:
-    name = (raw or "").strip().lower().replace("-", "_").replace(" ", "_")
+    name = _normalized(raw)
     name = _ALIASES.get(name, name)
     return name if name in FACTS else None
 
@@ -372,6 +404,16 @@ async def get_financial_fact(ticker: str, fact: FactName, fiscal_year: int) -> d
     if not symbol:
         return error(ERROR_BAD_INPUT, "ticker must be a non-empty symbol like 'NVDA'.")
     name = _fact_name(fact)
+    if name is None and _normalized(fact) in _RATIO_NAMES:
+        ratio, dollars = _RATIO_NAMES[_normalized(fact)]
+        in_dollars = (f" For the amount in dollars, ask this tool for {dollars!r}."
+                      if dollars else "")
+        return error(
+            ERROR_BAD_INPUT,
+            f"{fact!r} is a ratio, not a reported figure. Call calculate_ratio(ticker="
+            f"{symbol!r}, ratio_name={ratio!r}, fiscal_year=...) for it.{in_dollars}",
+            ticker=symbol,
+        )
     if name is None:
         return error(
             ERROR_BAD_INPUT,

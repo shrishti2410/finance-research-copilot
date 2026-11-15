@@ -89,6 +89,14 @@ revenue; it is now a `bad_input` error saying there is no segment figure here.
 Every result carries a `scope` line saying it covers the whole company for the
 whole fiscal year.
 
+A ratio name is not a fact either. `gross_margin` was at first accepted as a
+spelling of `gross_profit`, since both companies label the dollar line "gross
+margin". On the full Qwen run of 2026-11-15 the two questions asking for the
+"annual gross margin" were answered in dollars ($153.463 billion, $233.602
+billion) where the ratio tool gives a percentage. Asking this tool for a ratio
+name is now a `bad_input` error that names both readings: `calculate_ratio`
+for the ratio and, where there is one, the fact that is the dollar amount.
+
 Failures are the same envelope every tool uses. An unknown fact name lists the
 known ones. A year the company has not reported lists the years it has. A
 company that has not been ingested says so and points at the other tools.
