@@ -410,3 +410,29 @@ def test_the_eval_companies_are_pinned_to_a_date():
     from ingestion.pipeline import PINNED_FACTS_THROUGH, PINNED_FILINGS
     assert PINNED_FACTS_THROUGH == date(2026, 11, 15)
     assert set(PINNED_FILINGS) == {"NVDA", "AAPL"}
+
+
+
+# ── a result says what it is not ──────────────────────────────────────────────
+
+def test_every_result_says_it_is_company_wide_and_for_the_whole_year(stored):
+    """Found on the fast subset: an exact figure that is nearly what was asked
+    gets stated as the answer. The result has to say what it covers."""
+    result = fact("revenue", 2026)
+    assert "Whole company, whole fiscal year" in result["scope"]
+    assert "search_filings" in result["scope"]
+
+
+def test_the_lookalike_facts_say_what_they_are_not():
+    from tools.facts import FACTS
+    assert "not the quarterly dividend rate" in FACTS["dividends_per_share"][0]
+    assert "not the size of a repurchase program" in FACTS["share_repurchases"][0]
+
+
+def test_the_description_sends_programs_rates_and_segments_to_the_filing_search():
+    from agent.tools import build_registry
+    description = " ".join(
+        build_registry().get("get_financial_fact").schema()["function"]["description"].split())
+    for phrase in ("no segment or product argument", "quarterly dividend rate",
+                   "repurchase program or authorization", "search_filings"):
+        assert phrase in description

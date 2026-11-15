@@ -23,6 +23,19 @@ concept it was, so the mapping is visible rather than trusted.
 Every result carries the accession number of the filing the figure was taken
 from. That is the citation: a reader can open the filing and find the number.
 
+A result also says what it is not
+---------------------------------
+A fast-subset run on 2026-11-15 showed the cost of an exact lookup that is
+nearly what was asked. "What did Apple raise its quarterly dividend to?" got
+the year's total dividends per share, $1.02, stated as the answer where the
+agent had previously declined. "How much was NVIDIA authorized to repurchase?"
+got the cash it spent on buybacks. A question about Data Center revenue was
+sent with a `segment` argument, which the registry drops, and came back as
+total revenue. So every result carries a `scope` line saying the figure is for
+the whole company and the whole fiscal year, the two lookalike facts say what
+they are not in their description, and the tool description names what belongs
+to search_filings.
+
 What is not here
 ----------------
 Segment figures. Company-facts holds only numbers reported for the whole
@@ -75,11 +88,14 @@ FACTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "WeightedAverageNumberOfSharesOutstandingBasic",)),
     "shares_diluted": ("Weighted-average diluted shares outstanding", (
         "WeightedAverageNumberOfDilutedSharesOutstanding",)),
-    "dividends_per_share": ("Cash dividends declared per share, for the whole year", (
-        "CommonStockDividendsPerShareDeclared",)),
-    "dividends_paid": ("Cash paid in dividends", ("PaymentsOfDividends",)),
-    "share_repurchases": ("Cash paid to repurchase common stock", (
-        "PaymentsForRepurchaseOfCommonStock",)),
+    "dividends_per_share": (
+        "Cash dividends declared per share, total for the whole fiscal year "
+        "(not the quarterly dividend rate)", ("CommonStockDividendsPerShareDeclared",)),
+    "dividends_paid": ("Cash paid in dividends during the fiscal year", ("PaymentsOfDividends",)),
+    "share_repurchases": (
+        "Cash paid to repurchase common stock during the fiscal year (not the size of a "
+        "repurchase program or the amount still authorized)",
+        ("PaymentsForRepurchaseOfCommonStock",)),
     "operating_cash_flow": ("Net cash provided by operating activities", (
         "NetCashProvidedByUsedInOperatingActivities",)),
     "capital_expenditures": ("Payments for property, plant and equipment", (
@@ -134,6 +150,10 @@ _ALIASES = {
 }
 
 _FILING_URL = "https://www.sec.gov/Archives/edgar/data/{cik_int}/{accession_nodash}/"
+
+# Carried on every result. See the module docstring.
+SCOPE = ("Whole company, whole fiscal year. Not a segment, product, quarter, program "
+         "size or authorization: those are in the filing text, via search_filings.")
 
 
 def _fact_name(raw: str) -> str | None:
@@ -306,9 +326,13 @@ async def get_financial_fact(ticker: str, fact: FactName, fiscal_year: int) -> d
     net income, EPS, share counts, tax expense, operating income, cash flow,
     balance-sheet totals. It is an exact lookup in SEC's XBRL data, and the
     result cites the filing it came from. For a ratio, use calculate_ratio.
-    Segment and product figures (Apple's Services net sales, NVIDIA's Data
-    Center revenue) are not here: use search_filings for those and for
-    anything a company said in words.
+
+    Every figure is for the whole company and the whole fiscal year. It has no
+    segment or product argument. Use search_filings instead for segment and
+    product figures (Apple's Services net sales, NVIDIA's Data Center
+    revenue), for a quarterly dividend rate, for the size of a share
+    repurchase program or authorization, for anything announced on a date,
+    and for anything a company said in words.
 
     Args:
         ticker: Stock ticker symbol, e.g. "NVDA" or "AAPL".
@@ -322,6 +346,8 @@ async def get_financial_fact(ticker: str, fact: FactName, fiscal_year: int) -> d
     Returns:
         On success, a dict with "ok": True and:
             ticker, fact, fiscal_year: what was asked for, normalized.
+            description, scope: what the figure is, and that it covers the
+                whole company for the whole fiscal year.
             value: the figure, in `unit` ("USD", "shares" or "USD/shares").
                 Dollar amounts are in dollars, not millions.
             formatted: the same figure rendered for a human.
@@ -361,8 +387,8 @@ async def get_financial_fact(ticker: str, fact: FactName, fiscal_year: int) -> d
         row = await _lookup(conn, symbol, concepts, year)
         if row is None:
             return await _not_found(conn, symbol, year, concepts, description.lower())
-    return ok(ticker=symbol, fact=name, description=description, fiscal_year=year,
-              **_fact_fields(row))
+    return ok(ticker=symbol, fact=name, description=description, scope=SCOPE,
+              fiscal_year=year, **_fact_fields(row))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
