@@ -449,3 +449,38 @@ def test_the_stated_operand_rule_changes_nothing_in_a_small_turn():
     assert _flagged("21.93", unsupported_figures(
         "Gross profit of $153.463 billion on revenue of $215.938 billion is a "
         "21.93% margin.", steps))
+
+
+# ── stated operands must themselves be grounded ───────────────────────────────
+
+INVENTED_AND_CONSISTENT = [
+    "Revenue was $100 million, costs were $60 million, and profit was $40 million.",
+    "Revenue of 100 less costs of 60 leaves a profit of 40.",
+    "With revenue of $912.5 billion and costs of $547.5 billion, profit was $365.0 billion, "
+    "a 40.0% margin.",
+]
+
+
+@pytest.mark.parametrize("answer", INVENTED_AND_CONSISTENT)
+@pytest.mark.parametrize("turn", ["small", "big"])
+def test_invented_figures_that_agree_with_each_other_are_all_flagged(answer, turn):
+    """Three made-up numbers that add up prove nothing: 100 - 60 = 40 is true
+    arithmetic over operands no tool returned. The answer's own figures count as
+    operands only when each one traces to a tool result, so a consistent
+    invention cannot vouch for itself -- in a small turn or in one with more
+    than DERIVATION_LIMIT figures."""
+    steps = [_ok("calculate_ratio", RATIO)] if turn == "small" else _big_turn()
+    unsupported = unsupported_figures(answer, steps)
+    stated = [f.text for f in __import__("agent.grounding", fromlist=["answer_figures"])
+              .answer_figures(answer)]
+    assert len(stated) >= 3
+    assert _texts(unsupported) == stated, "every invented figure must be flagged"
+
+
+def test_one_real_figure_does_not_vouch_for_two_invented_ones():
+    """Revenue is real; the cost and the profit are invented to fit it."""
+    answer = ("On total net sales of $416,161 million, costs were $400,000 million, "
+              "leaving a profit of $16,161 million.")
+    unsupported = unsupported_figures(answer, _big_turn())
+    assert not _flagged("416,161", unsupported)
+    assert _flagged("400,000", unsupported) and _flagged("16,161 million", unsupported)

@@ -318,6 +318,11 @@ def _matches_at_precision(value: float, computed: float, half_ulp: float) -> boo
     return abs(value - computed) <= half_ulp + abs(value) * _FLOAT_SLACK
 
 
+def _same_quantity(a: float, b: float) -> bool:
+    """Whether `b` is `a` again, as written or as a ratio shown in percent."""
+    return any(_close(a * factor, b) for factor in DERIVED_RESCALINGS)
+
+
 def _derivable(value: float, operands: set[float], half_ulp: float | None) -> bool:
     """Whether one arithmetic step over two operands reaches `value`.
 
@@ -331,7 +336,13 @@ def _derivable(value: float, operands: set[float], half_ulp: float | None) -> bo
         return False
     values = list(operands)
     for i, a in enumerate(values):
-        for b in values[i:]:
+        for b in values[i + 1:]:
+            # One quantity is not two operands. A number against itself, or
+            # against its own rendering in another scale (0.710681 and 71.07%),
+            # derives 1, 100 and 0 from anything: "revenue of 100" passed on
+            # 0.710681 / 0.710681 shown as a percentage.
+            if _same_quantity(a, b):
+                continue
             products = [a * b, a + b, a - b, b - a]
             if b != 0:
                 products.append(a / b)
