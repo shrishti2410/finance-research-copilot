@@ -41,14 +41,17 @@ QUERY = text("""
     JOIN conversations c ON c.user_id = u.id
     JOIN messages m ON m.conversation_id = c.id
     WHERE u.email LIKE 'eval-%@example.com' AND u.created_at >= :since
+      AND u.created_at < :until
     ORDER BY m.id
 """)
 
 
-async def load_turns(since: datetime) -> dict[str, list[dict]]:
+async def load_turns(since: datetime, until: datetime | None = None) -> dict[str, list[dict]]:
     """question text -> stored turns, newest last."""
     async with engine.connect() as conn:
-        rows = (await conn.execute(QUERY, {"since": since})).mappings().all()
+        rows = (await conn.execute(QUERY, {
+            "since": since, "until": until or datetime(9999, 1, 1, tzinfo=since.tzinfo),
+        })).mappings().all()
     await engine.dispose()
 
     by_conversation: dict[str, dict] = {}
@@ -89,12 +92,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("report", type=Path)
     ap.add_argument("--since", required=True,
                     help="ISO timestamp before the run started; selects its account")
+    ap.add_argument("--until", default=None,
+                    help="ISO timestamp after the run finished. Needed when another "
+                         "run followed: the newest stored turn per question is used, "
+                         "so a later run would otherwise replace this one's traces")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args(argv)
 
     report = json.loads(args.report.read_text(encoding="utf-8"))
     cases = {c.id: c for c in load_cases()}
-    turns = asyncio.run(load_turns(datetime.fromisoformat(args.since)))
+    turns = asyncio.run(load_turns(
+        datetime.fromisoformat(args.since),
+        datetime.fromisoformat(args.until) if args.until else None))
 
     records, missing = [], []
     for outcome in report["outcomes"]:
