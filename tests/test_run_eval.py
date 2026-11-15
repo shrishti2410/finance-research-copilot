@@ -111,3 +111,34 @@ def test_each_question_gets_its_own_conversation():
         ask(session, "two")
 
     assert len(seen) == 2
+
+
+# ── the fast subset ──────────────────────────────────────────────────────────
+
+def test_the_fast_subset_is_fifteen_real_cases_in_a_fixed_order():
+    import json
+    from pathlib import Path
+
+    from eval.datasets import load_cases
+    from eval.run_eval import subset_ids
+
+    ids = subset_ids("fast")
+    assert len(ids) == 15 and len(set(ids)) == 15
+    assert set(ids) <= {c.id for c in load_cases()}
+    # Fixed: the same list in the same order on every call.
+    assert ids == subset_ids("fast")
+
+    listed = json.loads(Path("eval/fast_subset.json").read_text(encoding="utf-8"))["cases"]
+    covered = {entry["covers"] for entry in listed}
+    assert covered == {
+        "control", "wrong tool or wrong arguments", "retrieval miss",
+        "extraction or arithmetic error", "grounding-guard refusal",
+    }
+
+
+def test_an_unknown_subset_is_an_error_not_an_empty_run():
+    from eval.run_eval import main, subset_ids
+
+    with pytest.raises(ValueError):
+        subset_ids("no-such-subset")
+    assert main(["--subset", "no-such-subset"]) == 2

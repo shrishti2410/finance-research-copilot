@@ -249,6 +249,30 @@ def render(outcomes: list[Outcome]) -> str:
     return "\n".join(lines)
 
 
+# Named, fixed lists of case ids, one file each: eval/<name>_subset.json.
+SUBSET_DIR = Path(__file__).parent
+
+
+def subset_ids(name: str) -> list[str]:
+    """The case ids of a named subset, in the file's order.
+
+    A subset only selects cases; the questions, expected values and tolerances
+    stay in questions.json. An id that is not in the question set is an error
+    here, so a renamed case cannot quietly shrink the subset.
+    """
+    path = SUBSET_DIR / f"{name}_subset.json"
+    if not path.is_file():
+        raise ValueError(f"no subset named {name!r}: {path} does not exist")
+    ids = [entry["id"] for entry in json.loads(path.read_text(encoding="utf-8"))["cases"]]
+    known = {c.id for c in load_cases()}
+    unknown = [i for i in ids if i not in known]
+    if unknown:
+        raise ValueError(f"subset {name!r} names cases not in questions.json: {unknown}")
+    if len(set(ids)) != len(ids):
+        raise ValueError(f"subset {name!r} lists a case twice")
+    return ids
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--api", default=DEFAULT_API)
@@ -256,12 +280,24 @@ def main(argv: list[str] | None = None) -> int:
                         help="run only the first N cases")
     parser.add_argument("--only", action="append", default=None,
                         help="run only these case ids (repeatable)")
+    parser.add_argument("--subset", default=None,
+                        help="run a named fixed subset, e.g. 'fast' "
+                             "(eval/fast_subset.json). A development signal only: "
+                             "never compared with the full baseline")
     parser.add_argument("--report", type=Path, default=None,
                         help="write per-case JSON here")
     parser.add_argument("--timeout", type=float, default=900.0)
     args = parser.parse_args(argv)
 
     cases = list(load_cases())
+    if args.subset:
+        try:
+            wanted_ids = subset_ids(args.subset)
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            return 2
+        by_id = {c.id: c for c in cases}
+        cases = [by_id[i] for i in wanted_ids]
     if args.only:
         wanted = set(args.only)
         cases = [c for c in cases if c.id in wanted]
@@ -280,6 +316,10 @@ def main(argv: list[str] | None = None) -> int:
 
     session = Session(client)
     print(f"running {len(cases)} cases against {args.api}", flush=True)
+    if args.subset:
+        print(f"subset {args.subset!r}: a development signal. {len(cases)} cases is "
+              f"inside the noise band; do not compare it with the full baseline.",
+              flush=True)
 
     outcomes: list[Outcome] = []
     started = time.perf_counter()
@@ -300,6 +340,9 @@ def main(argv: list[str] | None = None) -> int:
         args.report.write_text(json.dumps({
             "api": args.api,
             "cases": len(outcomes),
+            # Set when the run was a named subset, so the report cannot be
+            # mistaken for a full run later.
+            "subset": args.subset,
             # The configuration this run measured. Without it a report promoted
             # to a baseline months later cannot answer "better than what?", and
             # eval/compare.py has to fall back to whatever settings happen to be
