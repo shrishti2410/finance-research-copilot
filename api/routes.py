@@ -133,11 +133,14 @@ async def _store_turn(session, conversation, question, result, history_messages=
             # many turns, why it stopped, and what it called to get there.
             "agent": {
                 "model": result.model,
+                "provider": result.provider,
+                "router_model": result.router_model,
                 "iterations": result.iterations,
                 "completed": result.completed,
                 "stop_reason": result.stop_reason,
                 "final_figure": result.final_figure,
                 "total_ms": round(result.total_ms, 1),
+                "rate_limit_wait_ms": round(result.rate_limit_wait_ms, 1),
                 "tools_called": [step.tool for step in result.tool_calls],
                 "prompt_tokens": result.prompt_tokens,
                 "completion_tokens": result.completion_tokens,
@@ -225,6 +228,7 @@ async def ask(
         iterations=result.iterations,
         model=result.model,
         total_ms=round(result.total_ms, 1),
+        rate_limit_wait_ms=round(result.rate_limit_wait_ms, 1),
         prompt_tokens=result.prompt_tokens,
         completion_tokens=result.completion_tokens,
         total_tokens=result.total_tokens,

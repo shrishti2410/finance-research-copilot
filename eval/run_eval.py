@@ -107,6 +107,12 @@ def ask(session: Session, question: str) -> dict:
     }).json()
 
 
+# case id -> milliseconds of that case's latency that were the proxy waiting
+# out a hosted provider's rate limit. Kept beside the outcomes rather than on
+# them, so the scorer's Outcome is unchanged.
+RATE_LIMIT_WAITS: dict[str, float] = {}
+
+
 def run_case(session: Session, case: Case) -> Outcome:
     started = time.perf_counter()
     try:
@@ -119,6 +125,7 @@ def run_case(session: Session, case: Case) -> Outcome:
             stop_reason="request_failed", error=f"{type(exc).__name__}: {exc}",
         )
 
+    RATE_LIMIT_WAITS[case.id] = float(body.get("rate_limit_wait_ms") or 0.0)
     steps = body.get("steps") or []
     tool_calls = [s for s in steps if s["tool"] not in
                   ("final_answer", "ungrounded_answer", "tool_call_budget")]
@@ -298,7 +305,9 @@ def main(argv: list[str] | None = None) -> int:
             # eval/compare.py has to fall back to whatever settings happen to be
             # loaded at promotion time.
             "system": {
+                "agent_provider": settings.agent_provider,
                 "agent_model": settings.agent_model,
+                "agent_router_provider": settings.router_provider,
                 "agent_router_model": settings.agent_router_model,
                 "agent_max_tokens": settings.agent_max_tokens,
                 "agent_max_iterations": settings.agent_max_iterations,
@@ -311,7 +320,9 @@ def main(argv: list[str] | None = None) -> int:
                     "expected": o.expected, "extracted": o.extracted,
                     "unit": o.unit, "tolerance": o.tolerance,
                     "answerable_via": list(o.answerable_via), "company": o.company,
-                    "latency_ms": o.latency_ms, "tool_calls": o.tool_calls,
+                    "latency_ms": o.latency_ms,
+                    "rate_limit_wait_ms": RATE_LIMIT_WAITS.get(o.case_id, 0.0),
+                    "tool_calls": o.tool_calls,
                     "iterations": o.iterations, "prompt_tokens": o.prompt_tokens,
                     "completion_tokens": o.completion_tokens,
                     "completed": o.completed, "stop_reason": o.stop_reason,
