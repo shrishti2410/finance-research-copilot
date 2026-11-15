@@ -94,7 +94,7 @@ runs:
         path: data/edgar
         # v2: the filings are pinned by accession number (ingestion/pipeline.py).
         # v1 held whatever was "latest" on the day the cache was first filled.
-        key: edgar-nvda-aapl-10k-pinned-v2
+        key: edgar-nvda-aapl-10k-pinned-facts-v3
 
     - name: Migrate
       shell: bash
@@ -108,3 +108,11 @@ runs:
       env:
         SEC_EDGAR_USER_AGENT: ${{ inputs.sec-edgar-user-agent }}
       run: python scripts/index_filings.py NVDA AAPL
+
+    # The XBRL facts table behind get_financial_fact. Pinned too: the facts are
+    # taken as filed through PINNED_FACTS_THROUGH (ingestion/pipeline.py).
+    - name: Index NVDA and AAPL structured facts
+      shell: bash
+      env:
+        SEC_EDGAR_USER_AGENT: ${{ inputs.sec-edgar-user-agent }}
+      run: python scripts/index_facts.py NVDA AAPL

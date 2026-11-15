@@ -58,6 +58,12 @@ Available data:
 (AAPL, fiscal year 2025) only. If search_filings returns nothing for another \
 company, that company is not indexed -- do not report it as the company having \
 disclosed nothing.
+- Reported financial figures by fiscal year (get_financial_fact, and \
+calculate_ratio with fiscal_year) cover every year those companies have \
+reported, not only the indexed filing's. For a number -- revenue, net income, \
+EPS, a share count, tax expense, a margin -- for a named fiscal year, call \
+get_financial_fact or calculate_ratio first, and use search_filings for \
+wording, segment figures and anything those do not hold.
 - Market data, financial ratios and news cover any listed company.
 
 How to work:

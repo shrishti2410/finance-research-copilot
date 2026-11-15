@@ -312,8 +312,8 @@ def test_network_failure_becomes_an_error_dict(yf):
 def test_an_unknown_ratio_says_where_line_items_live(yf):
     message = ratios.calculate_ratio("NVDA", "weighted_average_diluted_share_count")["message"]
     assert "gross_margin" in message, "still lists what is supported"
-    assert 'search_filings(section="income")' in message
-    assert "most recent period" in message
+    # Line items are structured facts now; segment figures stay with the filing text.
+    assert "get_financial_fact" in message and "search_filings" in message
 
 
 def test_the_tool_description_says_it_returns_only_the_latest_period():
@@ -323,9 +323,12 @@ def test_the_tool_description_says_it_returns_only_the_latest_period():
     assert 'section="income"' in description
 
 
-def test_the_filing_search_description_claims_fiscal_year_line_items():
+def test_the_filing_search_description_sends_line_items_to_the_facts_tool():
+    """Company-wide figures for a fiscal year are a facts lookup; the filing
+    search keeps wording and segment figures, and still holds the statement."""
     from agent.tools import search_filings
     from tools.registry import build_spec
     description = build_spec(search_filings).description
-    assert "specific fiscal year" in description
-    assert "share counts" in description
+    assert "get_financial_fact first" in description
+    assert "segment" in description and "share counts" in description
+    assert 'section="income"' in description

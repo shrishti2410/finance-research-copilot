@@ -56,6 +56,7 @@ def _edgar_transient(exc: BaseException) -> bool:
 
 TICKER_MAP_URL = "https://www.sec.gov/files/company_tickers.json"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
+COMPANY_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
 ARCHIVE_URL = "https://www.sec.gov/Archives/edgar/data/{cik_int}/{accession_nodash}/{document}"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -456,6 +457,26 @@ class EdgarClient:
                 document=primary_document,
             ),
         )
+
+    # ── structured facts ────────────────────────────────────────────────────
+
+    def company_facts(self, ticker: str, use_cache: bool = True) -> dict:
+        """Every XBRL fact the company has filed, as SEC's company-facts JSON.
+
+        One request per company, through the same User-Agent check and rate
+        limiter as every other call here. The document is cached on disk beside
+        the filings. Unlike a filing it is not immutable -- SEC adds to it with
+        each new report -- so `use_cache=False` fetches it again.
+        """
+        symbol = ticker.strip().upper()
+        cache_file = self.cache_dir / symbol / "companyfacts.json"
+        if use_cache and cache_file.exists():
+            return json.loads(cache_file.read_text(encoding="utf-8"))
+        cik = self.resolve_cik(symbol)
+        payload = self._get(COMPANY_FACTS_URL.format(cik=cik)).json()
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        cache_file.write_text(json.dumps(payload), encoding="utf-8")
+        return payload
 
     # ── downloading ─────────────────────────────────────────────────────────
 
