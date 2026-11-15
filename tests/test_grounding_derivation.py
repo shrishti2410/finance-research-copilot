@@ -319,3 +319,56 @@ def test_rounding_does_not_reopen_the_item_number_derivation():
     answer = ("The filing cites a 29% increase in compensation. The net margin "
               "was 21.93%.")
     assert _flagged("21.93", unsupported_figures(answer, steps))
+
+
+# ── typographic hyphens (hosted run 1, 2026-11-15) ────────────────────────────
+#
+# openai/gpt-oss-120b typesets "10-K" with U+2011, a non-breaking hyphen. The
+# form rule in core/numerics.py matches the ASCII hyphen only, so the guard read
+# "Form 10‑K" as the number 10 and discarded a correct answer.
+
+RATIO = {"ok": True, "ratio": "gross_margin", "value": 0.710681, "formatted": "71.07%",
+         "inputs": {"revenue": 215938000000.0, "gross_profit": 153463000000.0}}
+
+
+@pytest.mark.parametrize("hyphen", ["-", "‐", "‑", "‒", "–", "−"])
+def test_a_form_name_is_not_a_figure_whichever_hyphen_it_is_typeset_with(hyphen):
+    steps = [_ok("calculate_ratio", RATIO)]
+    answer = (f"NVIDIA reported a gross margin of 71.07% for fiscal year 2026, "
+              f"as shown in its Form 10{hyphen}K.")
+    assert _texts(unsupported_figures(answer, steps)) == []
+
+
+def test_the_hosted_draft_that_was_discarded_no_longer_flags_the_form_name():
+    """The draft from nvda-gross-margin-pct-mdna, hosted run 1, as written."""
+    steps = [_ok("calculate_ratio", RATIO)]
+    draft = ("NVIDIA reported a gross margin of **71.07%** for its fiscal year 2026, "
+             "as shown in the MD&A section of its Form 10‑K. Gross profit of "
+             "$153.463 billion divided by revenue of $215.938 billion yields "
+             "a gross margin of 0.710681 (71.07%).\n\nFinal figure: 71.07%")
+    assert _texts(unsupported_figures(draft, steps)) == []
+
+
+def test_an_honest_refusal_naming_the_form_with_a_typographic_hyphen_passes():
+    answer = "The filing search failed, so I have nothing to report from the 10‑K."
+    assert unsupported_figures(answer, [_ok("calculate_ratio", RATIO)]) == []
+
+
+def test_an_invented_figure_beside_a_typographic_hyphen_is_still_blocked():
+    steps = [_ok("calculate_ratio", RATIO)]
+    answer = "Per the Form 10‑K, NVIDIA's net‑margin was 21.93%."
+    assert _flagged("21.93", unsupported_figures(answer, steps))
+
+
+def test_a_number_after_a_typographic_hyphen_reads_as_it_does_after_a_plain_one():
+    """Normalising makes the two spellings equal; it adds no new leniency."""
+    steps = [_ok("calculate_ratio", RATIO)]
+    for template in ("The margin was up{h}9.99% on the year.", "A top{h}40 customer list."):
+        plain = _texts(unsupported_figures(template.format(h="-"), steps))
+        typeset = _texts(unsupported_figures(template.format(h="‑"), steps))
+        assert plain == typeset and plain, template
+
+
+def test_an_em_dash_is_not_turned_into_a_minus_sign():
+    steps = [_ok("calculate_ratio", RATIO)]
+    assert unsupported_figures("Gross margin—71.07% for the year.", steps) == []

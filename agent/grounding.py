@@ -149,6 +149,32 @@ _FLOAT_SLACK = 1e-9
 
 _DIGITS = re.compile(r"\d[\d,]*(?:\.(\d+))?")
 
+# Hyphens and dashes a model may typeset in place of "-". The answer is read as
+# if it had been typed with the ASCII hyphen, so "10\u2011K" is the form name
+# "10-K" and not the number 10.
+#
+# Found on the first hosted run (2026-11-15, openai/gpt-oss-120b): 35 of 40
+# answers used U+2011 or U+202F, and a correct 71.07% draft was discarded
+# because "Form 10\u2011K" was read as an unsupported 10.
+#
+# One character for one character, so every offset in the text is unchanged.
+# Only characters that are hyphens or already count as a minus sign are mapped.
+# The em dash and the horizontal bar are left alone: they are sentence
+# punctuation, and "margin\u201471%" must not become minus 71.
+_HYPHENS = str.maketrans({
+    "\u2010": "-",   # hyphen
+    "\u2011": "-",   # non-breaking hyphen
+    "\u2012": "-",   # figure dash
+    "\u2013": "-",   # en dash (already a sign in core.numerics)
+    "\u2212": "-",   # minus sign (already a sign in core.numerics)
+    "\ufe63": "-",   # small hyphen-minus
+    "\uff0d": "-",   # fullwidth hyphen-minus
+})
+
+
+def _plain_hyphens(text: str) -> str:
+    return text.translate(_HYPHENS)
+
 # A rendered statement says once, above the grid, what its cells are in:
 # "(In millions, except per share data)". Under that note a bare "68" is a
 # figure -- $68 million -- even though nothing on the cell itself says so. The
@@ -366,6 +392,7 @@ def answer_figures(answer: str) -> list[Figure]:
     "fiscal year 2026" and "January 31, 2026" do not become claims that need
     supporting.
     """
+    answer = _plain_hyphens(answer)
     figures: list[Figure] = []
     seen: set[float] = set()
     for candidate in candidates(answer):
