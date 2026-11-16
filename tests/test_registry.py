@@ -428,3 +428,53 @@ def test_search_filings_accepts_k_as_a_string():
 
     assert result.ok, f"k as a string still fails: {result.result}"
     assert result.arguments["k"] == "1", "the raw argument is recorded as sent"
+
+
+# -- names a model sends by mistake --------------------------------------------
+
+def _echo_registry(**options):
+    from tools.base import ok
+    from tools.registry import Registry
+
+    def echo(company: str | None = None, k: int = 3) -> dict:
+        """Echo.
+
+        Args:
+            company: the company.
+            k: how many.
+        """
+        return ok(company=company, k=k)
+
+    reg = Registry()
+    reg.register(echo, **options)
+    return reg
+
+
+def test_an_alias_is_read_as_the_argument_it_means():
+    """ticker="AAPL" dropped by the filing search became a search of every
+    company: the top hits for an Apple question were NVIDIA's."""
+    reg = _echo_registry(aliases={"ticker": "company"})
+    result = run(reg.call("echo", {"ticker": "AAPL"})).result
+    assert result["ok"] and result["company"] == "AAPL"
+    assert "ignored_arguments" not in result
+
+
+def test_an_alias_does_not_override_the_real_argument():
+    reg = _echo_registry(aliases={"ticker": "company"})
+    result = run(reg.call("echo", {"ticker": "AAPL", "company": "NVDA"})).result
+    assert result["company"] == "NVDA" and result["ignored_arguments"] == ["ticker"]
+
+
+def test_a_harmless_value_is_dropped_even_when_unknown_arguments_are_rejected():
+    reg = _echo_registry(reject_unknown="No such argument.", harmless={"period": ("annual",)})
+    assert run(reg.call("echo", {"company": "AAPL", "period": "Annual"})).result["ok"]
+    quarterly = run(reg.call("echo", {"company": "AAPL", "period": "quarterly"})).result
+    assert quarterly["error"] == "bad_input" and "period" in quarterly["message"]
+
+
+def test_the_agent_tools_take_the_names_the_model_sent():
+    from agent.tools import build_registry
+    reg = build_registry()
+    assert reg._aliases["search_filings"] == {"ticker": "company"}
+    assert reg._aliases["get_financial_fact"]["period_end"] == "fiscal_year"
+    assert "annual" in reg._harmless["get_financial_fact"]["period"]

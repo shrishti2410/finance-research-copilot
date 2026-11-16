@@ -243,8 +243,15 @@ def _same_year_end(a: str | None, b: str | None) -> bool:
 def build_registry() -> Registry:
     """The default tool set. One registry per process is plenty; it is stateless."""
     registry = Registry()
-    registry.register(get_financial_fact, reject_unknown=UNKNOWN_ARGUMENT_HINT)
-    registry.register(search_filings)
+    # The aliases and the harmless value are what qwen2.5:7b sent on the full
+    # eval of 2026-11-15: period="annual" and period_end=2026 to the facts
+    # tool, each costing a turn on an error, and ticker="AAPL" to the filing
+    # search, which dropped it and searched both companies.
+    registry.register(get_financial_fact, reject_unknown=UNKNOWN_ARGUMENT_HINT,
+                      aliases={"year": "fiscal_year", "period_end": "fiscal_year",
+                               "company": "ticker"},
+                      harmless={"period": ("annual", "fy", "year")})
+    registry.register(search_filings, aliases={"ticker": "company"})
     registry.register(get_stock_price)
     registry.register(calculate_ratio)
     registry.register(search_news)

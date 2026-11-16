@@ -508,3 +508,17 @@ def test_a_ratio_name_for_a_year_with_no_facts_is_no_data(stored):
 def test_gross_profit_is_still_the_dollar_figure(stored):
     result = fact("gross_profit", 2025)
     assert result["ok"] and result["unit"] == "USD" and result["value"] == 97_858_000_000
+
+
+def test_the_facts_tool_reads_the_year_under_the_names_the_model_sent(stored):
+    from agent.tools import build_registry
+    reg = build_registry()
+    for arguments in ({"period_end": 2026}, {"year": "2026"},
+                      {"fiscal_year": 2026, "period": "annual"}):
+        result = run(reg.call("get_financial_fact", {
+            "ticker": TEST_TICKER, "fact": "revenue", **arguments})).result
+        assert result["ok"] and result["value"] == 215_938_000_000, arguments
+    quarterly = run(reg.call("get_financial_fact", {
+        "ticker": TEST_TICKER, "fact": "revenue", "fiscal_year": 2026,
+        "period": "quarterly"})).result
+    assert quarterly["error"] == "bad_input"
