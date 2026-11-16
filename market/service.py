@@ -15,16 +15,17 @@ requested range. Without that, every overlay would start blank on the left.
 from __future__ import annotations
 
 import math
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from market import analytics, indicators
 from market.costs import cost_model_for
-from market.markets import market_for, normalize_ticker
+from market.markets import completed_bars, market_for, normalize_ticker
 from market.store import MarketData
 
 __all__ = ["chart_data", "price_analytics", "backtest", "strategy_catalogue",
            "WARMUP_CALENDAR_DAYS", "BACKTEST_WARMUP_CALENDAR_DAYS", "DEFAULT_BENCHMARK",
-           "parse_indicators", "default_benchmark", "market_info"]
+           "parse_indicators", "default_benchmark", "market_info", "trading_signal",
+           "signal_evaluation", "SIGNAL_HISTORY_CALENDAR_DAYS"]
 
 # Enough trading days for the slowest indicator offered (SMA 200) plus the
 # warm-up of the smoothed ones: 300 calendar days is about 205 trading days.
@@ -32,6 +33,10 @@ WARMUP_CALENDAR_DAYS = 300
 # The slowest strategy rule reads 252 trading days (12-1 momentum): about 365
 # calendar days, plus a margin.
 BACKTEST_WARMUP_CALENDAR_DAYS = 400
+# The signal engine's history: eight years plus the warm-up. Its first fully
+# trained signal needs the slowest rule's warm-up (252 bars) plus two years of
+# training; the evaluation then wants five years after that.
+SIGNAL_HISTORY_CALENDAR_DAYS = round(365.25 * 8) + BACKTEST_WARMUP_CALENDAR_DAYS
 DEFAULT_BENCHMARK = "SPY"
 # Each market's broad index, the default comparison for a stock that trades there.
 BENCHMARKS = {"US": "SPY", "NSE": "^NSEI", "BSE": "^BSESN"}
@@ -155,3 +160,43 @@ async def backtest(ticker: str, strategy: str, start: date, end: date,
         "execution": "decided at the close, filled at the next open; prices adjusted "
                      "for dividends and splits",
     }
+
+
+async def _signal_bars(symbol: str, data: MarketData, now: datetime | None):
+    end = date.today()
+    bars = await data.history(symbol, end - timedelta(days=SIGNAL_HISTORY_CALENDAR_DAYS), end)
+    return completed_bars(bars, market_for(symbol), now or datetime.now(timezone.utc))
+
+
+async def trading_signal(ticker: str, data: MarketData | None = None,
+                         now: datetime | None = None) -> dict:
+    """Today's BUY / SELL / HOLD for `ticker`, with all its evidence
+    (market/signals.py). Decided on the last completed bar."""
+    from market.signals import signal_evidence, walk_forward
+
+    data = data or MarketData()
+    symbol = normalize_ticker(ticker)
+    bars = await _signal_bars(symbol, data, now)
+    if len(bars) < 2:
+        raise LookupError(f"No price history for {symbol}.")
+    market = market_for(symbol)
+    out = signal_evidence(walk_forward(bars, market), symbol, market)
+    return {**out, **market_info(symbol), "provider": data.provider.name}
+
+
+async def signal_evaluation(ticker: str, years: int = 5, data: MarketData | None = None,
+                            now: datetime | None = None) -> dict:
+    """The signal's out-of-sample record over the last `years` years against
+    buy-and-hold, the market index and random timing (market/signal_eval.py)."""
+    from market.signal_eval import evaluate
+
+    data = data or MarketData()
+    symbol = normalize_ticker(ticker)
+    bars = await _signal_bars(symbol, data, now)
+    if len(bars) < 2:
+        raise LookupError(f"No price history for {symbol}.")
+    bench = default_benchmark(symbol)
+    bench_bars = await _signal_bars(bench, data, now) if bench != symbol else None
+    out = evaluate(bars, bench_bars, market_for(symbol), years=years)
+    return {"ticker": symbol, "benchmark": bench, **market_info(symbol),
+            "provider": data.provider.name, **out}

@@ -158,3 +158,18 @@ def test_history_is_measured_and_a_short_one_is_flagged():
     gappy = _bars([1.0] * 10)
     assert history_of(gappy[:3] + gappy[9:]).largest_gap_days == 7
     assert history_of([]).limited
+
+
+def test_todays_bar_is_ignored_until_its_session_has_closed():
+    from datetime import datetime, timezone
+
+    from market.markets import NSE, US, completed_bars
+    bars = _bars([1.0, 2.0, 3.0])
+    today = bars[-1].day
+    during = datetime(today.year, today.month, today.day, 9, 0, tzinfo=timezone.utc)
+    after = datetime(today.year, today.month, today.day, 11, 0, tzinfo=timezone.utc)
+    assert len(completed_bars(bars, NSE, during)) == 2      # 14:30 IST: still trading
+    assert len(completed_bars(bars, NSE, after)) == 3       # 16:30 IST: closed
+    assert len(completed_bars(bars, US, after)) == 2        # 06:00 in New York
+    tomorrow = datetime(today.year, today.month, today.day + 1, 1, 0, tzinfo=timezone.utc)
+    assert len(completed_bars(bars, US, tomorrow)) == 3

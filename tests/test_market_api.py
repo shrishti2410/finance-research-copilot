@@ -200,3 +200,22 @@ def test_the_backtest_endpoints(fake_market, monkeypatch):
         negative = client.post("/market/ZZCHART/backtest", headers=headers,
                                json={**body, "cost_bps": -1})
         assert negative.status_code == 422
+
+
+def test_the_signal_endpoint_needs_a_login_and_returns_the_evidence(fake_market, monkeypatch):
+    from api.main import app
+    from core.config import settings
+
+    monkeypatch.setattr(settings, "rate_limit_enabled", False)
+    with TestClient(app) as client:
+        if client.get("/health/db").status_code != 200:
+            pytest.skip("Postgres unreachable")
+        assert client.get("/market/ZZCHART/signal").status_code == 401
+        token = client.post("/auth/signup", json={
+            "email": f"sig-{uuid.uuid4().hex[:10]}@example.com",
+            "password": "correct-horse-battery"}).json()["access_token"]
+        body = client.get("/market/ZZCHART/signal",
+                          headers={"Authorization": f"Bearer {token}"}).json()
+        assert body["ok"] and body["signal"] in ("BUY", "SELL", "HOLD")
+        assert body["disclaimer"] == "Educational project, not investment advice."
+        assert body["votes"] and body["provider"] == "fake" and body["currency"] == "USD"

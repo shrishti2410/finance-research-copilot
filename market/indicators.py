@@ -138,7 +138,7 @@ def adx(high, low, close, n: int = 14):
     are smoothed with Wilder's average; +DI and -DI are the smoothed moves as a
     percentage of the smoothed range. DX is their difference over their sum,
     and ADX is DX smoothed again: how strongly the price is trending, whichever
-    way. Undefined (NaN) for the first 2n-1 bars.
+    way. Undefined (NaN) for the first 2n-2 bars.
     """
     h, lo, c = _array(high), _array(low), _array(close)
     out = np.full(c.shape, np.nan)

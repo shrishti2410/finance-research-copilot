@@ -13,8 +13,9 @@ anything longer is an exchange.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, time
 
-__all__ = ["Market", "market_for", "normalize_ticker", "INDIAN_SUFFIXES"]
+__all__ = ["Market", "market_for", "normalize_ticker", "completed_bars", "INDIAN_SUFFIXES"]
 
 INDIAN_SUFFIXES = {"NS": "NSE", "BO": "BSE"}
 INDIAN_INDICES = {"^NSEI": "NSE", "^NSEBANK": "NSE", "^BSESN": "BSE", "^CNXIT": "NSE"}
@@ -25,13 +26,17 @@ class Market:
     exchange: str          # "NSE", "BSE", "US"
     currency: str          # ISO code
     currency_symbol: str
-    cost_model: str        # key into market.costs.COST_MODELS
+    cost_model: str        # key into market.costs.cost_model_for
     allows_overnight_short: bool
+    # When a day's bar is final, in UTC, with half an hour's margin: NSE and BSE
+    # close at 15:30 IST (10:00 UTC); US markets at 16:00 New York time, which is
+    # 21:00 UTC in winter and 20:00 in summer.
+    session_close_utc: time = time(21, 30)
 
 
-US = Market("US", "USD", "$", "flat_bps", True)
-NSE = Market("NSE", "INR", "₹", "india_equity_delivery", False)
-BSE = Market("BSE", "INR", "₹", "india_equity_delivery", False)
+US = Market("US", "USD", "$", "flat_bps", True, time(21, 30))
+NSE = Market("NSE", "INR", "₹", "india_equity_delivery", False, time(10, 30))
+BSE = Market("BSE", "INR", "₹", "india_equity_delivery", False, time(10, 30))
 
 
 def normalize_ticker(raw: str) -> str:
@@ -43,6 +48,17 @@ def normalize_ticker(raw: str) -> str:
     if len(suffix) == 1:                     # a share class, US style
         return f"{head}-{suffix}"
     return symbol
+
+
+def completed_bars(bars, market: Market, now_utc: datetime):
+    """Drop today's bar while its session is still open.
+
+    During trading hours the provider returns a bar for today whose "close" is
+    the latest price. A signal decided "at the close" must not use it.
+    """
+    if bars and bars[-1].day == now_utc.date() and now_utc.time() < market.session_close_utc:
+        return bars[:-1]
+    return bars
 
 
 def market_for(ticker: str) -> Market:

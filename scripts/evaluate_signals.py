@@ -1,0 +1,108 @@
+"""Evaluate the signal engine out of sample on the watchlist, and show today's signals.
+
+    python scripts/evaluate_signals.py --out benchmarks/results/2026-11-16-signals
+    python scripts/evaluate_signals.py --years 5 SBIN.NS DIXON.NS
+
+For each ticker: the walk-forward signal over the last --years years against
+buy-and-hold, the market index and 200 random-timing runs (market/signal_eval.py),
+and the current signal (market/signals.py). Prices come from the cache
+(scripts/load_prices.py); no language model is involved.
+
+Writes signals_eval.json (everything) to --out, and prints a summary table.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import platform
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from db.base import engine  # noqa: E402
+from market.service import signal_evaluation, trading_signal  # noqa: E402
+from market.universe import INDIA_WATCHLIST  # noqa: E402
+
+
+def _pct(x):
+    return "   n/a" if x is None else f"{x * 100:6.1f}"
+
+
+def _num(x):
+    return "  n/a" if x is None else f"{x:5.2f}"
+
+
+async def main(tickers: list[str], years: int, out: Path | None) -> int:
+    commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT,
+                            capture_output=True, text=True).stdout.strip()
+    started = time.perf_counter()
+    results = {}
+    try:
+        for ticker in tickers:
+            evaluation = await signal_evaluation(ticker, years=years)
+            current = await trading_signal(ticker)
+            results[ticker] = {"evaluation": evaluation, "current": current}
+    finally:
+        await engine.dispose()
+    elapsed = time.perf_counter() - started
+
+    print(f"Out of sample, last {years} years requested; Indian delivery costs; "
+          f"CAGR and max drawdown in %")
+    print(f"{'ticker':<14}{'window':<24}{'yrs':>5} | {'signal':>15} | {'buy&hold':>15} | "
+          f"{'nifty':>15} | {'random median':>15} | {'pctl':>5} | {'hit up':>13}")
+    print(f"{'':<14}{'':<24}{'':>5} | {'CAGR  Shrp  DD':>15} | {'CAGR  Shrp  DD':>15} | "
+          f"{'CAGR  Shrp  DD':>15} | {'CAGR  Shrp':>15} | {'':>5} | {'buy vs base':>13}")
+    for ticker, r in results.items():
+        e = r["evaluation"]
+        if not e.get("ok"):
+            print(f"{ticker:<14}{e.get('error')}")
+            continue
+        s, b, n, rnd, h = e["signal"], e["buy_and_hold"], e["nifty"] or {}, e["random"], e["hit_rate"]
+        print(f"{ticker:<14}{e['start'] + ' to ' + e['end']:<24}{e['years']:>5} | "
+              f"{_pct(s['cagr'])}{_num(s['sharpe_ratio'])}{_pct(s['max_drawdown'])[2:]} | "
+              f"{_pct(b['cagr'])}{_num(b['sharpe_ratio'])}{_pct(b['max_drawdown'])[2:]} | "
+              f"{_pct(n.get('cagr'))}{_num(n.get('sharpe_ratio'))}{_pct(n.get('max_drawdown'))[2:]} | "
+              f"{_pct(rnd['cagr_median'])}{_num(rnd['sharpe_median'])}     | "
+              f"{_num(rnd['signal_sharpe_percentile'])} | "
+              f"{_pct(h['after_buy_up'])} vs{_pct(h['base_rate_up'])}")
+    print()
+    print("Today's signals (decided on the last completed bar)")
+    for ticker, r in results.items():
+        c = r["current"]
+        if not c.get("ok"):
+            print(f"  {ticker:<14}{c.get('error')}")
+            continue
+        warn = "  [limited history]" if c["history"]["limited"] else ""
+        print(f"  {ticker:<14}{c['as_of']}  {c['signal']:<4}  score {c['score']:+.3f}  "
+              f"confidence {c['confidence']:.3f}  regime {c['regime']['label']:<13} "
+              f"in {c['voters_in']} / out {c['voters_out']}{warn}")
+    print(f"\n{len(tickers)} tickers in {elapsed:.1f}s, commit {commit}")
+
+    if out:
+        out.mkdir(parents=True, exist_ok=True)
+        meta = {"command": " ".join(sys.argv), "commit": commit,
+                "run_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "machine": platform.platform(), "python": platform.python_version(),
+                "elapsed_s": round(elapsed, 1), "years": years}
+        (out / "signals_eval.json").write_text(
+            json.dumps({"meta": meta, "results": results}, indent=1, default=str),
+            encoding="utf-8")
+        print(f"wrote {out / 'signals_eval.json'}")
+    return 0
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("tickers", nargs="*", default=list(INDIA_WATCHLIST))
+    ap.add_argument("--years", type=int, default=5)
+    ap.add_argument("--out", type=Path)
+    args = ap.parse_args()
+    sys.exit(asyncio.run(main(args.tickers, args.years, args.out)))
