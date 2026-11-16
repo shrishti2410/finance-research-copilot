@@ -117,7 +117,11 @@ const config = (phase: string): NextConfig => {
     // actually traced as reachable. The Docker image copies that instead of the
     // whole dependency tree, which is the difference between a ~200MB runtime
     // image and a ~1.2GB one. No effect on `next dev`.
-    output: "standalone",
+    //
+    // Not on Vercel, which sets VERCEL=1 in its builds and packages the app
+    // with its own builder: with standalone on, the build compiled and then
+    // failed with "ENOENT ... .next/next-server.js.nft.json".
+    ...(process.env.VERCEL ? {} : { output: "standalone" as const }),
   };
 };
 
