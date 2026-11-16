@@ -7,10 +7,59 @@ is the list of steps to do by hand in each dashboard, in order.
 For a single GPU machine running the whole stack, see [DEPLOYMENT.md](DEPLOYMENT.md)
 instead.
 
-> **Not deployed yet.** Nothing in this file has been run against a real account.
-> The API image was built and run locally under Render Free's limits (512 MB, 0.1
-> CPU): it fits in memory, and it is slow to start. See
-> [Memory and CPU on the free instance](#0-memory-and-cpu-on-the-free-instance).
+> **Deployed on 2026-11-16, from `feat/step4-corpus`.**
+>
+> | | |
+> |---|---|
+> | front end (Vercel) | https://finance-research-copilot-swart.vercel.app |
+> | API (Render, Free, Singapore) | https://finance-research-copilot.onrender.com |
+> | Postgres (Neon, Free, AWS Singapore) | migration `0005_pgvector_required`; 45 filings of 15 companies, 2,914 chunks, 62,387 facts rows |
+> | Redis (Upstash, Free, Singapore) | rate limiter, TLS |
+>
+> What was checked on the live site, and what was not: [Live](#live).
+> The free API sleeps after 15 minutes idle; the first request after that waits
+> for it to start.
+
+## Live
+
+**Signing in.** Signup is closed (`SIGNUP_ENABLED=false`).
+- **Visitors** use **Try the demo** on the sign-in page. It makes a fresh,
+  separate account each time, capped by `DEMO_QUESTIONS_PER_ACCOUNT` and
+  `DEMO_QUESTIONS_PER_DAY` (section 10).
+- **The owner** makes a regular account directly in Neon with
+  `scripts/create_user.py`. It asks for the password twice without showing it,
+  hashes it as the app does, and prints only the email and id. Then sign in on
+  the sign-in page with that email and password. PowerShell, from the repo root:
+
+  ```powershell
+  $env:DATABASE_URL = ((Get-Content .env.neon) -match '^DATABASE_URL=')[0].Substring(13)
+  python scripts/create_user.py you@yourdomain.com --name "Your Name"
+  Remove-Item Env:DATABASE_URL
+  ```
+
+**Checked on 2026-11-16 at 16:00 UTC, from the laptop with curl. No question was
+asked, to keep the Groq allowance for an eval the next morning.**
+
+| request | result |
+|---|---|
+| `GET /health` | 200 in 0.5 s (the service was awake) |
+| `GET /health/ready` | `"status": "ok"`, database ok, migration `0005_pgvector_required` (as expected), Redis ok |
+| `GET /health/redis` | `"limiting": true`, fail-open |
+| `GET /auth/options` | `{"signup": false, "demo": true, "demo_questions_per_account": 5}` |
+| CORS preflight from the Vercel origin | 200, `access-control-allow-origin` is the Vercel URL, no credentials header |
+| CORS preflight from another origin | 400 |
+| `POST /auth/signup` | 403, "Signup is closed on this deployment. Use the demo instead." |
+| the Vercel sign-in page | 200; its JavaScript has the Render URL compiled in as `NEXT_PUBLIC_API_BASE` |
+
+**Not checked yet on the live site:**
+- **An answered question.** Asking one spends the shared Groq allowance (section 5).
+- **The demo button** creating an account through the browser.
+- **The caps refusing a question.**
+- **The cold start after a sleep.**
+
+**Settings the night it went live.** `HOSTED_TOKENS_PER_DAY=20000` and
+`DEMO_QUESTIONS_PER_DAY=2`, kept low until the next morning's eval had its Groq
+allowance. Raise them to 60,000 and 10 afterwards (sections 5 and 6).
 
 ## Contents
 
@@ -157,8 +206,19 @@ Check before moving on. In the Neon **SQL Editor**:
 ```sql
 SELECT count(*) FROM filing_chunks;  -- 113 locally on 2026-11-16
 SELECT count(*) FROM xbrl_facts;     -- 8151 locally on 2026-11-16
-SELECT version_num FROM alembic_version;  -- 0004_public_demo
+SELECT version_num FROM alembic_version;  -- 0005_pgvector_required on feat/step4-corpus
 ```
+
+**What the live Neon database actually holds.** It has the 15-company corpus,
+not the two eval filings. It was loaded on 2026-11-16 by copying the rows from
+the local pgvector database: `pg_dump --data-only -t filing_chunks -t
+xbrl_facts`, piped into `psql` on Neon in one transaction, which took 38 s. That
+avoided embedding everything again on the laptop.
+- Checked afterwards: an MD5 over every `chunk_id` and its content's MD5 is the
+  same in both databases.
+- Totals: 2,914 chunks, 45 filings, 15 companies, 62,387 facts rows, 55 MB.
+- `python scripts/index_corpus.py`, with `DATABASE_URL` pointing at Neon,
+  gives the same result from scratch: it is idempotent.
 
 ---
 
@@ -212,10 +272,10 @@ stands.
    |---|---|
    | Name | e.g. `copilot-api`. The URL becomes `https://copilot-api.onrender.com` (or with a suffix if the name is taken) |
    | Region | the one next to Neon and Upstash |
-   | Branch | `master` |
+   | Branch | `feat/step4-corpus` (deployed on 2026-11-16; `master` once the branches are merged). It has to hold the migration the database is at, or `alembic upgrade head` at start-up fails on an unknown revision |
    | Runtime / Language | **Docker** |
    | Dockerfile path | `./Dockerfile` |
-   | Docker command | `scripts/start.sh` |
+   | Docker command | `sh scripts/start.sh` |
    | Instance type | **Free** |
    | Health check path | `/health` |
    | Auto-deploy | your choice. Off means a push to master does not redeploy |
@@ -235,7 +295,7 @@ stands.
    - On start, `scripts/start.sh` runs `alembic upgrade head` (a no-op after
      step 3), then starts uvicorn on Render's `$PORT`.
 6. Open `https://<your-service>.onrender.com/health/ready`. You want
-   `"status": "ok"` and `"migration": "0004_public_demo"`.
+   `"status": "ok"` and `"migration": "0005_pgvector_required"`.
 
 Expected start-up failures and what they mean:
 
@@ -262,6 +322,9 @@ Expected start-up failures and what they mean:
    `NEXT_PUBLIC_API_BASE` is read at **build** time. Changing it later needs a
    redeploy.
 4. **Deploy.** Note the production URL, e.g. `https://copilot-demo.vercel.app`.
+   - `next.config.ts` drops `output: "standalone"` when `VERCEL` is set: with it,
+     Vercel's build compiled and then failed on `.next/next-server.js.nft.json`.
+     The Docker image still gets the standalone output.
 
 ---
 
@@ -293,7 +356,8 @@ Expected start-up failures and what they mean:
 4. `https://<service>.onrender.com/health/redis` should say `"limiting": true`.
 
 `scripts/verify_deployment.py` signs up a user, which `SIGNUP_ENABLED=false`
-refuses. Use the checks above, or run it once with signup temporarily on.
+refuses. Use the checks above, or an account made with `scripts/create_user.py`
+(see [Live](#live)).
 
 ---
 
@@ -322,10 +386,8 @@ midnight-to-midnight, so set the cap with a margin.
 
 Stated so nobody mistakes this file for a tested runbook:
 
-- **Not run.**
-  - No account was created on any of these hosts.
-  - The Docker image was not built for this change.
-  - Nothing was deployed.
+- **Deployed, and checked only up to the API's health, CORS and sign-in
+  options** (see [Live](#live)). No answered question on the live site yet.
 - **Memory and CPU on Render itself.** Measured only under Docker's limits on the laptop (section 0).
 - **Render's `X-Forwarded-For`.** Not checked. Until it is,
   `RATE_LIMIT_TRUST_PROXY=false`. The effect is that every visitor looks like
