@@ -1,5 +1,7 @@
 # Hosted model against the Qwen baseline: DRAFT, one of two hosted runs done
 
+> **Superseded for the hosted model by [HOSTED_RUN_2026-11-16.md](HOSTED_RUN_2026-11-16.md)**: 36/40 on the step-3 code (`d106dae`), against 30/40 for hosted run 1 below. The hosted noise repeat was cancelled, so the empty "hosted run 2" column stays empty. This file is kept as the record of hosted run 1 against the Qwen baseline.
+
 **Status: draft.** The first hosted run is in. The second was started straight
 after it and stopped at case 12 of 40, because the provider's daily token
 allowance ran out ([why](#why-there-is-one-hosted-run-so-far)). Its results
