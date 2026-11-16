@@ -94,6 +94,37 @@ def test_atr_matches_pandas():
     same(ind.atr(HIGH, LOW, CLOSE, 14), tr.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean())
 
 
+def test_adx_matches_pandas_written_from_wilders_definition():
+    n = 14
+    w = lambda x: x.ewm(alpha=1 / n, adjust=False, min_periods=n).mean()  # noqa: E731
+    up, down = HIGH.diff(), -LOW.diff()
+    plus_dm = up.where((up > down) & (up > 0), 0.0)
+    minus_dm = down.where((down > up) & (down > 0), 0.0)
+    prev = CLOSE.shift(1)
+    tr = pd.concat([HIGH - LOW, (HIGH - prev).abs(), (LOW - prev).abs()], axis=1).max(axis=1)
+    plus_di, minus_di = 100 * w(plus_dm) / w(tr), 100 * w(minus_dm) / w(tr)
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
+    strength, ours_plus, ours_minus = ind.adx(HIGH, LOW, CLOSE, n)
+    same(ours_plus, plus_di)
+    same(ours_minus, minus_di)
+    same(strength, w(dx))
+
+
+def test_adx_sees_a_steady_rise_as_a_strong_uptrend():
+    c = 100 * np.cumprod(np.full(120, 1.01))
+    strength, plus_di, minus_di = ind.adx(c * 1.005, c * 0.995, c, 14)
+    assert strength[-1] > 50 and plus_di[-1] > minus_di[-1]
+    assert np.isnan(strength[:26]).all() and not np.isnan(strength[27])
+
+
+def test_keltner_is_an_ema_plus_and_minus_atrs():
+    middle, upper, lower = ind.keltner(HIGH, LOW, CLOSE, 20, 2.0)
+    same(middle, CLOSE.ewm(span=20, adjust=False, min_periods=20).mean())
+    width = 2.0 * ind.atr(HIGH, LOW, CLOSE, 20)
+    same(upper - middle, width)
+    same(middle - lower, width)
+
+
 def test_volume_indicators_match_pandas():
     same(ind.volume_sma(VOLUME, 20), VOLUME.rolling(20).mean())
     direction = np.sign(CLOSE.diff()).fillna(0)

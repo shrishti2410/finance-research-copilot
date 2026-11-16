@@ -1,8 +1,9 @@
 # Strategies and backtesting (version 2, step 7B)
 
-`market/strategies.py` holds 13 strategies behind one interface: twelve
-classics, including buy-and-hold as the benchmark, and a long/short variant of
-the crossover. `market/backtest.py` runs any of them on daily bars with
+`market/strategies.py` holds 18 strategies behind one interface: classics
+including buy-and-hold as the benchmark, and a long/short variant of the
+crossover. The first 13 came in step 7B; step 7C added the last five. Each
+one has a card in `docs/strategies/` (see its README). `market/backtest.py` runs any of them on daily bars with
 transaction costs, slippage and next-bar execution, and returns buy-and-hold on
 the same terms.
 
@@ -61,6 +62,11 @@ sizing other than all-in, and parameter optimisation.
 | `zscore_reversion` | buy at z < −2 against the 20-day mean, sell at z > 0 |
 | `atr_trailing_stop` | enter above SMA 50; exit 3 × ATR(22) below the highest close since entry |
 | `sma_cross_long_short` | long while SMA 50 > SMA 200, short while below |
+| `rsi2_pullback` | buy RSI(2) < 10 above SMA 200, sell above SMA 5 |
+| `keltner_breakout` | buy above EMA 20 + 2 ATR(20), sell below EMA 20 |
+| `adx_trend` | long while ADX(14) > 25 and +DI > -DI |
+| `trend_alignment` | long while close > SMA 20 > SMA 50 > SMA 200 |
+| `obv_trend` | long while OBV and the close are above their 50-day SMAs |
 
 The statistics reported for each run:
 - total return, CAGR, annualised volatility, Sharpe ratio (no risk-free rate)

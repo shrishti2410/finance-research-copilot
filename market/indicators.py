@@ -26,7 +26,7 @@ import numpy as np
 
 __all__ = [
     "sma", "ema", "wilder", "rsi", "macd", "bollinger", "true_range", "atr",
-    "volume_sma", "obv", "INDICATORS", "compute",
+    "volume_sma", "obv", "adx", "keltner", "INDICATORS", "compute",
 ]
 
 
@@ -128,6 +128,43 @@ def obv(close, volume) -> np.ndarray:
     c, v = _array(close), _array(volume)
     direction = np.sign(np.diff(c, prepend=c[0]))
     return np.cumsum(direction * v)
+
+
+def adx(high, low, close, n: int = 14):
+    """(ADX, +DI, -DI): Wilder's directional movement system, 0 to 100.
+
+    +DM is today's high minus yesterday's when that rise is larger than the
+    fall in the low, and positive; -DM the reverse. Both, and the true range,
+    are smoothed with Wilder's average; +DI and -DI are the smoothed moves as a
+    percentage of the smoothed range. DX is their difference over their sum,
+    and ADX is DX smoothed again: how strongly the price is trending, whichever
+    way. Undefined (NaN) for the first 2n-1 bars.
+    """
+    h, lo, c = _array(high), _array(low), _array(close)
+    out = np.full(c.shape, np.nan)
+    if len(c) < 2 * n:
+        return out, out.copy(), out.copy()
+    up = np.diff(h, prepend=h[0])
+    down = -np.diff(lo, prepend=lo[0])
+    plus_dm = np.where((up > down) & (up > 0), up, 0.0)
+    minus_dm = np.where((down > up) & (down > 0), down, 0.0)
+    tr = wilder(true_range(h, lo, c), n)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        plus_di = 100.0 * wilder(plus_dm, n) / tr
+        minus_di = 100.0 * wilder(minus_dm, n) / tr
+        total = plus_di + minus_di
+        dx = np.where(total > 0, 100.0 * np.abs(plus_di - minus_di) / total, 0.0)
+    dx = np.where(np.isnan(plus_di), np.nan, dx)
+    first = int(np.argmax(~np.isnan(dx)))
+    out[first:] = wilder(dx[first:], n)
+    return out, plus_di, minus_di
+
+
+def keltner(high, low, close, n: int = 20, k: float = 2.0):
+    """(middle, upper, lower): EMA(n) of the close, plus and minus k ATR(n)."""
+    middle = ema(close, n)
+    width = k * atr(high, low, close, n)
+    return middle, middle + width, middle - width
 
 
 # Name -> what the chart page and the agent can ask for. Each entry says how

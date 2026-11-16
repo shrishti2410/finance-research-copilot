@@ -1,4 +1,4 @@
-"""Twelve classic trading strategies behind one interface.
+"""Seventeen classic trading strategies behind one interface.
 
 A strategy turns daily bars into a **target position for the next bar**:
 `positions(prices)[t]` is the exposure wanted after seeing bar t's close
@@ -179,6 +179,47 @@ def sma_cross_long_short(p: Prices, fast: float = 50, slow: float = 200) -> np.n
     return np.where(np.isnan(f) | np.isnan(s), 0.0, np.where(f > s, 1.0, -1.0))
 
 
+def rsi2_pullback(p: Prices, period: float = 2, buy_below: float = 10,
+                  trend: float = 200, exit_sma: float = 5) -> np.ndarray:
+    """A short-term pullback inside a long-term uptrend: buy when a 2-day RSI
+    drops below 10 while the close is above its 200-day SMA, sell when the
+    close recovers above its 5-day SMA."""
+    r = ind.rsi(p.close, int(period))
+    uptrend = _gt(p.close, ind.sma(p.close, int(trend)))
+    entry = _lt(r, np.full(len(r), buy_below)) & uptrend
+    return _hold(entry, _gt(p.close, ind.sma(p.close, int(exit_sma))))
+
+
+def keltner_breakout(p: Prices, period: float = 20, multiple: float = 2.0) -> np.ndarray:
+    """Buy a close above the upper Keltner channel (EMA + 2 ATR); sell a close
+    below the middle line."""
+    middle, upper, _ = ind.keltner(p.high, p.low, p.close, int(period), multiple)
+    return _hold(_gt(p.close, upper), _lt(p.close, middle))
+
+
+def adx_trend(p: Prices, period: float = 14, threshold: float = 25) -> np.ndarray:
+    """Long while ADX says a strong trend (above 25) and +DI above -DI says it
+    is up; flat otherwise."""
+    strength, plus_di, minus_di = ind.adx(p.high, p.low, p.close, int(period))
+    strong = _gt(strength, np.full(len(p), threshold))
+    return (strong & _gt(plus_di, minus_di)).astype(float)
+
+
+def trend_alignment(p: Prices, short: float = 20, medium: float = 50,
+                    long: float = 200) -> np.ndarray:
+    """Long while close > SMA 20 > SMA 50 > SMA 200: every horizon agrees."""
+    s, m, lg = (ind.sma(p.close, int(n)) for n in (short, medium, long))
+    return (_gt(p.close, s) & _gt(s, m) & _gt(m, lg)).astype(float)
+
+
+def obv_trend(p: Prices, period: float = 50) -> np.ndarray:
+    """Long while on-balance volume is above its 50-day average and the close
+    above its own: price rising on volume."""
+    o = ind.obv(p.close, p.volume)
+    n = int(period)
+    return (_gt(o, ind.sma(o, n)) & _gt(p.close, ind.sma(p.close, n))).astype(float)
+
+
 STRATEGIES: dict[str, Strategy] = {s.key: s for s in [
     Strategy("buy_and_hold", "Buy and hold",
              "Long every day: the benchmark every other strategy is compared with.",
@@ -219,6 +260,21 @@ STRATEGIES: dict[str, Strategy] = {s.key: s for s in [
     Strategy("sma_cross_long_short", "Moving-average crossover, long and short",
              "Long while the fast SMA is above the slow one, short while it is below.",
              {"fast": 50, "slow": 200}, sma_cross_long_short, allows_short=True),
+    Strategy("rsi2_pullback", "RSI(2) pullback in an uptrend",
+             "Buy a 2-day RSI below 10 above the 200-day SMA; sell above the 5-day SMA.",
+             {"period": 2, "buy_below": 10, "trend": 200, "exit_sma": 5}, rsi2_pullback),
+    Strategy("keltner_breakout", "Keltner channel breakout",
+             "Buy a close above EMA 20 + 2 ATR; sell a close below EMA 20.",
+             {"period": 20, "multiple": 2.0}, keltner_breakout),
+    Strategy("adx_trend", "ADX trend strength",
+             "Long while ADX(14) is above 25 and +DI is above -DI.",
+             {"period": 14, "threshold": 25}, adx_trend),
+    Strategy("trend_alignment", "Moving-average alignment",
+             "Long while close > SMA 20 > SMA 50 > SMA 200.",
+             {"short": 20, "medium": 50, "long": 200}, trend_alignment),
+    Strategy("obv_trend", "On-balance volume trend",
+             "Long while OBV and the close are both above their 50-day averages.",
+             {"period": 50}, obv_trend),
 ]}
 
 
