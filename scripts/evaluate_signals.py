@@ -76,6 +76,22 @@ async def main(tickers: list[str], years: int, out: Path | None) -> int:
               f"{_num(rnd['signal_sharpe_percentile'])}  "
               f"{_pct(h['after_buy_up'])} vs{_pct(h['base_rate_up'])}")
     print()
+    print("Risk-adjusted, same window, every ticker. Sharpe = mean / sd of daily returns "
+          "x sqrt(252); Sortino uses the downside deviation; Calmar = CAGR / |max DD|; "
+          "no risk-free rate.")
+    print(f"{'ticker':<14}  {'':>4}  {'Sharpe':>6} {'Sortino':>7} {'Calmar':>6} "
+          f"{'in mkt':>6}  {'CAGR':>6} {'DD':>6}")
+    for ticker, r in results.items():
+        e = r["evaluation"]
+        if not e.get("ok"):
+            continue
+        for label, side in (("signal", "signal"), ("b&h", "buy_and_hold"), ("nifty", "nifty")):
+            m = e["risk"][side] or {}
+            print(f"{ticker if label == 'signal' else '':<14}  {label:>6}"
+                  f"{_num(m.get('sharpe'))} {_num(m.get('sortino')):>7} {_num(m.get('calmar'))} "
+                  f"{_pct(m.get('time_in_market'))}  {_pct(m.get('cagr'))} "
+                  f"{_pct(m.get('max_drawdown'))}")
+    print()
     print("Today's signals (decided on the last completed bar)")
     for ticker, r in results.items():
         c = r["current"]

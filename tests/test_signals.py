@@ -187,3 +187,33 @@ def test_the_evaluation_is_out_of_sample_reproducible_and_complete():
         assert {"cagr", "sharpe_ratio", "max_drawdown", "costs_paid"} <= set(a[side])
     assert a["random"]["sharpe_p5"] <= a["random"]["sharpe_median"] <= a["random"]["sharpe_p95"]
     assert 0 <= a["hit_rate"]["base_rate_up"] <= 1
+
+def test_risk_metrics_match_their_definitions():
+    import pandas as pd
+
+    from market.signal_eval import risk_metrics
+    rng = np.random.default_rng(5)
+    eq = 100 * np.cumprod(1 + rng.normal(0.0005, 0.012, 600))
+    held = (rng.random(600) > 0.4).astype(float)
+    m = risk_metrics(eq, held)
+    r = pd.Series(eq).pct_change().dropna()
+    assert m["sharpe"] == pytest.approx(r.mean() / r.std() * np.sqrt(252), abs=1e-4)
+    downside = np.sqrt((r.clip(upper=0) ** 2).mean()) * np.sqrt(252)
+    assert m["sortino"] == pytest.approx(r.mean() * 252 / downside, abs=1e-4)
+    dd = (pd.Series(eq) / pd.Series(eq).cummax() - 1).min()
+    cagr = (eq[-1] / eq[0]) ** (252 / 599) - 1
+    assert m["max_drawdown"] == pytest.approx(dd, abs=1e-4)
+    assert m["calmar"] == pytest.approx(cagr / abs(dd), abs=1e-4)
+    assert m["time_in_market"] == pytest.approx(np.mean(held[1:] > 0), abs=1e-4)
+    assert risk_metrics(eq)["time_in_market"] == 1.0
+    assert risk_metrics([100.0] * 10)["sharpe"] is None
+
+
+def test_the_evaluation_reports_risk_for_the_signal_and_both_benchmarks():
+    out = evaluate(BARS, _walk(1100, seed=99), NSE, years=2, n_random=5)
+    for side in ("signal", "buy_and_hold", "nifty"):
+        assert set(out["risk"][side]) == {"cagr", "max_drawdown", "sharpe", "sortino",
+                                          "calmar", "time_in_market"}
+    assert out["risk"]["buy_and_hold"]["time_in_market"] == 1.0
+    assert out["risk"]["signal"]["time_in_market"] == pytest.approx(
+        out["signal"]["exposure"], abs=1e-4)

@@ -37,13 +37,45 @@ from market.markets import Market
 from market.signals import NOTIONAL, SLIPPAGE_BPS, WalkForward, walk_forward
 from market.strategies import Strategy
 
-__all__ = ["evaluate", "N_RANDOM", "HORIZON", "SEED"]
+__all__ = ["evaluate", "risk_metrics", "N_RANDOM", "HORIZON", "SEED"]
 
 N_RANDOM = 200
 HORIZON = 20
 SEED = 20261116
 _KEEP = ("total_return", "cagr", "annualised_volatility", "sharpe_ratio", "max_drawdown",
          "exposure", "trades", "costs_paid")
+
+
+def risk_metrics(equity, held=None) -> dict:
+    """Risk-adjusted figures from an equity curve, all with no risk-free rate.
+
+    sharpe        mean daily return / its standard deviation x sqrt(252)
+    sortino       mean daily return x 252 / downside deviation, where the
+                  downside deviation is sqrt(mean(min(r, 0)^2)) x sqrt(252)
+                  over every day (target return 0)
+    calmar        CAGR / |maximum drawdown|
+    time_in_market   share of days with a position (1.0 when `held` is None)
+    """
+    eq = np.asarray(equity, dtype=float)
+    r = eq[1:] / eq[:-1] - 1.0
+    years = len(r) / 252
+    cagr = float((eq[-1] / eq[0]) ** (1 / years) - 1.0) if years > 0 and eq[-1] > 0 else None
+    dd = float(np.min(eq / np.maximum.accumulate(eq) - 1.0))
+    sd = float(np.std(r, ddof=1)) if len(r) > 1 else 0.0
+    downside = float(np.sqrt(np.mean(np.minimum(r, 0.0) ** 2)) * np.sqrt(252)) if len(r) else 0.0
+
+    def rnd(x):
+        return None if x is None or not np.isfinite(x) else round(float(x), 4)
+
+    return {
+        "cagr": rnd(cagr),
+        "max_drawdown": rnd(dd),
+        "sharpe": rnd(np.mean(r) / sd * np.sqrt(252)) if sd > 0 else None,
+        "sortino": rnd(np.mean(r) * 252 / downside) if downside > 0 else None,
+        "calmar": rnd(cagr / abs(dd)) if cagr is not None and dd < 0 else None,
+        "time_in_market": rnd(1.0 if held is None else
+                              float(np.mean(np.abs(np.asarray(held, float)[1:]) > 0))),
+    }
 
 
 def _fixed(name: str, positions: np.ndarray) -> Strategy:
@@ -82,13 +114,14 @@ def evaluate(bars, nifty_bars, market: Market, years: int = 5, n_random: int = N
         shifted = np.concatenate([np.zeros(start), np.roll(oos, int(k))])
         random.append(_stats(run_backtest(bars, _fixed("random", shifted), **run)))
 
-    nifty = None
+    nifty = nifty_risk = None
     if nifty_bars:
         r = run_backtest(nifty_bars, "buy_and_hold", initial_cash=NOTIONAL, slippage_bps=0,
                          cost_model=FlatBps(0), start_day=day0)
         nifty = {k: r.benchmark_stats.get(k) for k in
                  ("total_return", "cagr", "annualised_volatility", "sharpe_ratio",
                   "max_drawdown")}
+        nifty_risk = risk_metrics(r.benchmark_equity)
 
     close = adjusted_prices(bars).close
     fwd = np.full(n, np.nan)
@@ -117,6 +150,11 @@ def evaluate(bars, nifty_bars, market: Market, years: int = 5, n_random: int = N
         "signal": _stats(signal),
         "buy_and_hold": {k: signal.benchmark_stats.get(k) for k in _KEEP},
         "nifty": nifty,
+        "risk": {
+            "signal": risk_metrics(signal.equity, signal.positions),
+            "buy_and_hold": risk_metrics(signal.benchmark_equity),
+            "nifty": nifty_risk,
+        },
         "random": {
             "runs": len(random),
             "cagr_p5": _pct([r["cagr"] for r in random], 5),
