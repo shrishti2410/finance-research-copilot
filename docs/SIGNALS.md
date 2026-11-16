@@ -40,7 +40,10 @@ A trade it implies fills at the next open.
 5. **Decision.**
    - The score is the weighted mean vote, from −1 to +1.
    - BUY at +0.25 or more, SELL at −0.25 or less, otherwise HOLD.
-   - Confidence = |score| × history factor.
+   - Coverage = the rules carrying weight out of those eligible, shown with
+     every signal ("6 of 16 rules").
+   - Confidence = |score| × history factor, capped at the coverage fraction.
+     It is for display only; the decision does not use it.
 
 **Limited history.** Fewer than 750 bars up to the day means:
 - six months of training instead of two years;

@@ -3,14 +3,22 @@
 Step 7C, phase 3. The method is in `market/signals.py`, the evaluation in
 `market/signal_eval.py`, the design in `docs/SIGNALS.md`.
 
-**In short:**
-- The signal did not beat buy-and-hold on return for any of the four stocks
-  with five years of history.
-- It beat its own randomly re-timed copies decisively on none of them.
-- What it did do is spend half the time or less in the market. That cut the
-  maximum drawdown on three of the four stocks, at the cost of most of the
-  return.
-- No evidence here that the timing carries information.
+**The finding: no return edge; lower drawdowns, mostly from time out of the
+market.**
+- **Return.** The signal's CAGR was below buy-and-hold on all four stocks with
+  five years of history. On risk-adjusted terms its daily Sharpe was higher on
+  one stock (DIXON) and lower on the other three.
+- **Timing.** On none of the five stocks did it beat its own randomly re-timed
+  copies convincingly.
+- **Drawdown.** It was in the market 21–51% of the time. Its maximum drawdown
+  was smaller on three of the four, which is what being out of the market that
+  much does by itself.
+- **Hold-out confirmation.** The same engine, unchanged, on ten NSE stocks it
+  had never seen (`benchmarks/REGIME_RULE_CHECK.md`, the `slope` run) gives the
+  same picture:
+  - CAGR below buy-and-hold on 10 of 10;
+  - daily Sharpe above buy-and-hold on 1 of 10;
+  - drawdown smaller on 7 of 10.
 
 ## How it was run
 
@@ -71,6 +79,47 @@ From `signals_eval.json`, same run:
 
 Buy-and-hold paid ₹169 in costs on each stock (one purchase).
 
+## Risk-adjusted, every stock (measured)
+
+Added on request after the first run. The figures come from
+`python scripts/evaluate_signals.py --regime-rule slope --out
+benchmarks/results/2026-11-16-regime-check/watchlist-slope`, run on commit
+`afe350b` on 2026-11-16 at 17:47 UTC, same machine, standby blocked.
+
+- **Same engine as above:** `slope` is the default rule, and nothing between
+  `dd2dbb8` and `afe350b` changes a position. The CAGR and drawdown columns
+  match the table above.
+- **Definitions** (all without a risk-free rate):
+  - **Sharpe:** mean ÷ standard deviation of daily returns × √252. This is the
+    standard form, so it differs from the CAGR ÷ volatility "Sharpe" in the
+    first table.
+  - **Sortino:** the same, with the downside deviation over all days.
+  - **Calmar:** CAGR ÷ |max drawdown|.
+
+| ticker | | Sharpe | Sortino | Calmar | time in market | CAGR | max DD |
+|---|---|---|---|---|---|---|---|
+| COFORGE.NS | signal | 0.27 | 0.39 | 0.09 | 46.7% | 3.5% | −37.0% |
+| | buy & hold | 0.53 | 0.77 | 0.28 | 100% | 13.3% | −46.7% |
+| DIXON.NS | signal | 0.74 | 1.09 | 0.58 | 42.6% | 16.1% | −27.9% |
+| | buy & hold | 0.65 | 0.95 | 0.36 | 100% | 19.1% | −53.7% |
+| SBIN.NS | signal | −0.07 | −0.10 | −0.10 | 50.5% | −3.0% | −29.9% |
+| | buy & hold | 0.86 | 1.23 | 0.82 | 100% | 19.7% | −23.9% |
+| PREMIERENE.NS (1.6 years) | signal | −0.01 | −0.02 | −0.08 | 38.5% | −2.7% | −33.1% |
+| | buy & hold | −0.02 | −0.03 | −0.16 | 100% | −6.4% | −39.3% |
+| HDFCBANK.NS | signal | 0.14 | 0.20 | 0.05 | 21.4% | 0.9% | −18.7% |
+| | buy & hold | 0.23 | 0.32 | 0.08 | 100% | 2.6% | −31.7% |
+| Nifty 50 (2021-11-16 on) | index | 0.57 | 0.81 | 0.44 | 100% | 7.3% | −16.5% |
+
+The Nifty row covers the five-year window. Over PREMIERENE's 1.6-year window
+the Nifty had Sharpe 0.37, Sortino 0.54, Calmar 0.27, CAGR 4.1% and max
+drawdown −15.6%.
+
+- **Signal ahead of buy-and-hold:** on all three ratios for DIXON, and
+  marginally for PREMIERENE, where both are negative over 1.6 years.
+- **Signal behind:** on all three ratios for COFORGE, SBIN and HDFCBANK.
+- **Against the Nifty:** the index beat the signal on Sharpe for every stock
+  except DIXON.
+
 ## What it means (inferred from the numbers above)
 
 - **Return.** The signal's CAGR was below buy-and-hold on all four full-history
@@ -112,6 +161,25 @@ Buy-and-hold paid ₹169 in costs on each stock (one purchase).
 - **Not fixed here.** Changing either now would be adjusting the method after
   seeing its results, so both are recorded instead. A fix would need a fresh
   evaluation window, or at least a statement that it was made after this run.
+
+What happened to each (2026-11-16, after this record):
+
+- **Narrow vote: shown, not hidden** (`5f7e7e5`, display only).
+  - Every signal now states its coverage, e.g. "3 of 11 rules".
+  - Confidence is capped at the coverage fraction, and fewer than half the
+    rules counting adds a warning.
+  - The decision rule and every position are unchanged, so nothing above
+    moves.
+  - Today the cap binds on HDFCBANK.NS: SELL on 6 of 16 rules, confidence
+    0.666 capped to 0.375.
+  - For PREMIERENE.NS it does not bind. Its confidence (0.22) is already below
+    3/11 = 0.27 because of the limited-history factor; the narrow-vote warning
+    still shows.
+- **Regime lag: tested out of sample and not adopted**
+  (`benchmarks/REGIME_RULE_CHECK.md`).
+  - The proposed rule raised the signal's Sharpe on 3 of 10 hold-out stocks.
+  - The median change was 0.000.
+  - The pre-registered bar was 6 of 10 and a positive median.
 
 ## Not measured
 
