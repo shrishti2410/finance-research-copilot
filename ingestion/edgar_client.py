@@ -56,6 +56,8 @@ def _edgar_transient(exc: BaseException) -> bool:
 
 TICKER_MAP_URL = "https://www.sec.gov/files/company_tickers.json"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
+# An older-filings page named in a submissions document's `filings.files`.
+SUBMISSIONS_PAGE_URL = "https://data.sec.gov/submissions/{name}"
 COMPANY_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
 ARCHIVE_URL = "https://www.sec.gov/Archives/edgar/data/{cik_int}/{accession_nodash}/{document}"
 
@@ -245,7 +247,13 @@ class EdgarClient:
         cache_dir: str | Path | None = None,
         requests_per_second: float | None = None,
         require_contact: bool = True,
+        cik_overrides: dict[str, str] | None = None,
     ) -> None:
+        # ticker -> CIK, consulted before SEC's ticker map. For a ticker SEC now
+        # maps to a different entity than the one whose filings are wanted:
+        # since July 2026 "XOM" maps to ExxonMobil Holdings Corp, which has
+        # filed no 10-K, while Exxon Mobil Corp's 10-Ks stay under CIK 34088.
+        self.cik_overrides = {k.strip().upper(): v for k, v in (cik_overrides or {}).items()}
         # None means "not supplied -- take it from config". An explicit empty
         # string is a different thing: a caller that meant to pass a User-Agent
         # and computed one badly. Folding the two together let that bug run as a
@@ -317,6 +325,9 @@ class EdgarClient:
             predicate=_edgar_transient,
         )
         self._ticker_map: dict[str, str] | None = None
+        # cik -> submissions JSON, for the life of this client. A corpus run asks
+        # for several filings of one company; this makes that one request.
+        self._submissions: dict[str, dict] = {}
 
     # ── plumbing ────────────────────────────────────────────────────────────
 
@@ -382,6 +393,9 @@ class EdgarClient:
         return self._ticker_map
 
     def resolve_cik(self, ticker: str) -> str:
+        override = self.cik_overrides.get(ticker.strip().upper())
+        if override:
+            return override.zfill(10)
         mapping = self._load_ticker_map()
         cik = mapping.get(ticker.strip().upper())
         if cik is None:
@@ -389,6 +403,48 @@ class EdgarClient:
         return cik
 
     # ── locating a filing ───────────────────────────────────────────────────
+
+    def _submissions_for(self, cik: str) -> dict:
+        if cik not in self._submissions:
+            self._submissions[cik] = self._get(SUBMISSIONS_URL.format(cik=cik)).json()
+        return self._submissions[cik]
+
+    def _filing_pages(self, cik: str):
+        """(company name, parallel arrays) for each page of a company's filings,
+        newest page first, fetched only as far as the caller reads.
+
+        `filings.recent` holds a company's last 1,000 filings. A company that
+        files many other forms (JPMorgan, Exxon Mobil, Meta in 2026) can have
+        only one 10-K in it, or none; the older ones are on the pages that
+        `filings.files` names. Each page is one more SEC request, through the
+        same rate limiter, and only when the recent window was not enough.
+        """
+        submissions = self._submissions_for(cik)
+        name = submissions.get("name")
+        yield name, submissions.get("filings", {}).get("recent", {})
+        for page in submissions.get("filings", {}).get("files", []):
+            key = f"{cik}/{page['name']}"
+            if key not in self._submissions:
+                self._submissions[key] = self._get(
+                    SUBMISSIONS_PAGE_URL.format(name=page["name"])).json()
+            yield name, self._submissions[key]
+
+    def recent_filings(self, ticker: str, form: str = "10-K", count: int = 3) -> list[Filing]:
+        """The `count` most recent filings of exactly `form`, newest first.
+
+        Exact match, as in `latest_filing`: a 10-K/A is a partial amendment, not
+        the annual report. Reads older pages of the company's filing history
+        when the recent window holds fewer than `count`.
+        """
+        cik = self.resolve_cik(ticker)
+        found: list[Filing] = []
+        for name, arrays in self._filing_pages(cik):
+            for i, filed in enumerate(arrays.get("form", [])):
+                if filed == form:
+                    found.append(self._filing_from(ticker, cik, name, arrays, i))
+                    if len(found) == count:
+                        return found
+        return found
 
     def latest_filing(self, ticker: str, form: str = "10-K") -> Filing:
         """Most recent filing of `form` for `ticker`.
@@ -423,28 +479,33 @@ class EdgarClient:
         put is pinned by it.
         """
         cik = self.resolve_cik(ticker)
-        submissions = self._get(SUBMISSIONS_URL.format(cik=cik)).json()
-        recent = submissions.get("filings", {}).get("recent", {})
-        numbers = recent.get("accessionNumber", [])
         wanted = accession.strip()
-        for i, number in enumerate(numbers):
-            if number == wanted:
-                return self._filing_at(ticker, cik, submissions, i)
+        searched = 0
+        for name, arrays in self._filing_pages(cik):
+            numbers = arrays.get("accessionNumber", [])
+            searched += len(numbers)
+            for i, number in enumerate(numbers):
+                if number == wanted:
+                    return self._filing_from(ticker, cik, name, arrays, i)
         raise LookupError(
-            f"Accession {wanted} not found for {ticker} in the {len(numbers)} most "
-            f"recent filings. Older filings live behind the paginated `filings.files` list."
+            f"Accession {wanted} not found for {ticker} in its {searched} filings on EDGAR."
         )
 
+    @classmethod
+    def _filing_at(cls, ticker: str, cik: str, submissions: dict, i: int) -> Filing:
+        """Build a Filing from row `i` of the submissions' recent arrays."""
+        return cls._filing_from(ticker, cik, submissions.get("name"),
+                                submissions["filings"]["recent"], i)
+
     @staticmethod
-    def _filing_at(ticker: str, cik: str, submissions: dict, i: int) -> Filing:
-        """Build a Filing from row `i` of the submissions' parallel arrays."""
-        recent = submissions["filings"]["recent"]
+    def _filing_from(ticker: str, cik: str, name: str | None, recent: dict, i: int) -> Filing:
+        """Build a Filing from row `i` of one page of parallel arrays."""
         accession = recent["accessionNumber"][i]
         primary_document = recent["primaryDocument"][i]
         report_date = recent.get("reportDate", [None] * len(recent["form"]))[i]
         return Filing(
             ticker=ticker.upper(),
-            company_name=submissions.get("name", ticker.upper()),
+            company_name=name or ticker.upper(),
             cik=cik,
             form=recent["form"][i],
             accession=accession,
