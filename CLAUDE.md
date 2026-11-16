@@ -6,6 +6,33 @@ tools. The model is reached through an OpenAI-compatible proxy: Qwen on Ollama
 locally, or a hosted provider set in `.env`. Start with `docs/PROJECT.md`.
 `frontend/CLAUDE.md` adds rules for the Next.js code.
 
+## Current plan (set 2026-11-16)
+
+Speed matters. Ship a minimal version 1, then make version 2 the priority.
+
+**Version 1, minimal.** Only these, in this order where they depend on each other:
+- merge the calculator branch after its full hosted eval (scheduled 2026-11-17);
+- deploy the public demo (docs/DEPLOY.md; Vercel, Render, Neon, Upstash);
+- finish the 15-company ingestion (`feat/step4-corpus`) and make pgvector the
+  default database;
+- add 20 eval questions for the new companies, then one hosted eval run
+  (eval questions still need approval: see "When to stop for approval");
+- finish the README (`docs/readme-hiring`).
+
+**Dropped for now:** the 100-question set, hybrid search and re-ranking work,
+the hosted noise repeat, and the final Qwen run. Do not start them.
+
+**Version 2, in parallel on its own branch.** It needs no Groq tokens.
+- Step 7A: market data (daily prices cached in Postgres behind a provider
+  interface), indicators, price analytics, a chart page, and charts returned by
+  the agent and rendered in the chat.
+- Step 7B: a strategy library and a backtester, with an equity-curve and trade
+  page.
+
+**How to split the time.** Work on version 1 whenever it can move: when the user
+is available for a step that needs them, or when the Groq daily allowance is
+there for a hosted run. Work on version 2 the rest of the time.
+
 These five rules are not optional.
 
 ## When to stop for approval
