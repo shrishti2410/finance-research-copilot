@@ -107,8 +107,16 @@ def test_the_same_settings_are_only_warnings_in_development():
 
 # ── the API ───────────────────────────────────────────────────────────────────
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def client():
+    """One TestClient per test, not per module.
+
+    The quota tests below drive the database from their own event loops. A
+    module-wide client keeps pooled connections open in its loop meanwhile;
+    once those tests dispose of the engine from another loop, closing the
+    client's loop waits for the orphaned sockets for ever (Windows proactor).
+    A client per test releases its connections in its own loop, at once.
+    """
     with TestClient(app) as c:
         if c.get("/health/db").status_code != 200:
             pytest.skip("Postgres unreachable; run migrations first")
@@ -125,8 +133,16 @@ def public(monkeypatch):
 
 
 def test_readiness_reports_the_migration_the_code_expects(client):
+    from pathlib import Path
+
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    root = Path(__file__).resolve().parent.parent
+    config = Config(str(root / "alembic.ini"))
+    config.set_main_option("script_location", str(root / "migrations"))
+    assert MIGRATION_HEAD == ScriptDirectory.from_config(config).get_current_head()
     body = client.get("/health/ready").json()
-    assert MIGRATION_HEAD == "0004_public_demo"
     if body["migration"] != MIGRATION_HEAD:
         pytest.skip(f"database is at {body['migration']}; run alembic upgrade head")
     assert body["status"] == "ok" and body["database"] == "ok"
@@ -190,7 +206,7 @@ def _user(demo: bool):
 
 
 @pytest.fixture
-def counters(client, monkeypatch):
+def counters(monkeypatch):
     """A clean slate: today's counters for the shared scopes start empty."""
     from sqlalchemy import text
 
