@@ -258,9 +258,31 @@ that is where a client SDK expects to find it. This app's own API is at the root
 docker compose -f docker-compose.dev.yml up -d
 ```
 
-No Docker? Any Postgres 13+ works — a local install, or a hosted instance
-(Neon, Supabase, RDS). Point `DATABASE_URL` at it, keeping the
-`postgresql+asyncpg://` prefix.
+**pgvector is required.** Since migration `0005_pgvector_required` the search
+path reads only pgvector's `vector(384)` column; a server without the extension
+stops at that migration with the fix in the message. Any Postgres 13+ with
+pgvector works: the compose file's image, a hosted instance (Neon, Supabase,
+RDS), or the container below. Point `DATABASE_URL` at it; a hosted
+`postgres://...?sslmode=require` URL is accepted as it is.
+
+#### The pgvector container on this dev host (step 4)
+
+The native Postgres below has no pgvector. The step-4 corpus lives in a separate
+container, so the native server keeps serving the eval that was scheduled on it:
+
+```powershell
+# Password in the git-ignored .env.pgvector, which also holds its DATABASE_URL.
+docker run -d --name copilot-pgvector --restart unless-stopped `
+    -e POSTGRES_PASSWORD=<from .env.pgvector> -e POSTGRES_DB=finance_copilot `
+    -p 127.0.0.1:55433:5432 -v copilot-pgvector-data:/var/lib/postgresql/data `
+    pgvector/pgvector:pg16
+```
+
+`pgvector/pgvector:pg16` is the image CI uses. To make it the default, set
+`DATABASE_URL` in `.env` to the one in `.env.pgvector`, then run
+`alembic upgrade head`, `python scripts/index_corpus.py` (the 15-company corpus)
+or `python scripts/index_filings.py` and `python scripts/index_facts.py` (the
+eval's two filings).
 
 #### Where the data directory goes, and one place it must not
 
