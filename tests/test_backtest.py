@@ -150,3 +150,21 @@ def test_bad_inputs_are_refused():
 
 def test_prices_wrapper_reports_its_length():
     assert len(Prices(*(np.zeros(4) for _ in range(5)))) == 4
+
+
+def test_a_warm_up_lets_a_slow_strategy_trade_from_the_first_day():
+    """SMA 50/200 needs 200 bars; given them before start_day it can be long
+    on the window's first bar instead of sitting flat for most of a year."""
+    start = BARS[300].day
+    result = run_backtest(BARS, "price_above_sma", start_day=start)
+    assert result.days[0] == start.isoformat() and len(result.days) == N - 300
+    strategy = STRATEGIES["price_above_sma"]
+    full = strategy.positions(adjusted_prices(BARS))
+    # The first trade is decided by the warm-up's last position, not by a blank one.
+    assert result.positions[1] == full[300]
+    assert result.benchmark_equity[0] == 10_000.0
+
+
+def test_too_few_bars_after_the_start_are_refused():
+    with pytest.raises(ValueError, match="three bars"):
+        run_backtest(BARS, "buy_and_hold", start_day=BARS[-2].day)

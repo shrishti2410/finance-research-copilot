@@ -20,12 +20,16 @@ from datetime import date, timedelta
 from market import analytics, indicators
 from market.store import MarketData, normalize_ticker
 
-__all__ = ["chart_data", "price_analytics", "WARMUP_CALENDAR_DAYS", "DEFAULT_BENCHMARK",
+__all__ = ["chart_data", "price_analytics", "backtest", "strategy_catalogue",
+           "WARMUP_CALENDAR_DAYS", "BACKTEST_WARMUP_CALENDAR_DAYS", "DEFAULT_BENCHMARK",
            "parse_indicators"]
 
 # Enough trading days for the slowest indicator offered (SMA 200) plus the
 # warm-up of the smoothed ones: 300 calendar days is about 205 trading days.
 WARMUP_CALENDAR_DAYS = 300
+# The slowest strategy rule reads 252 trading days (12-1 momentum): about 365
+# calendar days, plus a margin.
+BACKTEST_WARMUP_CALENDAR_DAYS = 400
 DEFAULT_BENCHMARK = "SPY"
 MAX_INDICATORS = 8
 
@@ -87,3 +91,41 @@ async def price_analytics(ticker: str, start: date, end: date,
     out = analytics.summary(bars, bench_bars)
     return {"ticker": symbol, "benchmark": bench if bench_bars else None,
             "provider": data.provider.name, **out}
+
+
+def strategy_catalogue() -> list[dict]:
+    from market.strategies import STRATEGIES
+    return [{"key": st.key, "name": st.name, "description": st.description,
+             "params": st.params, "allows_short": st.allows_short}
+            for st in STRATEGIES.values()]
+
+
+async def backtest(ticker: str, strategy: str, start: date, end: date,
+                   params: dict | None = None, cost_bps: float = 5.0,
+                   slippage_bps: float = 5.0, initial_cash: float = 10_000.0,
+                   data: MarketData | None = None) -> dict:
+    """Run one strategy on `ticker` from `start` to `end`, with a warm-up
+    before `start` that the strategy reads but does not trade."""
+    from dataclasses import asdict
+
+    from market.backtest import run_backtest
+    from market.strategies import get_strategy
+
+    get_strategy(strategy)                     # an unknown key fails before any fetch
+    data = data or MarketData()
+    symbol = normalize_ticker(ticker)
+    bars = await data.history(symbol, start - timedelta(days=BACKTEST_WARMUP_CALENDAR_DAYS), end)
+    result = run_backtest(bars, strategy, params, initial_cash=initial_cash,
+                          cost_bps=cost_bps, slippage_bps=slippage_bps, start_day=start)
+    return {
+        "ticker": symbol, "provider": data.provider.name,
+        "strategy": result.strategy, "params": result.params,
+        "start": result.days[0], "end": result.days[-1],
+        "cost_bps": cost_bps, "slippage_bps": slippage_bps, "initial_cash": initial_cash,
+        "days": result.days, "equity": result.equity,
+        "benchmark_equity": result.benchmark_equity, "positions": result.positions,
+        "trades": [asdict(t) for t in result.trades],
+        "stats": result.stats, "benchmark_stats": result.benchmark_stats,
+        "execution": "decided at the close, filled at the next open; prices adjusted "
+                     "for dividends and splits",
+    }

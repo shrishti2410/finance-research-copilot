@@ -2,6 +2,8 @@
 
     GET /market/{ticker}/chart?start=2025-11-01&end=2026-11-13&indicators=sma50,bollinger,rsi14
     GET /market/{ticker}/analytics?start=...&end=...&benchmark=SPY
+    GET  /market/strategies
+    POST /market/{ticker}/backtest   {strategy, params, start, end, cost_bps, slippage_bps}
 
 Authenticated like the rest of the app's API: the cache is shared and a
 provider fetch is not free, so it is not an open endpoint. Dates default to
@@ -13,11 +15,19 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 
 from auth.deps import get_current_user
 from db.models import User
 from market.providers import ProviderError
-from market.service import DEFAULT_BENCHMARK, chart_data, parse_indicators, price_analytics
+from market.service import (
+    DEFAULT_BENCHMARK,
+    backtest,
+    chart_data,
+    parse_indicators,
+    price_analytics,
+    strategy_catalogue,
+)
 
 router = APIRouter(prefix="/market", tags=["market"])
 
@@ -66,3 +76,34 @@ async def analytics(ticker: str, start: date | None = None, end: date | None = N
                             f"The price provider could not be reached: {exc}") from None
     except LookupError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
+
+
+@router.get("/strategies")
+async def strategies(user: User = Depends(get_current_user)) -> list[dict]:
+    return strategy_catalogue()
+
+
+class BacktestRequest(BaseModel):
+    strategy: str
+    params: dict[str, float] = Field(default_factory=dict)
+    start: date | None = None
+    end: date | None = None
+    cost_bps: float = Field(default=5.0, ge=0, le=500)
+    slippage_bps: float = Field(default=5.0, ge=0, le=500)
+    initial_cash: float = Field(default=10_000.0, gt=0, le=1e12)
+
+
+@router.post("/{ticker}/backtest")
+async def run(ticker: str, body: BacktestRequest,
+              user: User = Depends(get_current_user)) -> dict:
+    start, end = _range(body.start, body.end)
+    try:
+        return await backtest(ticker, body.strategy, start, end, body.params,
+                              body.cost_bps, body.slippage_bps, body.initial_cash)
+    except KeyError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, exc.args[0]) from None
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
+    except ProviderError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY,
+                            f"The price provider could not be reached: {exc}") from None

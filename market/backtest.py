@@ -163,24 +163,38 @@ def _stats(equity: np.ndarray, held: np.ndarray, trades: list[Trade], costs: flo
     }.items()}
 
 
+def _from(prices: Prices, i: int) -> Prices:
+    return Prices(prices.open[i:], prices.high[i:], prices.low[i:], prices.close[i:],
+                  prices.volume[i:])
+
+
 def run_backtest(bars, strategy: Strategy | str, params: dict | None = None,
                  initial_cash: float = 10_000.0, cost_bps: float = 5.0,
-                 slippage_bps: float = 5.0) -> BacktestResult:
-    """Backtest one strategy on daily bars, with buy-and-hold on the same terms."""
-    if len(bars) < 3:
-        raise ValueError("A backtest needs at least three bars.")
+                 slippage_bps: float = 5.0, start_day=None) -> BacktestResult:
+    """Backtest one strategy on daily bars, with buy-and-hold on the same terms.
+
+    `start_day`: trade from the first bar on or after it; the bars before it are
+    warm-up, read by the strategy (a 200-day average needs 200 days) but not
+    traded. Without it a slow strategy sits flat for its first year while
+    buy-and-hold is invested, and the comparison measures the warm-up.
+    """
     if cost_bps < 0 or slippage_bps < 0:
         raise ValueError("Costs and slippage cannot be negative.")
     strategy = get_strategy(strategy) if isinstance(strategy, str) else strategy
-    prices = adjusted_prices(bars)
-    days = [b.day.isoformat() for b in bars]
+    all_prices = adjusted_prices(bars)
     used = {**strategy.params, **{k: float(v) for k, v in (params or {}).items()
                                    if k in strategy.params}}
-    target = strategy.positions(prices, **used)
+    all_target = strategy.positions(all_prices, **used)
+    first = 0 if start_day is None else next(
+        (i for i, b in enumerate(bars) if b.day >= start_day), len(bars))
+    if len(bars) - first < 3:
+        raise ValueError("A backtest needs at least three bars to trade.")
+    prices, target = _from(all_prices, first), all_target[first:]
+    days = [b.day.isoformat() for b in bars[first:]]
     cost, slip = cost_bps / 1e4, slippage_bps / 1e4
 
     equity, held, trades, costs, turnover = _simulate(prices, target, days, initial_cash, cost, slip)
-    bench_target = get_strategy("buy_and_hold").positions(prices)
+    bench_target = np.ones(len(prices))
     b_equity, b_held, b_trades, b_costs, b_turnover = _simulate(
         prices, bench_target, days, initial_cash, cost, slip)
     return BacktestResult(

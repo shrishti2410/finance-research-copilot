@@ -15,7 +15,7 @@ Nothing was installed.
 |---|---|---|
 | **vectorbt** | Apache 2.0 **with the Commons Clause** (`LICENSE.md`): "the License does not grant to you, the right to Sell the Software", where selling includes hosting "whose value derives, entirely or substantially, from the functionality of the Software" | A hosted demo built on it would be close to that line. Its dependencies (numba, scipy, scikit-learn, plotly, pandas 3) also do not fit an API with 512 MB. |
 | **backtesting.py** | **AGPL-3.0** (0.6.6, July 2026). Section 13 requires offering the source of a modified version to everyone who uses it over a network | The obligations reach the whole served application. |
-| **our own** | this repository's | A daily long/flat/short engine is about 150 lines. Every assumption is in view and tested. |
+| **our own** | this repository's | A daily long/flat/short engine is under 200 lines. Every assumption is in view and tested. |
 
 **Decision: our own.** What it does not do, and the libraries do: intraday bars,
 portfolios of several assets, order types beyond market-on-open, position
@@ -35,6 +35,9 @@ sizing other than all-in, and parameter optimisation.
 - **Adjusted prices.** Open, high, low and close are scaled by `adj_close /
   close`, so dividends are earned and a split is not a crash. Buy-and-hold uses
   the same prices.
+- **Warm-up.** Bars before `start_day` are read by the strategy but not traded,
+  so a 200-day rule can hold a position on the first day of the window, as
+  buy-and-hold does. The API fetches 400 calendar days of warm-up.
 - **Exposure.** The whole equity is committed at 1x long or short, or the
   strategy is flat. There is no interest on cash and no borrow cost for shorts.
 

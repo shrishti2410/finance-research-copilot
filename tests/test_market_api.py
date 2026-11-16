@@ -164,3 +164,39 @@ def test_the_chart_endpoint_needs_a_login_and_serves_bars(fake_market, monkeypat
         stats = client.get(f"/market/ZZCHART/analytics?start={START}&end={END}"
                            f"&benchmark=ZZBENCH", headers=headers).json()
         assert stats["benchmark"] == "ZZBENCH"
+
+
+def test_backtest_service_trades_the_window_with_a_warm_up(fake_market):
+    out = call(service.backtest("ZZCHART", "sma_cross", START, END, {"fast": 10, "slow": 30},
+                                cost_bps=2, slippage_bps=1))
+    assert out["start"] >= START.isoformat() and out["end"] <= END.isoformat()
+    assert out["params"] == {"fast": 10.0, "slow": 30.0}
+    assert len(out["equity"]) == len(out["days"]) == len(out["benchmark_equity"])
+    assert "next open" in out["execution"]
+    assert all(set(t) >= {"side", "entry_day", "entry_price", "net_return"} for t in out["trades"])
+
+
+def test_the_backtest_endpoints(fake_market, monkeypatch):
+    from api.main import app
+    from core.config import settings
+
+    monkeypatch.setattr(settings, "rate_limit_enabled", False)
+    with TestClient(app) as client:
+        if client.get("/health/db").status_code != 200:
+            pytest.skip("Postgres unreachable")
+        assert client.get("/market/strategies").status_code == 401
+        token = client.post("/auth/signup", json={
+            "email": f"bt-{uuid.uuid4().hex[:10]}@example.com",
+            "password": "correct-horse-battery"}).json()["access_token"]
+        headers = {"Authorization": f"Bearer {token}"}
+        catalogue = client.get("/market/strategies", headers=headers).json()
+        assert len(catalogue) >= 12 and {"key", "params", "description"} <= set(catalogue[0])
+        body = {"strategy": "rsi_reversion", "start": str(START), "end": str(END)}
+        ran = client.post("/market/ZZCHART/backtest", json=body, headers=headers)
+        assert ran.status_code == 200 and ran.json()["stats"]["final_equity"] > 0
+        bad = client.post("/market/ZZCHART/backtest", headers=headers,
+                          json={**body, "strategy": "astrology"})
+        assert bad.status_code == 422 and "Known" in bad.json()["detail"]
+        negative = client.post("/market/ZZCHART/backtest", headers=headers,
+                               json={**body, "cost_bps": -1})
+        assert negative.status_code == 422
