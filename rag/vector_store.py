@@ -6,21 +6,28 @@ second service would be pure operational cost, and keeping vectors next to the
 relational data means a metadata filter is a WHERE clause rather than a
 post-filter over an approximate result set.
 
-Two storage backends, chosen by the migration, detected here at runtime
-=====================================================================
-`vector(384)` from **pgvector** is the target and what production runs. It gives
-a cosine-distance operator and an HNSW index.
+pgvector only
+=============
+The embedding column is `vector(384)` from **pgvector**, searched by cosine
+distance through an HNSW index (migrations 0002 and 0005).
 
-Where the pgvector extension is not installed, migration 0002 falls back to a
-plain `real[]` column and this module computes the dot product in SQL. That is a
-sequential scan with no ANN index -- fine for the ~113 chunks in this repo,
-useless at a million.
+Until 2026-11-16 a server without pgvector got a plain `real[]` column and a
+dot product computed in SQL: a sequential scan, fine for the 113 chunks of two
+filings and wrong for the 15-company corpus of step 4. That fallback is gone
+from this path. A `real[]` column is now `VectorStoreNotReady` at the first
+search, with the fix in the message, rather than a quietly slower answer.
+Migration 0005 converts an existing `real[]` column where pgvector can be
+installed, and refuses where it cannot.
 
-**The two backends return identical scores.** `rag/embeddings.py` emits
-L2-normalized vectors, so cosine similarity equals the inner product, and both
-expressions below compute exactly that. The fallback changes how fast a search
-is, not what it returns -- which is what makes numbers measured on the fallback
-worth reporting.
+HNSW and filters
+----------------
+An approximate index scan reads `hnsw.ef_search` candidates (40 by default)
+and *then* applies the WHERE clause. With 15 companies a filter on one of them
+keeps about one candidate in fifteen, so a k=30 search could come back with two
+rows. pgvector 0.8's iterative scan keeps reading the graph until the filter is
+satisfied; `search` turns it on for its own transaction (`SET LOCAL`).
+`scripts/retrieval_latency.py` measures what the index returns against an
+exact scan.
 """
 
 from __future__ import annotations
@@ -39,7 +46,12 @@ from rag.embeddings import EMBEDDING_DIM, EMBEDDING_MODEL
 TABLE = "filing_chunks"
 
 BACKEND_PGVECTOR = "pgvector"
-BACKEND_ARRAY = "float_array"
+
+# How many candidates an HNSW scan keeps while searching. pgvector's default is
+# 40; the retriever asks for 30 candidates before re-ranking, so 40 leaves
+# little room for the graph's approximation. 100 is measured in
+# benchmarks/STEP4_CORPUS.md.
+HNSW_EF_SEARCH = 100
 
 # Column list shared by every read, so a row tuple and this list cannot drift.
 _COLUMNS = (
@@ -84,33 +96,31 @@ async def detect_backend(conn) -> str:
         raise VectorStoreNotReady(
             f"table {TABLE!r} not found -- run `alembic upgrade head`"
         )
-    # information_schema spells an array of real as '_float4'.
-    return BACKEND_PGVECTOR if row[0] == "vector" else BACKEND_ARRAY
+    if row[0] != "vector":
+        # information_schema spells an array of real as '_float4'.
+        raise VectorStoreNotReady(
+            f"{TABLE}.embedding is {row[0]!r}, not pgvector's 'vector'. Run Postgres "
+            f"with pgvector (docs/DATABASE.md) and `alembic upgrade head`; migration "
+            f"0005 converts the column."
+        )
+    return BACKEND_PGVECTOR
 
 
-def _bind(vector: Sequence[float], backend: str):
-    """The Python value to bind for a vector parameter.
+def _bind(vector: Sequence[float], backend: str = BACKEND_PGVECTOR):
+    """The Python value to bind for a vector parameter: pgvector's text form.
 
-    asyncpg infers each parameter's type from the SQL, not from the value, so
-    the value has to match what the cast in `_expr` asks for:
-
-      * `real[]` -- a list of floats, which asyncpg encodes as a Postgres array.
-      * `vector` -- pgvector's own text form, bound as text. asyncpg has no codec
-        for the extension's binary format, so the string goes in as text and
-        Postgres converts. That is why `_expr` casts through text rather than
-        writing the more obvious `:qvec::vector`, which would make asyncpg try to
-        encode a type it does not know.
+    asyncpg infers each parameter's type from the SQL, not from the value, and
+    has no codec for the extension's binary format, so the string goes in as
+    text and Postgres converts. That is why `_expr` casts through text rather
+    than writing the more obvious `:qvec::vector`, which would make asyncpg try
+    to encode a type it does not know.
     """
-    if backend == BACKEND_PGVECTOR:
-        return "[" + ",".join(f"{float(v):.7g}" for v in vector) + "]"
-    return [float(v) for v in vector]
+    return "[" + ",".join(f"{float(v):.7g}" for v in vector) + "]"
 
 
-def _expr(param: str, backend: str) -> str:
-    """SQL for a bound vector parameter, cast to the column's type."""
-    if backend == BACKEND_PGVECTOR:
-        return f"CAST(CAST(:{param} AS text) AS vector)"
-    return f"CAST(:{param} AS real[])"
+def _expr(param: str, backend: str = BACKEND_PGVECTOR) -> str:
+    """SQL for a bound vector parameter, cast to pgvector's type."""
+    return f"CAST(CAST(:{param} AS text) AS vector)"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -286,8 +296,13 @@ async def search(
     fiscal_period: str | None = None,
     min_score: float | None = None,
     backend: str | None = None,
+    exact: bool = False,
 ) -> list[SearchHit]:
     """Cosine-similarity search with optional metadata filtering.
+
+    `exact` skips the HNSW index and scans every row: the true top-k, for
+    measuring what the index returns (scripts/retrieval_latency.py). The
+    `SET LOCAL` settings last until the caller's transaction ends.
 
     Filters are SQL predicates evaluated *before* the top-k, not a filter applied
     to the results afterwards. That distinction is the whole point: post-filtering
@@ -297,16 +312,10 @@ async def search(
     qvec = _expr("qvec", backend)
     params: dict[str, Any] = {"qvec": _bind(query_vector, backend), "k": k}
 
-    if backend == BACKEND_PGVECTOR:
-        # <=> is cosine distance; similarity is 1 - distance. Ordering by the
-        # raw operator expression is what lets the HNSW index be used.
-        score_sql = f"1 - (embedding <=> {qvec})"
-        order_sql = f"embedding <=> {qvec} ASC"
-    else:
-        # Both operands are unit vectors, so the dot product *is* the cosine.
-        score_sql = (f"(SELECT COALESCE(SUM(a::float8 * b::float8), 0) "
-                     f"FROM unnest(embedding, {qvec}) AS t(a, b))")
-        order_sql = "score DESC"
+    # <=> is cosine distance; similarity is 1 - distance. Ordering by the raw
+    # operator expression is what lets the HNSW index be used.
+    score_sql = f"1 - (embedding <=> {qvec})"
+    order_sql = f"embedding <=> {qvec} ASC"
 
     where = ["embedding IS NOT NULL"]
     if ticker:
@@ -328,6 +337,15 @@ async def search(
     if fiscal_period:
         where.append("fiscal_period = :fiscal_period")
         params["fiscal_period"] = fiscal_period
+
+    if not exact:
+        # For this transaction only. See the module docstring: without the
+        # iterative scan a filtered HNSW search returns fewer than k rows.
+        await conn.execute(text(f"SET LOCAL hnsw.ef_search = {int(HNSW_EF_SEARCH)}"))
+        await conn.execute(text("SET LOCAL hnsw.iterative_scan = relaxed_order"))
+    else:
+        # The exact answer, for measuring the index against: no index scan.
+        await conn.execute(text("SET LOCAL enable_indexscan = off"))
 
     columns = ", ".join(_COLUMNS)
     sql = f"""
