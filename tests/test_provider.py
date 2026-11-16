@@ -351,3 +351,37 @@ def test_the_agent_records_cached_prompt_tokens_per_call_and_in_total():
 def test_a_provider_that_reports_no_cache_block_records_zero():
     result, _ = _drive(model="big", router_model="", provider="ollama")
     assert result.cached_prompt_tokens == 0
+
+
+# -- a second hosted provider ---------------------------------------------------
+
+def test_cerebras_is_a_provider_and_needs_its_own_key():
+    s = Settings(_env_file=None, agent_provider="cerebras", cerebras_api_key=FAKE_KEY)
+    assert s.router_provider == "cerebras"
+    assert s.cerebras_base_url == "https://api.cerebras.ai/v1"
+    for fields in ({"agent_provider": "cerebras"}, {"agent_router_provider": "cerebras"}):
+        with pytest.raises(ValueError) as caught:
+            Settings(_env_file=None, cerebras_api_key="", groq_api_key=FAKE_KEY, **fields)
+        assert "CEREBRAS_API_KEY" in str(caught.value)
+        assert FAKE_KEY not in str(caught.value)
+
+
+def test_one_providers_key_does_not_unlock_the_other():
+    with pytest.raises(ValueError) as caught:
+        Settings(_env_file=None, agent_provider="groq", cerebras_api_key=FAKE_KEY,
+                 groq_api_key="")
+    assert "GROQ_API_KEY" in str(caught.value)
+
+
+def test_the_proxy_knows_both_hosted_providers_and_their_urls(monkeypatch):
+    monkeypatch.setattr(settings, "cerebras_api_key", FAKE_KEY)
+    providers = inference_proxy._hosted_providers()
+    assert set(providers) == {"groq", "cerebras"}
+    assert providers["cerebras"] == ("https://api.cerebras.ai/v1", FAKE_KEY)
+
+
+def test_the_example_env_offers_cerebras_with_an_empty_key():
+    from pathlib import Path
+    text = (Path(__file__).resolve().parent.parent / ".env.example").read_text(encoding="utf-8")
+    assert "\nCEREBRAS_API_KEY=\n" in text, "a placeholder must not work as a value"
+    assert "CEREBRAS_BASE_URL=https://api.cerebras.ai/v1" in text
