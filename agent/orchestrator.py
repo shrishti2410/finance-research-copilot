@@ -200,6 +200,29 @@ def split_final_figure(answer: str) -> tuple[str, str | None]:
     return text, figure
 
 
+# What the user reads when the model wrote its "Final figure:" line and nothing
+# else. Removing the line then left an empty answer, which was reported as
+# "The model returned an empty response. This is a failure, not an answer."
+# while `final_figure` still carried the number: the user was told there was no
+# answer and the eval scored one.
+FIGURE_ONLY_ANSWER = "The answer is {figure}."
+
+
+def with_a_sentence(answer: str) -> str:
+    """`answer`, with a sentence stating its figure put first if the
+    "Final figure:" line is all the model wrote.
+
+    The sentence repeats the figure exactly as the line gives it, so it adds
+    no number to the text: what the grounding guard decided about the line
+    holds for the sentence. An answer with prose of its own, with no line, or
+    with "Final figure: none" is returned unchanged.
+    """
+    prose, figure = split_final_figure(answer)
+    if prose.strip() or figure in (None, FINAL_FIGURE_NONE):
+        return answer
+    return FIGURE_ONLY_ANSWER.format(figure=figure) + "\n" + answer
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Streaming the model call
 # ─────────────────────────────────────────────────────────────────────────────
@@ -867,6 +890,11 @@ async def run_agent(
                     # router is not for.
                     escalate_next = True
                     continue
+
+                # After the grounding check and before the caveat and the
+                # advice check, so both of those see the sentence the user
+                # will read. See with_a_sentence.
+                answer = with_a_sentence(answer)
 
                 # The retry is spent and figures are still unaccounted for.
                 # The answer is not thrown away -- its prose is often right and

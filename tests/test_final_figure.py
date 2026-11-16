@@ -210,3 +210,43 @@ def test_a_redirected_advisory_answer_carries_no_final_figure():
     result = _drive(["NVIDIA at 71.07% is a strong buy.\nFinal figure: 71.07%"])
     assert result.stop_reason == "investment_advice"
     assert result.final_figure is None
+
+
+# -- an answer that is only the line -------------------------------------------
+
+@pytest.mark.parametrize("only_the_line", [
+    "Final figure: 71.07%", "**Final figure:** 71.07%.", "\n\nFinal figure: 71.07%\n",
+])
+def test_an_answer_that_is_only_the_line_still_reads_as_a_sentence(only_the_line):
+    """It used to come back as "The model returned an empty response. This is a
+    failure, not an answer." with the figure still recorded and scored."""
+    result = _drive([only_the_line])
+    assert result.answer == "The answer is 71.07%."
+    assert result.final_figure == "71.07%"
+    assert result.completed is True and result.stop_reason == "final_answer"
+    assert result.steps[-1].result == result.answer and result.steps[-1].ok
+
+
+def test_an_invented_figure_alone_on_the_line_is_still_flagged():
+    """The sentence repeats the line's figure, so it changes nothing the guard
+    decided: retried once, then answered under the caveat, never as fact."""
+    result = _drive(["Final figure: 64.2%", "Final figure: 64.2%"])
+    assert result.stop_reason == "unverified_figures" and result.completed is False
+    assert result.answer.startswith("[Unverified:") and "64.2%" in result.answer.split("]")[0]
+    assert result.answer.endswith("The answer is 64.2%.")
+    assert [s.tool for s in result.steps].count("ungrounded_answer") == 1
+
+
+def test_a_line_that_declines_with_nothing_else_is_still_an_empty_response():
+    result = _drive(["Final figure: none"])
+    assert result.stop_reason == "empty_response" and result.completed is False
+    assert result.final_figure == FINAL_FIGURE_NONE
+    assert "empty response" in result.answer
+
+
+def test_an_answer_with_prose_of_its_own_is_not_given_another_sentence():
+    from agent.orchestrator import with_a_sentence
+    text = "NVIDIA's gross margin was 71.07%.\nFinal figure: 71.07%"
+    assert with_a_sentence(text) == text
+    assert with_a_sentence("No line here.") == "No line here."
+    assert with_a_sentence("") == ""
