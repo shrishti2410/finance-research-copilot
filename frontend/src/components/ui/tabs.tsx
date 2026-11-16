@@ -13,7 +13,10 @@ export function TabsList({ className, ...props }: React.ComponentProps<typeof Ta
   return (
     <TabsPrimitive.List
       className={cn(
-        "flex w-full gap-1 overflow-x-auto border-b border-border [scrollbar-width:none]",
+        // Fits five tabs at 390px; on narrower screens it scrolls, and the
+        // right edge fades so the cut-off tab reads as "more this way".
+        "flex w-full gap-0 overflow-x-auto border-b border-border [scrollbar-width:none] sm:gap-1",
+        "max-[379px]:[mask-image:linear-gradient(to_right,black_80%,transparent)]",
         className,
       )}
       {...props}
@@ -25,7 +28,7 @@ export function TabsTrigger({ className, ...props }: React.ComponentProps<typeof
   return (
     <TabsPrimitive.Trigger
       className={cn(
-        "-mb-px shrink-0 border-b-2 border-transparent px-3 py-2.5 text-sm font-medium text-fg-muted transition-colors hover:text-fg data-[state=active]:border-accent data-[state=active]:text-fg",
+        "-mb-px shrink-0 border-b-2 border-transparent px-2 py-2.5 text-sm font-medium text-fg-muted transition-colors hover:text-fg data-[state=active]:border-accent data-[state=active]:text-fg sm:px-3",
         className,
       )}
       {...props}

@@ -435,7 +435,7 @@ function ResearchTab({ ticker }: { ticker: string }) {
               href={`/research?q=${encodeURIComponent(q)}`}
               className="flex items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface px-4 py-3 text-sm text-fg hover:border-fg-subtle"
             >
-              <MessageSquare className="size-4 text-accent" aria-hidden="true" />
+              <MessageSquare className="size-4 shrink-0 text-accent" aria-hidden="true" />
               {q}
             </Link>
           </li>
