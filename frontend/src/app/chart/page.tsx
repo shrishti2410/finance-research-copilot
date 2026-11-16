@@ -71,7 +71,7 @@ function ChartWorkspace() {
     <main className="mx-auto max-w-5xl px-4 py-6">
       <div className="mb-4 flex items-baseline justify-between">
         <h1 className="text-lg font-medium">Price chart</h1>
-        <Link href="/" className="text-xs text-neutral-400 underline">Back to the chat</Link>
+        <Link href="/research" className="text-xs text-neutral-400 underline">Back to the chat</Link>
       </div>
 
       <form

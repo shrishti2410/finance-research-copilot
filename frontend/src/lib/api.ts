@@ -217,6 +217,38 @@ export interface BacktestResult {
   execution: string;
 }
 
+export interface QuoteCard {
+  ticker: string;
+  exchange: string;
+  currency: string;
+  currency_symbol: string;
+  as_of: string;
+  price: number;
+  change_pct: number | null;
+  sparkline: number[];
+}
+
+export interface WatchlistCard extends QuoteCard {
+  signal?:
+    | {
+        signal: "BUY" | "SELL" | "HOLD";
+        score: number;
+        confidence: number;
+        coverage: string;
+        regime: string;
+        warnings: string[];
+      }
+    | { error: string };
+  error?: string;
+}
+
+export interface Watchlist {
+  index: QuoteCard | null;
+  stocks: WatchlistCard[];
+  provider: string;
+  disclaimer: string;
+}
+
 export interface MessageMeta {
   agent?: {
     model: string;
@@ -289,6 +321,8 @@ export const api = {
     ),
 
   me: (token: string) => request<User>("/auth/me", { token }),
+
+  watchlist: (token: string) => request<Watchlist>("/market/watchlist", { token }),
 
   listConversations: (token: string) =>
     request<Conversation[]>("/conversations", { token }),

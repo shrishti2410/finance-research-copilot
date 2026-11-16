@@ -19,7 +19,7 @@ export default function LoginPage() {
   }, []);
 
   useEffect(() => {
-    if (ready && token) router.replace("/");
+    if (ready && token) router.replace("/dashboard");
   }, [ready, token, router]);
 
   return (
@@ -54,7 +54,7 @@ export default function LoginPage() {
                 setPending(true);
                 try {
                   await demo();
-                  router.replace("/");
+                  router.replace("/dashboard");
                 } finally {
                   setPending(false);
                 }
@@ -66,7 +66,7 @@ export default function LoginPage() {
         setPending(true);
         try {
           await login(email, password);
-          router.replace("/");
+          router.replace("/dashboard");
         } finally {
           setPending(false);
         }

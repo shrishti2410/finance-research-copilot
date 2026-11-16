@@ -1,25 +1,74 @@
 @import "tailwindcss";
 
-/* The app is designed dark, with light text, in every colour scheme. These were
-   create-next-app's light defaults (white, near-black), switched to dark only
-   under prefers-color-scheme: dark. The unlayered `body` rule below beats the
-   layout's bg-neutral-950 class, so a browser in light mode drew a white page
-   under the app's light-grey text. */
+/*
+ * The design system: one dark theme, defined once here as Tailwind tokens.
+ *
+ * Colour rules
+ *   - Green and red mean exactly two things: a gain or loss, and a BUY or SELL
+ *     signal. Nothing else in the interface uses them.
+ *   - The accent (blue) marks what is interactive: links, focus, the primary
+ *     button. HOLD and neutral states use the muted greys.
+ *   - Contrast (WCAG 2.x ratios, computed for these values on 2026-11-16;
+ *     against bg / the lightest surface, surface-2): fg 16.3 / 14.2,
+ *     fg-muted 8.6 / 7.5, fg-subtle 5.4 / 4.7, accent 8.8 / 7.7, up 9.7 / 8.5,
+ *     down 6.5 / 5.7, warn 10.0 / 8.8. Every text colour is at least 4.5:1 on
+ *     every surface. The primary button puts bg-coloured text on
+ *     accent-strong (5.7:1); white on it would be 3.4:1.
+ *
+ * Type: Geist for text, Geist Mono for figures (set in layout.tsx), with
+ * tabular numbers wherever prices line up.
+ *
+ * Spacing and radius come from Tailwind's default scale; the radius tokens
+ * below are the only ones used for surfaces.
+ */
+@theme {
+  --color-bg: #0b0f14;
+  --color-surface: #11161d;
+  --color-surface-2: #171e28;
+  --color-border: #253041;
+  --color-fg: #e8edf3;
+  --color-fg-muted: #a3afbf;
+  --color-fg-subtle: #7d899b;
+  --color-accent: #6cb4ff;
+  --color-accent-strong: #3b8eea;
+  --color-up: #3fd17f;
+  --color-up-soft: rgb(63 209 127 / 0.12);
+  --color-down: #f26b6b;
+  --color-down-soft: rgb(242 107 107 / 0.12);
+  --color-warn: #e8b34b;
+
+  --radius-card: 0.875rem;
+  --radius-control: 0.625rem;
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+}
+
 :root {
-  --background: #0a0a0a;
-  --foreground: #ededed;
   color-scheme: dark;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* Figures that line up in tables and cards. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

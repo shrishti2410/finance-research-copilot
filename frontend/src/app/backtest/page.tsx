@@ -125,7 +125,7 @@ export default function BacktestPage() {
         <h1 className="text-lg font-medium">Backtest a strategy</h1>
         <div className="flex gap-4 text-xs text-neutral-400">
           <Link href="/chart" className="underline">Price charts</Link>
-          <Link href="/" className="underline">Back to the chat</Link>
+          <Link href="/research" className="underline">Back to the chat</Link>
         </div>
       </div>
 

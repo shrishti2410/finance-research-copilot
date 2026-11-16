@@ -1,0 +1,33 @@
+{
+  "_comment": "Every figure on the landing page, with the benchmark record it comes from and the exact text it is quoted from. tests/test_site_metrics.py fails if a quote is not in its source, so a number here cannot drift from what was measured.",
+  "metrics": [
+    {
+      "value": "36/40",
+      "label": "eval questions answered correctly",
+      "detail": "gpt-oss-120b on Groq, one run of the 40-question set built from the 10-K corpus, graded automatically against the filed figures.",
+      "source": "benchmarks/HOSTED_RUN_2026-11-16.md",
+      "quote": "**Result: 36/40 passed"
+    },
+    {
+      "value": "2,914",
+      "label": "10-K passages indexed",
+      "detail": "45 annual reports from 15 companies, searched with pgvector.",
+      "source": "benchmarks/STEP4_CORPUS.md",
+      "quote": "45 filings, 15 companies, **2,914 chunks**"
+    },
+    {
+      "value": "62,387",
+      "label": "reported figures, queryable",
+      "detail": "XBRL facts from SEC EDGAR, so numbers come from filings, not from memory.",
+      "source": "benchmarks/STEP4_CORPUS.md",
+      "quote": "62,387 facts rows"
+    },
+    {
+      "value": "0 of 10",
+      "label": "unseen stocks where the signal beat buy-and-hold",
+      "detail": "Five years out of sample. The project reports that it found no edge.",
+      "source": "benchmarks/SIGNALS_7C.md",
+      "quote": "CAGR below buy-and-hold on **10 of 10**"
+    }
+  ]
+}

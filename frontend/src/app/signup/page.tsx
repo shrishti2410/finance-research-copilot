@@ -11,7 +11,7 @@ export default function SignupPage() {
   const [pending, setPending] = useState(false);
 
   useEffect(() => {
-    if (ready && token) router.replace("/");
+    if (ready && token) router.replace("/dashboard");
   }, [ready, token, router]);
 
   return (
@@ -30,7 +30,7 @@ export default function SignupPage() {
         setPending(true);
         try {
           await signup(email, password);
-          router.replace("/");
+          router.replace("/dashboard");
         } finally {
           setPending(false);
         }
