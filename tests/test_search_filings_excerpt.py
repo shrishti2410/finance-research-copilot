@@ -21,10 +21,12 @@ import asyncio
 import pytest
 
 from agent import tools
-from agent.grounding import unsupported_figures
+from agent.grounding import ungrounded_operands, unsupported_figures
+from agent.grounding import unsupported_figures_reconstructing as reconstructed
 from agent.orchestrator import Step
 from agent.tools import _excerpt, _rows, compact_for_model
 from rag import vector_store as vs
+from tools.calculator import calculate
 
 # One event loop for the module, as tests/test_retrieval.py does. `asyncio.run`
 # makes a fresh loop per call and the shared engine's pool stays bound to the
@@ -171,4 +173,17 @@ def test_market_cap_from_the_real_statement_and_a_price_is_grounded(nvda_stateme
     ]
     answer = ("With 24,514 million diluted shares and a close of $223.71, the implied "
               "market capitalisation is about $5.48 trillion.")
+    # Until 2026-11-16 the guard accepted this by redoing the multiplication.
+    # That rule is kept under its own name and still holds on the real chunk.
+    assert [f.text for f in reconstructed(answer, steps)] == []
+
+    # Now the product has to come from the calculator. What this test is about
+    # is unchanged: the share count has to be in the trace in absolute units,
+    # or it could not be an operand at all.
+    assert [f.text for f in unsupported_figures(answer, steps)] == ["$5.48 trillion"]
+    assert ungrounded_operands({"a": (24514000000, 24514000000.0),
+                                "b": (223.71, 223.71)}, steps) == []
+    product = asyncio.run(calculate("multiply", 24514000000, 223.71))
+    steps.append(Step(iteration=3, tool="calculate", arguments={}, result=product,
+                      latency_ms=1, model_latency_ms=1, ok=True))
     assert [f.text for f in unsupported_figures(answer, steps)] == []

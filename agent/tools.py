@@ -46,6 +46,7 @@ from typing import Any, Literal
 
 from rag.retriever import search_filings as _search_filings
 from tools.base import ok
+from tools.calculator import calculate
 from tools.facts import (
     UNKNOWN_ARGUMENT_HINT,
     fiscal_year_end,
@@ -254,6 +255,8 @@ def build_registry() -> Registry:
     registry.register(search_filings, aliases={"ticker": "company"})
     registry.register(get_stock_price)
     registry.register(calculate_ratio)
+    registry.register(calculate, aliases={"op": "operation", "operator": "operation",
+                                          "x": "a", "y": "b"})
     registry.register(search_news)
     return registry
 

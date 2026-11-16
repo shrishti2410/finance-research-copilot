@@ -176,6 +176,7 @@ prompt alone was measured not to hold.
 | `search_filings` | `rag/retriever.py` over `filing_chunks` | BGE query embedding, SQL-side filters (company, section), over-fetch then hybrid re-rank (lexical overlap + table boost for figure-seeking questions) |
 | `get_stock_price` | yfinance | inclusive `end_date`, optional; split/dividend-adjusted; summary fields always cover the full range |
 | `calculate_ratio` | yfinance statements; `xbrl_facts` when `fiscal_year` is given | 7 ratios; returns formula and raw inputs; `pe_ratio` from Yahoo's trailing P/E. With `fiscal_year`, margins, return on equity and current ratio come from that year's facts |
+| `calculate` | code (`tools/calculator.py`) | one step of arithmetic on two operands: add, subtract, multiply, divide, percent_change, percent_of. An operand is a fact reference (`NVDA:revenue:2026`) or a number a tool returned this turn; a number no tool returned is refused before the tool runs. Every derived figure goes through it: the grounding guard accepts a figure only if a tool result contains it |
 | `search_news` | Google News RSS | no API key; `days_back` is filtered locally, not by the feed |
 
 Schemas are generated from each function's signature and docstring

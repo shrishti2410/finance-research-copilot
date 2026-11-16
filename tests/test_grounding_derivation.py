@@ -30,6 +30,7 @@ import warnings
 import pytest
 
 from agent.grounding import supported, unsupported_figures
+from agent.grounding import unsupported_figures_reconstructing as reconstructed
 from agent.orchestrator import Step
 
 pytestmark = pytest.mark.safety
@@ -99,25 +100,18 @@ UNRELATED_PERCENTAGES = {
 }
 
 
-def test_known_limitation_a_round_figure_equal_to_two_unrelated_percentages_passes():
-    """Pins a gap this change does NOT close, so it is visible rather than assumed.
+def test_a_round_figure_equal_to_two_unrelated_percentages_is_flagged():
+    """Was a pinned known limitation; closed on 2026-11-16.
 
-    29% and 7% are both real figures, so both are operands, and 29 - 7 = 22
-    exactly. An answer that invents "22%" claims only +/- 0.5, and the
-    derivation lands inside that. The precision rule blocks "21.9%" and the
-    operand rule blocks "Item 7", but a round invented figure that happens to
-    equal the difference of two unrelated percentages goes through.
-
-    Recorded in docs/KNOWN_LIMITATIONS.md. The planned fix is to require a
-    derived figure's operands to come from calculate_ratio's own output rather
-    than from retrieved text; when that lands, flip the first assertion and
-    move this test up to the regression section.
+    29% and 7% are both real figures and 29 - 7 = 22 exactly, so under the
+    rule that reconstructed arithmetic an invented "22%" went through. A
+    figure now has to be in a tool result, and 22 is in none.
     """
     steps = [_ok("search_filings", UNRELATED_PERCENTAGES)]
-    assert not _flagged("22", unsupported_figures("The net margin was 22%.", steps)), (
-        "if this now fails, the limitation is closed: update KNOWN_LIMITATIONS.md "
-        "and turn this into a regression test")
+    assert _flagged("22", unsupported_figures("The net margin was 22%.", steps))
     assert _flagged("21.9", unsupported_figures("The net margin was 21.9%.", steps))
+    assert not _flagged("22", reconstructed("The net margin was 22%.", steps)), (
+        "the old rule, kept for reference, still has the gap")
 
 
 # ── the legacy two-argument form cannot be used by accident ───────────────────
@@ -157,7 +151,7 @@ def test_revenue_derived_from_gross_profit_over_margin_is_supported():
     })]
     answer = ("Gross profit was $153.46 billion at a 71.07% margin, so revenue "
               "was approximately $215.9 billion.")
-    assert _texts(unsupported_figures(answer, steps)) == []
+    assert _texts(reconstructed(answer, steps)) == []
 
 
 def test_market_cap_from_a_filing_share_count_and_a_tool_price_is_supported():
@@ -183,7 +177,7 @@ def test_market_cap_from_a_filing_share_count_and_a_tool_price_is_supported():
     ]
     answer = ("With 24,514 million diluted shares and a close of $223.71, the "
               "implied market capitalisation is about $5.48 trillion.")
-    assert _texts(unsupported_figures(answer, steps)) == []
+    assert _texts(reconstructed(answer, steps)) == []
 
 
 def test_the_difference_of_two_margins_is_supported():
@@ -195,7 +189,7 @@ def test_the_difference_of_two_margins_is_supported():
     ]
     answer = ("NVIDIA's gross margin was 71.07%, while Apple's was 48.79%. The "
               "difference is 22.28 percentage points.")
-    assert _texts(unsupported_figures(answer, steps)) == []
+    assert _texts(reconstructed(answer, steps)) == []
 
 
 def test_a_derived_figure_stated_beyond_what_the_arithmetic_gives_is_not_supported():
@@ -226,10 +220,10 @@ def test_table_cells_under_a_units_note_count_as_operands_as_written_and_scaled(
         _ok("get_stock_price", {"ok": True, "last": {"close": 223.71}}, iteration=2),
     ]
     # 68 + 53, read under the note, is $121 million.
-    assert _texts(unsupported_figures(
+    assert _texts(reconstructed(
         "Interest income over the two years totalled $121 million.", steps)) == []
     # 223.71 / 4.90, with the per-share cell left as written, is 45.7x.
-    assert _texts(unsupported_figures(
+    assert _texts(reconstructed(
         "At $223.71 the fiscal 2026 diluted EPS of $4.90 implies a P/E of 45.7x.",
         steps)) == []
 
@@ -242,7 +236,7 @@ def test_a_percent_column_counts_as_operands():
                     "Compute & Networking $193,479 $116,193 $77,286 67 % Graphics "
                     "22,459 14,304 8,155 57 %"),
     }]})]
-    assert _texts(unsupported_figures(
+    assert _texts(reconstructed(
         "Compute & Networking grew 10 percentage points faster than Graphics "
         "(67% against 57%).", steps)) == []
 
@@ -255,7 +249,7 @@ def test_rounding_to_the_stated_precision_is_allowed():
             "excerpt": "Diluted weighted average shares 24,514",
             "rows": [{"label": "Diluted", "values_absolute": [24514000000.0]}]}]}),
     ]
-    assert _texts(unsupported_figures("That is roughly $5.5 trillion.", steps)) == []
+    assert _texts(reconstructed("That is roughly $5.5 trillion.", steps)) == []
 
 
 # ── operands the answer itself rounded ────────────────────────────────────────
@@ -279,13 +273,13 @@ def test_a_market_cap_on_the_price_as_the_answer_rounds_it_passes():
     $5,484.02 billion, $7.3 million away -- outside half a unit of $0.01 billion."""
     answer = ("With 24,514 million diluted shares and a close of $223.71, the "
               "implied market capitalisation is $5,484.03 billion.")
-    assert _texts(unsupported_figures(answer, [PRICE_STEP, SHARES_STEP])) == []
+    assert _texts(reconstructed(answer, [PRICE_STEP, SHARES_STEP])) == []
 
 
 def test_the_same_market_cap_written_out_in_full_passes():
     answer = ("24,514,000,000 shares x $223.71 = $5,484,026,940,000 implied "
               "market capitalisation.")
-    assert _texts(unsupported_figures(answer, [PRICE_STEP, SHARES_STEP])) == []
+    assert _texts(reconstructed(answer, [PRICE_STEP, SHARES_STEP])) == []
 
 
 def test_without_the_rounded_price_in_the_answer_the_exact_close_is_used():
@@ -309,7 +303,7 @@ def test_a_pe_from_a_rounded_price_and_a_rounded_eps_passes():
     steps = [_ok("calculate_ratio", {"ok": True, "ticker": "NVDA",
                                      "inputs": {"price": 171.2539, "trailing_eps": 7.9123}})]
     answer = ("At a price of $171.25 and trailing EPS of $7.91, the P/E is 21.65x.")
-    assert _texts(unsupported_figures(answer, steps)) == []
+    assert _texts(reconstructed(answer, steps)) == []
 
 
 def test_rounding_does_not_reopen_the_item_number_derivation():
@@ -407,13 +401,13 @@ def _big_turn():
 def test_a_derivation_from_operands_the_answer_states_passes_in_a_big_turn():
     answer = ("Apple's gross margin of $195,201 million on total net sales of "
               "$416,161 million is 46.9%.")
-    assert _texts(unsupported_figures(answer, _big_turn())) == []
+    assert _texts(reconstructed(answer, _big_turn())) == []
 
 
 def test_the_working_shown_as_a_ratio_and_a_percentage_passes_in_a_big_turn():
     answer = ("Gross margin = 195,201 million / 416,161 million = 0.469, "
               "which is 46.9%.")
-    assert _texts(unsupported_figures(answer, _big_turn())) == []
+    assert _texts(reconstructed(answer, _big_turn())) == []
 
 
 def test_an_invented_figure_in_a_big_turn_is_still_blocked():

@@ -126,48 +126,41 @@ pins all three, including that finished runs are released from the registry.
 
 ---
 
-## A round invented figure equal to the difference of two unrelated percentages passes the grounding guard
+## The calculator computes what it is asked to, not what the question needs
 
-**What happens.** The grounding guard accepts a figure that is one arithmetic
-step away from two figures in the turn's tool results. Since 2026-11-11 the
-operands must be figures (not bare integers from prose or labels, not the
-tool's own bookkeeping) and the result must match to the answer's own
-precision. That closes the case found in eval run-b, where "29% increase in
-compensation" minus the 7 in "Item 7" let an invented **21.93%** through.
+**What happens.** Since 2026-11-16 every derived figure comes from the
+`calculate` tool, and the grounding guard accepts a figure only if a tool
+result contains it (`agent/grounding.py`, `tools/calculator.py`). The model no
+longer does arithmetic, and an operand has to be a figure a tool returned or a
+fact reference the tool looks up. What the guard still does not judge is the
+choice of operands and operation. On the Qwen eval of 2026-11-15 a model
+divided net income by pretax income and called the result a tax rate. Through
+the calculator that is `percent_of(net_income, pretax_income)`: real operands,
+exact arithmetic, a figure in a tool result, and the wrong answer.
 
-It does not close this one: retrieved text says "compensation rose 29% while
-headcount grew 7%", and a draft invents "the net margin was **22%**". Both
-operands are real percentages, 29 − 7 = 22 exactly, and a figure written as
-"22%" claims only ±0.5. The guard accepts it. "21.9%" is refused (precision),
-and so is anything that needs the item number, but a round figure that happens
-to equal the difference, sum, product or quotient of two unrelated figures in
-the evidence goes through. `tests/test_grounding_derivation.py::
-test_known_limitation_a_round_figure_equal_to_two_unrelated_percentages_passes`
-pins the current behaviour so that closing it is a visible change.
+**Why.** Which two figures make a tax rate is knowledge about finance, not
+about where a number came from. The guard checks provenance.
 
-**Why.** The derivation allowance exists for arithmetic the model should be
-free to show: revenue from gross profit and a margin, market cap from shares
-and a price, the gap between two margins. The guard cannot tell a related pair
-of operands from an unrelated one by their values alone, and a rule that tried
-to ("both operands from the same result", say) would refuse market cap, whose
-operands come from two tools. The change made on 2026-11-11 took the cheap
-ground -- what counts as an operand, and how closely the result must match --
-and stopped where the next step costs correct answers.
+**What it would take to fix properly.** Named recipes for the common derived
+figures (effective tax rate, growth, share of revenue, implied market value,
+P/E at a date), each fixing its operands, in the way `calculate_ratio` fixes a
+margin's. The free-form calculator would remain for everything else.
 
-**What it would take to fix properly.** Require a derived figure's operands to
-come from `calculate_ratio`'s own output (its `value` and `inputs`), or from
-the structured rows of a statement chunk, and never from numbers in retrieved
-prose. Prose figures would then support only what they state directly. That is
-the planned fix; it needs the statement rows in the evidence first (the
-excerpt-cut work in `agent/tools.py`), and a measurement of how many correct
-answers derive from prose today.
+**When to revisit.** When an eval shows wrong-operation answers passing the
+guard. The failure classification of each run says how many there were.
 
-**When to revisit.** When a trace shows an unsupported figure reaching a user
-through this gap, or once statement rows are in the evidence and the
-measurement above is cheap to take.
+**Closed by this change.** The guard used to accept a figure one arithmetic
+step from two figures in the evidence, so an invented "22%" passed when
+retrieved text said "compensation rose 29% while headcount grew 7%". A figure
+now has to be in a tool result, and 22 is in none
+(`tests/test_grounding_derivation.py::
+test_a_round_figure_equal_to_two_unrelated_percentages_is_flagged`). The old
+rule is kept as `unsupported_figures_reconstructing`, unused by the agent
+loop, until the new one has been measured on a full eval.
 
-**Where the code is.** `agent/grounding.py`: `derivation_operands`,
-`_walk_figures`, `_derivable`, and the `half_ulp` on `Figure`.
+**Where the code is.** `tools/calculator.py`; `agent/grounding.py`
+(`unsupported_figures`, `ungrounded_operands`); the operand check in
+`agent/orchestrator.py` (`_refused_operands`); `tests/test_calculator.py`.
 
 ---
 
