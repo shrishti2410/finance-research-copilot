@@ -64,4 +64,5 @@ docker compose run --rm model-pull
 - [docs/RATE_LIMITING.md](docs/RATE_LIMITING.md) — Redis sliding-window limiter
 - [docs/INFERENCE.md](docs/INFERENCE.md) — running a model behind the proxy
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — containers, and a cloud GPU host
+- [docs/DEPLOY.md](docs/DEPLOY.md) — a public demo on free tiers, with daily caps
 - [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) — deliberate behaviour that looks like a defect, and what would justify changing it
