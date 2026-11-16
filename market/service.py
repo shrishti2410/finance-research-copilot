@@ -25,7 +25,8 @@ from market.store import MarketData
 __all__ = ["chart_data", "price_analytics", "backtest", "strategy_catalogue",
            "WARMUP_CALENDAR_DAYS", "BACKTEST_WARMUP_CALENDAR_DAYS", "DEFAULT_BENCHMARK",
            "parse_indicators", "default_benchmark", "market_info", "trading_signal",
-           "signal_evaluation", "option_ideas", "watchlist", "SIGNAL_HISTORY_CALENDAR_DAYS"]
+           "signal_evaluation", "option_ideas", "watchlist", "signal_report",
+           "SIGNAL_HISTORY_CALENDAR_DAYS"]
 
 # Enough trading days for the slowest indicator offered (SMA 200) plus the
 # warm-up of the smoothed ones: 300 calendar days is about 205 trading days.
@@ -301,3 +302,72 @@ async def watchlist(tickers=None, benchmark: str | None = None,
         cards.append(c)
     return {"index": out_index, "stocks": cards, "provider": data.provider.name,
             "disclaimer": "Educational project, not investment advice."}
+
+
+REPORT_CARD_VOTES = 4
+REPORT_CARD_SECTIONS = ("Summary", "When it fails")
+MARKER_YEARS = 3
+
+
+def _changes(days, position, since) -> list[dict]:
+    """The days the signal's position switched: "in" (went long) or "out"."""
+    out = []
+    for i in range(1, len(position)):
+        if days[i] >= since and position[i] != position[i - 1]:
+            out.append({"day": days[i].isoformat(), "action": "in" if position[i] > 0 else "out"})
+    return out
+
+
+async def signal_report(ticker: str, data: MarketData | None = None,
+                        now: datetime | None = None) -> dict:
+    """Everything the stock page shows about the signal, in one call: the
+    evidence, the backtest verdict with its curves and risk figures, the days
+    the signal switched (for chart markers), and card excerpts for the
+    heaviest votes."""
+    from market.signal_eval import backtest_verdict, evaluate
+    from market.signals import signal_evidence, walk_forward
+
+    data = data or MarketData()
+    symbol = normalize_ticker(ticker)
+    bars = await _signal_bars(symbol, data, now)
+    if len(bars) < 2:
+        raise LookupError(f"No price history for {symbol}.")
+    market = market_for(symbol)
+    wf = walk_forward(bars, market)
+    evidence = signal_evidence(wf, symbol, market)
+    bench = default_benchmark(symbol)
+    bench_bars = await _signal_bars(bench, data, now) if bench != symbol else None
+    ev = evaluate(bars, bench_bars, market, years=5, wf=wf, curves=True)
+    since = bars[-1].day - timedelta(days=round(365.25 * MARKER_YEARS))
+    cards = await _card_excerpts([v["strategy"] for v in evidence.get("votes", [])[:REPORT_CARD_VOTES]])
+    return {
+        "ticker": symbol, **market_info(symbol), "provider": data.provider.name,
+        "evidence": evidence,
+        "verdict": backtest_verdict(symbol, ev),
+        "evaluation": {k: ev.get(k) for k in ("ok", "start", "end", "years", "risk", "random",
+                                              "decisions", "curves", "error")},
+        "markers": _changes(wf.days, wf.position, since),
+        "cards": cards,
+        "disclaimer": evidence.get("disclaimer", "Educational project, not investment advice."),
+    }
+
+
+async def _card_excerpts(keys: list[str]) -> list[dict]:
+    """Summary and failure modes from the strategy_cards collection; empty if
+    it is not indexed (the signal stands without its cards)."""
+    from db.base import engine
+    from rag.strategy_cards import card_sections
+
+    out = []
+    try:
+        async with engine.connect() as conn:
+            for key in keys:
+                sections = await card_sections(conn, key)
+                if sections:
+                    out.append({"strategy": key, "source": f"docs/strategies/{key}.md",
+                                **{name.lower().replace(" ", "_"): sections.get(name)
+                                   for name in REPORT_CARD_SECTIONS}})
+    except Exception:  # noqa: BLE001
+        return []
+    return out
+
