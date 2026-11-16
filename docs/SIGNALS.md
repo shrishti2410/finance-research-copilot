@@ -12,7 +12,7 @@ predicts one.**
 | knowledge | one card per strategy: rules, regime, when it fails, risk | `docs/strategies/`, table `strategy_cards` |
 | signal | regime, weighted vote, decision, evidence | `market/regime.py`, `market/signals.py` |
 | evaluation | out of sample against buy-and-hold, the index and random timing | `market/signal_eval.py` |
-| explanation | the agent explains the evidence, citing cards (phase 4) | - |
+| explanation | the agent explains the evidence, citing cards | `get_trading_signal` in `agent/tools.py`, `market/explain.py` |
 
 ## How a signal is made
 
@@ -68,6 +68,41 @@ plus a half-hour margin.
 
 The shares of the vote add up to 1, and the share-weighted votes add up to the
 score. `tests/test_signals.py` checks both.
+
+## The explanation (phase 4)
+
+`GET /market/{ticker}/signal/explain`, or `market.explain.explain_signal`.
+
+**How it is produced:**
+- The agent is asked to explain the signal, and calls `get_trading_signal`.
+  That tool returns:
+  - the engine's output, coverage, regime and heaviest votes;
+  - the **backtest verdict**;
+  - the Summary and "When it fails" sections of the voting rules' cards, read
+    from the `strategy_cards` collection.
+- The tool's description tells the model to:
+  - report the signal as the engine's output, never as advice;
+  - name each card by its path;
+  - state the backtest verdict plainly.
+- The answer goes through the unchanged grounding and advice guards.
+
+**The verdict** (`market.signal_eval.backtest_verdict`):
+- An **edge** needs all three over five years: a higher CAGR than
+  buy-and-hold, a higher daily Sharpe, and beating 95% of the random
+  re-timings.
+- Anything less is **no edge**. The sentence saying so is written in Python
+  from the evaluation's own figures.
+
+**Two checks after the guards:**
+- When the verdict is no edge and the answer does not say "no edge", the
+  tool's sentence is put first, verbatim.
+- The disclaimer is appended if missing.
+
+Both are listed in the result's `added`, so a model that left them out is
+visible.
+
+**Which model:** local Ollama only (`qwen2.5:7b`, with `qwen2.5:1.5b` for tool
+selection). A hosted provider needs the owner's approval.
 
 ## How well it works
 

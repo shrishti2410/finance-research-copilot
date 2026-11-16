@@ -37,9 +37,13 @@ from market.markets import Market
 from market.signals import NOTIONAL, SLIPPAGE_BPS, WalkForward, walk_forward
 from market.strategies import Strategy
 
-__all__ = ["evaluate", "risk_metrics", "N_RANDOM", "HORIZON", "SEED"]
+__all__ = ["evaluate", "risk_metrics", "backtest_verdict", "EDGE_PERCENTILE", "N_RANDOM",
+           "HORIZON", "SEED"]
 
 N_RANDOM = 200
+# The share of random re-timings the signal's Sharpe must beat before its
+# timing is called better than luck.
+EDGE_PERCENTILE = 0.95
 HORIZON = 20
 SEED = 20261116
 _KEEP = ("total_return", "cagr", "annualised_volatility", "sharpe_ratio", "max_drawdown",
@@ -177,3 +181,48 @@ def evaluate(bars, nifty_bars, market: Market, years: int = 5, n_random: int = N
             "base_rate_down": share([fwd[t] < 0 for t in window]),
         },
     }
+
+
+def _pct_text(x: float) -> str:
+    return f"{x * 100:.1f}%"
+
+
+def backtest_verdict(ticker: str, ev: dict) -> dict:
+    """Whether the backtest shows an edge, and a sentence that says so plainly.
+
+    An edge needs all three, over the evaluated window: a higher CAGR than
+    buy-and-hold, a higher daily Sharpe ratio, and a Sharpe that beats at least
+    EDGE_PERCENTILE of the random re-timings. Anything less is "no edge".
+    The sentence is built here, from the evaluation's own figures, so the
+    explanation can quote it rather than paraphrase it.
+    """
+    if not ev.get("ok"):
+        return {"verdict": "untested",
+                "statement": f"The signal for {ticker} could not be backtested: "
+                             f"{ev.get('error', 'not enough history')}."}
+    s, b = ev["risk"]["signal"], ev["risk"]["buy_and_hold"]
+    pct = ev["random"]["signal_sharpe_percentile"]
+    years = ev["years"]
+    edge = (s["cagr"] is not None and b["cagr"] is not None and s["cagr"] > b["cagr"]
+            and s["sharpe"] is not None and b["sharpe"] is not None and s["sharpe"] > b["sharpe"]
+            and pct is not None and pct >= EDGE_PERCENTILE)
+    figures = (f"the signal returned {_pct_text(s['cagr'])} a year against "
+               f"{_pct_text(b['cagr'])} for buy-and-hold, with a Sharpe ratio of "
+               f"{s['sharpe']:.2f} against {b['sharpe']:.2f}, and beat "
+               f"{pct * 100:.0f}% of {ev['random']['runs']} random re-timings of its own trades "
+               f"({EDGE_PERCENTILE * 100:.0f}% would be needed to rule out luck)")
+    span = f"{years:g}-year" if years >= 1 else f"{ev['trading_days']}-day"
+    if edge:
+        statement = (f"The {span} backtest shows an edge for {ticker}: {figures}. Past results "
+                     f"do not guarantee future ones.")
+    else:
+        statement = f"The {span} backtest shows no edge for {ticker}: {figures}."
+    if years < 3:
+        statement += f" Only {years:g} years could be tested, which is too short to judge."
+    return {"verdict": "edge" if edge else "no_edge", "statement": statement,
+            "window": f"{ev['start']} to {ev['end']}", "years": years,
+            "signal_cagr": s["cagr"], "buy_and_hold_cagr": b["cagr"],
+            "signal_sharpe": s["sharpe"], "buy_and_hold_sharpe": b["sharpe"],
+            "signal_max_drawdown": s["max_drawdown"],
+            "buy_and_hold_max_drawdown": b["max_drawdown"],
+            "time_in_market": s["time_in_market"], "random_percentile": pct}

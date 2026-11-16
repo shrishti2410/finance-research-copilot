@@ -5,6 +5,7 @@
     GET  /market/strategies
     POST /market/{ticker}/backtest   {strategy, params, start, end, cost_bps, slippage_bps}
     GET  /market/{ticker}/signal     BUY / SELL / HOLD with its evidence (market/signals.py)
+    GET  /market/{ticker}/signal/explain   the agent's explanation, local Ollama (market/explain.py)
 
 Authenticated like the rest of the app's API: the cache is shared and a
 provider fetch is not free, so it is not an open endpoint. Dates default to
@@ -125,4 +126,17 @@ async def signal(ticker: str, user: User = Depends(get_current_user)) -> dict:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
     if not out.get("ok"):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, out.get("error"))
+    return out
+
+
+@router.get("/{ticker}/signal/explain")
+async def explain(ticker: str, user: User = Depends(get_current_user)) -> dict:
+    """The agent's explanation of the signal, citing the strategy cards, with
+    the backtest's verdict stated plainly. Runs on local Ollama: a hosted
+    provider needs the owner's approval first."""
+    from market.explain import explain_signal
+
+    out = await explain_signal(ticker)
+    if not out.get("ok"):
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, out.get("error"))
     return out
