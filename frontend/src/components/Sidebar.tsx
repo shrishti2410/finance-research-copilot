@@ -10,7 +10,8 @@ interface Props {
   busy: boolean;
   onSelect: (id: string) => void;
   onNew: () => void;
-  onLogout: () => void;
+  /** Unused: signing out is in the site header. */
+  onLogout?: () => void;
 }
 
 /** Newest activity first, matching what the API already sorts by. */
@@ -21,27 +22,26 @@ export function Sidebar({
   busy,
   onSelect,
   onNew,
-  onLogout,
 }: Props) {
   return (
-    <aside className="flex w-64 shrink-0 flex-col border-r border-neutral-800 bg-neutral-950">
+    <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-bg md:flex">
       <div className="p-3">
         <button
           onClick={onNew}
           disabled={busy}
-          className="w-full rounded-md border border-neutral-700 px-3 py-2 text-sm hover:bg-neutral-900 disabled:opacity-40"
+          className="w-full rounded-md border border-fg-subtle px-3 py-2 text-sm hover:bg-surface-2 disabled:opacity-40"
         >
           + New conversation
         </button>
         <Link
           href="/chart"
-          className="mt-2 block w-full rounded-md px-3 py-1.5 text-center text-xs text-neutral-400 hover:bg-neutral-900"
+          className="mt-2 block w-full rounded-md px-3 py-1.5 text-center text-xs text-fg-muted hover:bg-surface-2"
         >
           Price charts
         </Link>
         <Link
           href="/backtest"
-          className="block w-full rounded-md px-3 py-1.5 text-center text-xs text-neutral-400 hover:bg-neutral-900"
+          className="block w-full rounded-md px-3 py-1.5 text-center text-xs text-fg-muted hover:bg-surface-2"
         >
           Backtests
         </Link>
@@ -49,7 +49,7 @@ export function Sidebar({
 
       <nav className="min-h-0 flex-1 overflow-y-auto px-2">
         {conversations.length === 0 ? (
-          <p className="px-2 py-4 text-xs text-neutral-600">
+          <p className="px-2 py-4 text-xs text-fg-subtle">
             No conversations yet.
           </p>
         ) : (
@@ -65,13 +65,13 @@ export function Sidebar({
                   aria-current={conversation.id === activeId ? "true" : undefined}
                   className={`w-full truncate rounded px-2 py-1.5 text-left text-sm disabled:opacity-40 ${
                     conversation.id === activeId
-                      ? "bg-neutral-800 text-neutral-100"
-                      : "text-neutral-400 hover:bg-neutral-900"
+                      ? "bg-surface-2 text-fg"
+                      : "text-fg-muted hover:bg-surface-2"
                   }`}
                   title={conversation.title ?? "Untitled"}
                 >
                   {conversation.title ?? (
-                    <span className="italic text-neutral-600">Untitled</span>
+                    <span className="italic text-fg-subtle">Untitled</span>
                   )}
                 </button>
               </li>
@@ -80,16 +80,10 @@ export function Sidebar({
         )}
       </nav>
 
-      <div className="border-t border-neutral-800 p-3">
-        <p className="truncate text-xs text-neutral-500" title={email ?? ""}>
+      <div className="border-t border-border p-3">
+        <p className="truncate text-xs text-fg-subtle" title={email ?? ""}>
           {email}
         </p>
-        <button
-          onClick={onLogout}
-          className="mt-1.5 text-xs text-neutral-500 underline hover:text-neutral-300"
-        >
-          Sign out
-        </button>
       </div>
     </aside>
   );

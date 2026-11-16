@@ -1,7 +1,7 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { chartHref, PriceChart } from "@/components/PriceChart";
 import { Markdown } from "@/components/Markdown";
@@ -35,7 +35,16 @@ const EXAMPLES = [
   "Compare NVIDIA's gross margin to Apple's.",
 ];
 
-export default function ChatPage() {
+export default function ResearchPage() {
+  // useSearchParams needs a Suspense boundary in this Next.js version.
+  return (
+    <Suspense fallback={null}>
+      <ChatPage />
+    </Suspense>
+  );
+}
+
+function ChatPage() {
   const { token, user, ready, logout } = useAuth();
   const router = useRouter();
 
@@ -253,6 +262,20 @@ export default function ChatPage() {
     }
   }
 
+  // A question passed in the URL (the stock page's Research tab) is asked
+  // once, then dropped from the URL so a reload does not ask it again.
+  const search = useSearchParams();
+  const asked = useRef(false);
+  const initialQuestion = search.get("q");
+  useEffect(() => {
+    if (!initialQuestion || asked.current || !ready || !token) return;
+    asked.current = true;
+    router.replace("/research");
+    void Promise.resolve().then(() => send(initialQuestion));
+    // send is redefined every render; the ref makes this run once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialQuestion, ready, token, router]);
+
   if (!ready || !token) {
     return (
       <main className="flex min-h-[60vh] items-center justify-center text-sm text-fg-subtle">
@@ -274,14 +297,25 @@ export default function ChatPage() {
       />
 
       <main className="flex min-w-0 flex-1 flex-col">
+        {/* On a phone the sidebar is hidden; its one essential action stays. */}
+        <div className="flex items-center justify-between border-b border-border px-4 py-2 md:hidden">
+          <span className="text-sm font-medium text-fg">Research</span>
+          <button
+            onClick={newConversation}
+            disabled={busy}
+            className="rounded-md border border-border px-3 py-1.5 text-xs text-fg-muted hover:text-fg disabled:opacity-40"
+          >
+            + New conversation
+          </button>
+        </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto max-w-3xl px-6 py-8">
+          <div className="mx-auto max-w-3xl px-4 py-8 sm:px-6">
             {messages.length === 0 && !pending && (
               <div className="mt-16 text-center">
                 <h1 className="text-lg font-medium">
                   Ask about a public company
                 </h1>
-                <p className="mt-1 text-sm text-neutral-500">
+                <p className="mt-1 text-sm text-fg-subtle">
                   Answers come from SEC filings and live tools, and every one
                   shows its sources.
                 </p>
@@ -290,7 +324,7 @@ export default function ChatPage() {
                     <button
                       key={example}
                       onClick={() => send(example)}
-                      className="rounded-md border border-neutral-800 px-3 py-1.5 text-sm text-neutral-400 hover:border-neutral-700 hover:text-neutral-200"
+                      className="rounded-md border border-border px-3 py-1.5 text-sm text-fg-muted hover:border-fg-subtle hover:text-fg"
                     >
                       {example}
                     </button>
@@ -321,7 +355,7 @@ export default function ChatPage() {
                               <PriceChart spec={spec} token={token} height={320} />
                               <Link
                                 href={chartHref(spec)}
-                                className="text-xs text-neutral-400 underline"
+                                className="text-xs text-fg-muted underline"
                               >
                                 Open on the chart page
                               </Link>
@@ -349,12 +383,12 @@ export default function ChatPage() {
                           <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-fg-subtle align-text-bottom" />
                         </div>
                       ) : (
-                        <p className="text-sm text-neutral-500">
+                        <p className="text-sm text-fg-subtle">
                           {pending.status || "…"}
                         </p>
                       )}
                       {pending.answer && pending.status && (
-                        <p className="mt-2 text-xs text-neutral-600">
+                        <p className="mt-2 text-xs text-fg-subtle">
                           {pending.status}
                         </p>
                       )}
@@ -374,14 +408,14 @@ export default function ChatPage() {
         {error && (
           <div
             role="alert"
-            className="mx-auto w-full max-w-3xl px-6 pb-2 text-xs text-red-400"
+            className="mx-auto w-full max-w-3xl px-6 pb-2 text-xs text-down"
           >
             {error}
           </div>
         )}
 
         <form
-          className="border-t border-neutral-800 px-6 py-4"
+          className="border-t border-border px-6 py-4"
           onSubmit={(event) => {
             event.preventDefault();
             send(draft);
@@ -396,12 +430,12 @@ export default function ChatPage() {
                 busy ? "Waiting for the answer…" : "Ask a question…"
               }
               maxLength={8000}
-              className="flex-1 rounded-md border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm outline-none focus:border-neutral-600 disabled:opacity-50"
+              className="flex-1 rounded-md border border-border bg-surface px-3 py-2 text-sm outline-none focus:border-accent disabled:opacity-50"
             />
             <button
               type="submit"
               disabled={busy || !draft.trim()}
-              className="rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900 disabled:opacity-40"
+              className="rounded-md bg-accent-strong px-4 py-2 text-sm font-medium text-bg disabled:opacity-40"
             >
               Send
             </button>
@@ -425,8 +459,8 @@ function Bubble({
       <div
         className={
           isUser
-            ? "max-w-[80%] rounded-lg bg-neutral-800 px-3.5 py-2 text-sm"
-            : "max-w-full text-sm leading-relaxed text-neutral-200"
+            ? "max-w-[80%] rounded-lg bg-surface-2 px-3.5 py-2 text-sm"
+            : "max-w-full text-sm leading-relaxed text-fg"
         }
       >
         {children}
@@ -446,7 +480,7 @@ function IncompleteNote({ reason }: { reason: string }) {
           ? "The model could not be reached."
           : reason;
   return (
-    <p className="mt-2 rounded border border-amber-900/50 bg-amber-950/30 px-2.5 py-1.5 text-xs text-amber-300/90">
+    <p className="mt-2 rounded border border-warn/40 bg-surface-2 px-2.5 py-1.5 text-xs text-warn">
       Incomplete · {explanation}
     </p>
   );

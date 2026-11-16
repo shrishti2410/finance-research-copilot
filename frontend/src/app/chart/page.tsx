@@ -64,14 +64,14 @@ function ChartWorkspace() {
   }
 
   if (!ready || !token) {
-    return <p className="p-6 text-sm text-neutral-500">Loading…</p>;
+    return <p className="p-6 text-sm text-fg-subtle">Loading…</p>;
   }
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-6">
       <div className="mb-4 flex items-baseline justify-between">
         <h1 className="text-lg font-medium">Price chart</h1>
-        <Link href="/research" className="text-xs text-neutral-400 underline">Back to the chat</Link>
+        <Link href="/research" className="text-xs text-fg-muted underline">Back to the chat</Link>
       </div>
 
       <form
@@ -81,39 +81,39 @@ function ChartWorkspace() {
           show(draft);
         }}
       >
-        <label className="flex flex-col text-xs text-neutral-400">
+        <label className="flex flex-col text-xs text-fg-muted">
           Ticker
           <input
             value={draft.ticker}
             onChange={(e) => setDraft({ ...draft, ticker: e.target.value })}
-            className="mt-1 w-24 rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1 text-sm text-neutral-100 uppercase"
+            className="mt-1 w-24 rounded-md border border-border bg-surface px-2 py-1 text-sm text-fg uppercase"
           />
         </label>
-        <label className="flex flex-col text-xs text-neutral-400">
+        <label className="flex flex-col text-xs text-fg-muted">
           From
           <input
             type="date"
             value={draft.start}
             onChange={(e) => setDraft({ ...draft, start: e.target.value })}
-            className="mt-1 rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1 text-sm text-neutral-100"
+            className="mt-1 rounded-md border border-border bg-surface px-2 py-1 text-sm text-fg"
           />
         </label>
-        <label className="flex flex-col text-xs text-neutral-400">
+        <label className="flex flex-col text-xs text-fg-muted">
           To
           <input
             type="date"
             value={draft.end}
             onChange={(e) => setDraft({ ...draft, end: e.target.value })}
-            className="mt-1 rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1 text-sm text-neutral-100"
+            className="mt-1 rounded-md border border-border bg-surface px-2 py-1 text-sm text-fg"
           />
         </label>
         <button
           type="submit"
-          className="rounded-md bg-neutral-100 px-3 py-1.5 text-sm font-medium text-neutral-900"
+          className="rounded-md bg-accent-strong px-3 py-1.5 text-sm font-medium text-bg"
         >
           Show
         </button>
-        <fieldset className="flex w-full flex-wrap gap-x-4 gap-y-1 text-xs text-neutral-300">
+        <fieldset className="flex w-full flex-wrap gap-x-4 gap-y-1 text-xs text-fg-muted">
           {INDICATORS.map((ind) => (
             <label key={ind.key} className="flex items-center gap-1">
               <input
@@ -141,7 +141,7 @@ function ChartWorkspace() {
 
 export default function ChartPage() {
   return (
-    <Suspense fallback={<p className="p-6 text-sm text-neutral-500">Loading…</p>}>
+    <Suspense fallback={<p className="p-6 text-sm text-fg-subtle">Loading…</p>}>
       <ChartWorkspace />
     </Suspense>
   );

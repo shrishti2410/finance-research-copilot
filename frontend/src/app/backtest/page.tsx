@@ -114,22 +114,22 @@ export default function BacktestPage() {
   }
 
   if (!ready || !token) {
-    return <p className="p-6 text-sm text-neutral-500">Loading…</p>;
+    return <p className="p-6 text-sm text-fg-subtle">Loading…</p>;
   }
 
   const input =
-    "mt-1 rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1 text-sm text-neutral-100";
+    "mt-1 rounded-md border border-border bg-surface px-2 py-1 text-sm text-fg";
   return (
     <main className="mx-auto max-w-5xl px-4 py-6">
       <div className="mb-4 flex items-baseline justify-between">
         <h1 className="text-lg font-medium">Backtest a strategy</h1>
-        <div className="flex gap-4 text-xs text-neutral-400">
+        <div className="flex gap-4 text-xs text-fg-muted">
           <Link href="/chart" className="underline">Price charts</Link>
           <Link href="/research" className="underline">Back to the chat</Link>
         </div>
       </div>
 
-      <form onSubmit={run} className="mb-4 flex flex-wrap items-end gap-3 text-xs text-neutral-400">
+      <form onSubmit={run} className="mb-4 flex flex-wrap items-end gap-3 text-xs text-fg-muted">
         <label className="flex flex-col">
           Ticker
           <input value={ticker} onChange={(e) => setTicker(e.target.value.toUpperCase())}
@@ -176,24 +176,24 @@ export default function BacktestPage() {
             onChange={(e) => setSlippageBps(Number(e.target.value))} className={`${input} w-20`} />
         </label>
         <button type="submit" disabled={running}
-          className="rounded-md bg-neutral-100 px-3 py-1.5 text-sm font-medium text-neutral-900 disabled:opacity-50">
+          className="rounded-md bg-accent-strong px-3 py-1.5 text-sm font-medium text-bg disabled:opacity-50">
           {running ? "Running…" : "Run"}
         </button>
       </form>
-      {chosen && <p className="mb-4 text-xs text-neutral-500">{chosen.description}</p>}
-      {error && <p className="mb-4 text-xs text-red-300">{error}</p>}
+      {chosen && <p className="mb-4 text-xs text-fg-subtle">{chosen.description}</p>}
+      {error && <p className="mb-4 text-xs text-down">{error}</p>}
 
       {result && (
         <>
-          <p className="mb-2 text-xs text-neutral-400">
+          <p className="mb-2 text-xs text-fg-muted">
             {result.ticker}, {result.start} to {result.end}.{" "}
-            <span className="text-sky-400">Strategy</span> against{" "}
-            <span className="text-neutral-400">buy-and-hold</span>, from{" "}
+            <span className="text-accent">Strategy</span> against{" "}
+            <span className="text-fg-muted">buy-and-hold</span>, from{" "}
             {money(result.initial_cash)}. {result.execution}; {result.cost_bps} bps commission and{" "}
             {result.slippage_bps} bps slippage per side.
           </p>
           <EquityChart result={result} />
-          <p className="mt-2 text-[10px] text-neutral-600">
+          <p className="mt-2 text-[10px] text-fg-subtle">
             Charts: TradingView Lightweight Charts™, Copyright (c) 2025 TradingView, Inc.,{" "}
             <a href="https://www.tradingview.com/" className="underline" target="_blank" rel="noreferrer">
               tradingview.com
@@ -204,7 +204,7 @@ export default function BacktestPage() {
 
           <table className="mt-6 w-full max-w-lg text-xs">
             <thead>
-              <tr className="text-left text-neutral-500">
+              <tr className="text-left text-fg-subtle">
                 <th className="py-1 font-normal"></th>
                 <th className="py-1 font-normal">Strategy</th>
                 <th className="py-1 font-normal">Buy and hold</th>
@@ -212,10 +212,10 @@ export default function BacktestPage() {
             </thead>
             <tbody>
               {STAT_ROWS.map((row) => (
-                <tr key={row.key} className="border-t border-neutral-900">
-                  <td className="py-1 text-neutral-400">{row.label}</td>
-                  <td className="py-1 text-neutral-100">{row.format(result.stats[row.key])}</td>
-                  <td className="py-1 text-neutral-400">{row.format(result.benchmark_stats[row.key])}</td>
+                <tr key={row.key} className="border-t border-border">
+                  <td className="py-1 text-fg-muted">{row.label}</td>
+                  <td className="py-1 text-fg">{row.format(result.stats[row.key])}</td>
+                  <td className="py-1 text-fg-muted">{row.format(result.benchmark_stats[row.key])}</td>
                 </tr>
               ))}
             </tbody>
@@ -224,7 +224,7 @@ export default function BacktestPage() {
           <h2 className="mt-8 mb-2 text-sm font-medium">Trades ({result.trades.length})</h2>
           <div className="max-h-96 overflow-y-auto">
             <table className="w-full text-xs">
-              <thead className="sticky top-0 bg-neutral-950 text-left text-neutral-500">
+              <thead className="sticky top-0 bg-bg text-left text-fg-subtle">
                 <tr>
                   <th className="py-1 font-normal">Side</th>
                   <th className="py-1 font-normal">Entry</th>
@@ -237,14 +237,14 @@ export default function BacktestPage() {
               </thead>
               <tbody>
                 {result.trades.map((t, i) => (
-                  <tr key={i} className="border-t border-neutral-900">
+                  <tr key={i} className="border-t border-border">
                     <td className="py-1">{t.side}{t.status === "open" ? " (open)" : ""}</td>
                     <td className="py-1">{t.entry_day}</td>
                     <td className="py-1">{num(t.entry_price)}</td>
                     <td className="py-1">{t.exit_day ?? "–"}</td>
                     <td className="py-1">{num(t.exit_price)}</td>
                     <td className="py-1">{t.bars_held}</td>
-                    <td className={`py-1 ${(t.net_return ?? 0) >= 0 ? "text-green-400" : "text-red-400"}`}>
+                    <td className={`py-1 ${(t.net_return ?? 0) >= 0 ? "text-up" : "text-down"}`}>
                       {pct(t.net_return)}
                     </td>
                   </tr>
