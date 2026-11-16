@@ -39,14 +39,15 @@ def _num(x):
     return "   n/a" if x is None else f"{x:6.2f}"
 
 
-async def main(tickers: list[str], years: int, out: Path | None) -> int:
+async def main(tickers: list[str], years: int, out: Path | None,
+               regime_rule: str | None = None) -> int:
     commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT,
                             capture_output=True, text=True).stdout.strip()
     started = time.perf_counter()
     results = {}
     try:
         for ticker in tickers:
-            evaluation = await signal_evaluation(ticker, years=years)
+            evaluation = await signal_evaluation(ticker, years=years, regime_rule=regime_rule)
             current = await trading_signal(ticker)
             results[ticker] = {"evaluation": evaluation, "current": current}
     finally:
@@ -110,7 +111,8 @@ async def main(tickers: list[str], years: int, out: Path | None) -> int:
         meta = {"command": " ".join(sys.argv), "commit": commit,
                 "run_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "machine": platform.platform(), "python": platform.python_version(),
-                "elapsed_s": round(elapsed, 1), "years": years}
+                "elapsed_s": round(elapsed, 1), "years": years,
+                "regime_rule": regime_rule or "default"}
         (out / "signals_eval.json").write_text(
             json.dumps({"meta": meta, "results": results}, indent=1, default=str),
             encoding="utf-8")
@@ -124,5 +126,8 @@ if __name__ == "__main__":
     ap.add_argument("tickers", nargs="*", default=list(INDIA_WATCHLIST))
     ap.add_argument("--years", type=int, default=5)
     ap.add_argument("--out", type=Path)
+    ap.add_argument("--regime-rule", choices=("slope", "agree"),
+                    help="regime direction rule for the evaluation (market/regime.py); "
+                         "today's signals always use the default")
     args = ap.parse_args()
-    sys.exit(asyncio.run(main(args.tickers, args.years, args.out)))
+    sys.exit(asyncio.run(main(args.tickers, args.years, args.out, args.regime_rule)))

@@ -58,7 +58,7 @@ import numpy as np
 from market.backtest import adjusted_prices, run_backtest
 from market.costs import CostModel, cost_model_for
 from market.markets import Market
-from market.regime import classify, measure
+from market.regime import DEFAULT_RULE, classify, measure
 from market.strategies import STRATEGIES
 from market.universe import FULL_HISTORY_TRADING_DAYS
 
@@ -169,7 +169,8 @@ def _vote(position: float, allows_short: bool) -> float:
     return float(position) if allows_short else 2.0 * float(position) - 1.0
 
 
-def walk_forward(bars, market: Market, model: CostModel | None = None) -> WalkForward:
+def walk_forward(bars, market: Market, model: CostModel | None = None,
+                 regime_rule: str = DEFAULT_RULE) -> WalkForward:
     model = model or cost_model_for(market.cost_model)
     n = len(bars)
     candidates, excluded = _candidates(market)
@@ -191,7 +192,7 @@ def walk_forward(bars, market: Market, model: CostModel | None = None) -> WalkFo
         returns[key] = r
 
     m = measure(prices.high, prices.low, prices.close)
-    regime = classify(m)
+    regime = classify(m, regime_rule)
     # The first bar at which the quickest rule has warmed up and trained.
     first = min(WARMUP[k] for k in candidates) + SHORT_TRAIN_DAYS - 1
     score = np.full(n, np.nan)

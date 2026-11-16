@@ -12,11 +12,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
-__all__ = ["INDIA_WATCHLIST", "INDIA_BENCHMARK", "HISTORY_YEARS", "History",
+__all__ = ["INDIA_WATCHLIST", "INDIA_HOLDOUT", "INDIA_BENCHMARK", "HISTORY_YEARS", "History",
            "history_of", "FULL_HISTORY_TRADING_DAYS"]
 
 INDIA_WATCHLIST = ("COFORGE.NS", "DIXON.NS", "SBIN.NS", "PREMIERENE.NS", "HDFCBANK.NS")
 INDIA_BENCHMARK = "^NSEI"
+# Ten NSE large and mid caps, never used to build or tune anything: chosen on
+# 2026-11-16 before the regime-rule check was run, to test a change proposed
+# after looking at the watchlist's results. See benchmarks/REGIME_RULE_CHECK.md.
+INDIA_HOLDOUT = ("RELIANCE.NS", "TCS.NS", "ICICIBANK.NS", "ITC.NS", "LT.NS",
+                 "SUNPHARMA.NS", "VOLTAS.NS", "TVSMOTOR.NS", "CUMMINSIND.NS",
+                 "PERSISTENT.NS")
 HISTORY_YEARS = 5
 # Below this many trading days (about three years) a stock is "limited history".
 FULL_HISTORY_TRADING_DAYS = 750

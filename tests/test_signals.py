@@ -259,3 +259,36 @@ def test_the_evaluation_reports_risk_for_the_signal_and_both_benchmarks():
     assert out["risk"]["buy_and_hold"]["time_in_market"] == 1.0
     assert out["risk"]["signal"]["time_in_market"] == pytest.approx(
         out["signal"]["exposure"], abs=1e-4)
+
+
+# --- the regime direction rule ----------------------------------------------------
+
+def _one_day(adx, slope, plus, minus, pct=0.5):
+    return {k: np.array([v], dtype=float) for k, v in {
+        "adx": adx, "sma50_slope_20d": slope, "plus_di": plus, "minus_di": minus,
+        "volatility_percentile": pct}.items()}
+
+
+def test_the_agree_rule_calls_a_disagreeing_strong_trend_a_transition():
+    sbin = _one_day(42.4, -0.0246, 38.27, 5.78)           # SBIN.NS on 2026-11-16
+    assert rg.classify(sbin, "slope") == ["trending_down"]
+    assert rg.classify(sbin, "agree") == ["transition"]
+    assert rg.classify(_one_day(30, 0.02, 30, 10), "agree") == ["trending_up"]
+    assert rg.classify(_one_day(30, -0.02, 10, 30), "agree") == ["trending_down"]
+    assert rg.classify(_one_day(15, -0.02, 38, 5), "agree") == ["ranging"]
+    with pytest.raises(ValueError, match="Known"):
+        rg.classify(sbin, "vibes")
+
+
+def test_the_default_rule_is_still_the_original_one():
+    m = rg.measure(*_arrays(BARS))
+    assert rg.DEFAULT_RULE == "slope"
+    assert rg.classify(m) == rg.classify(m, "slope")
+    np.testing.assert_array_equal(sg.walk_forward(BARS[:700], NSE).score,
+                                  sg.walk_forward(BARS[:700], NSE, regime_rule="slope").score)
+
+
+def test_the_agree_rule_is_causal_too():
+    full = sg.walk_forward(BARS, NSE, regime_rule="agree")
+    part = sg.walk_forward(BARS[:800], NSE, regime_rule="agree")
+    np.testing.assert_array_equal(part.score, full.score[:800])

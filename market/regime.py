@@ -28,8 +28,8 @@ import numpy as np
 
 from market import indicators as ind
 
-__all__ = ["REGIMES", "measure", "classify", "ADX_TREND", "ADX_RANGE", "VOL_HIGH",
-           "SLOPE_DAYS", "VOL_WINDOW", "VOL_LOOKBACK"]
+__all__ = ["REGIMES", "RULES", "DEFAULT_RULE", "measure", "classify", "ADX_TREND",
+           "ADX_RANGE", "VOL_HIGH", "SLOPE_DAYS", "VOL_WINDOW", "VOL_LOOKBACK"]
 
 REGIMES = ("trending_up", "trending_down", "ranging", "transition", "volatile", "unknown")
 ADX_PERIOD = 14
@@ -40,6 +40,15 @@ SLOPE_DAYS = 20
 VOL_WINDOW = 20
 VOL_LOOKBACK = 252
 VOL_HIGH = 0.80
+
+# How a strong trend's direction is read (ADX >= 25):
+#   "slope"  the 50-day SMA's 20-day slope alone (the original rule)
+#   "agree"  the slope and the DI lines must agree; when they disagree the
+#            stock is turning, labelled "transition". Proposed 2026-11-16
+#            after SBIN.NS read trending_down with +DI 38 against -DI 6; see
+#            benchmarks/REGIME_RULE_CHECK.md for the hold-out test.
+RULES = ("slope", "agree")
+DEFAULT_RULE = "slope"
 
 
 def _realised_vol(close: np.ndarray, n: int) -> np.ndarray:
@@ -75,15 +84,26 @@ def measure(high, low, close) -> dict[str, np.ndarray]:
             "volatility": vol, "volatility_percentile": _percentile_rank(vol, VOL_LOOKBACK)}
 
 
-def classify(m: dict[str, np.ndarray]) -> list[str]:
+def classify(m: dict[str, np.ndarray], rule: str = DEFAULT_RULE) -> list[str]:
+    if rule not in RULES:
+        raise ValueError(f"Unknown regime rule {rule!r}. Known: {', '.join(RULES)}.")
     labels = []
-    for adx, slope, pct in zip(m["adx"], m["sma50_slope_20d"], m["volatility_percentile"]):
+    for adx, slope, pct, plus, minus in zip(m["adx"], m["sma50_slope_20d"],
+                                            m["volatility_percentile"], m["plus_di"],
+                                            m["minus_di"]):
         if np.isnan(adx) or np.isnan(slope) or np.isnan(pct):
             labels.append("unknown")
         elif pct >= VOL_HIGH:
             labels.append("volatile")
-        elif adx >= ADX_TREND:
+        elif adx >= ADX_TREND and rule == "slope":
             labels.append("trending_up" if slope > 0 else "trending_down")
+        elif adx >= ADX_TREND:
+            if slope > 0 and plus > minus:
+                labels.append("trending_up")
+            elif slope < 0 and minus > plus:
+                labels.append("trending_down")
+            else:
+                labels.append("transition")
         elif adx < ADX_RANGE:
             labels.append("ranging")
         else:

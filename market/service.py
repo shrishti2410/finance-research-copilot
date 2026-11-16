@@ -185,7 +185,7 @@ async def trading_signal(ticker: str, data: MarketData | None = None,
 
 
 async def signal_evaluation(ticker: str, years: int = 5, data: MarketData | None = None,
-                            now: datetime | None = None) -> dict:
+                            now: datetime | None = None, regime_rule: str | None = None) -> dict:
     """The signal's out-of-sample record over the last `years` years against
     buy-and-hold, the market index and random timing (market/signal_eval.py)."""
     from market.signal_eval import evaluate
@@ -197,6 +197,6 @@ async def signal_evaluation(ticker: str, years: int = 5, data: MarketData | None
         raise LookupError(f"No price history for {symbol}.")
     bench = default_benchmark(symbol)
     bench_bars = await _signal_bars(bench, data, now) if bench != symbol else None
-    out = evaluate(bars, bench_bars, market_for(symbol), years=years)
+    out = evaluate(bars, bench_bars, market_for(symbol), years=years, regime_rule=regime_rule)
     return {"ticker": symbol, "benchmark": bench, **market_info(symbol),
             "provider": data.provider.name, **out}
