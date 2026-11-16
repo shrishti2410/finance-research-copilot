@@ -36,7 +36,7 @@ def _pct(x):
 
 
 def _num(x):
-    return "  n/a" if x is None else f"{x:5.2f}"
+    return "   n/a" if x is None else f"{x:6.2f}"
 
 
 async def main(tickers: list[str], years: int, out: Path | None) -> int:
@@ -53,24 +53,27 @@ async def main(tickers: list[str], years: int, out: Path | None) -> int:
         await engine.dispose()
     elapsed = time.perf_counter() - started
 
-    print(f"Out of sample, last {years} years requested; Indian delivery costs; "
-          f"CAGR and max drawdown in %")
-    print(f"{'ticker':<14}{'window':<24}{'yrs':>5} | {'signal':>15} | {'buy&hold':>15} | "
-          f"{'nifty':>15} | {'random median':>15} | {'pctl':>5} | {'hit up':>13}")
-    print(f"{'':<14}{'':<24}{'':>5} | {'CAGR  Shrp  DD':>15} | {'CAGR  Shrp  DD':>15} | "
-          f"{'CAGR  Shrp  DD':>15} | {'CAGR  Shrp':>15} | {'':>5} | {'buy vs base':>13}")
+    print(f"Out of sample, last {years} years requested; Indian delivery costs. "
+          f"CAGR and max drawdown (DD) in %; Sharpe = CAGR / annualised volatility.")
+    head = f"{'CAGR':>6} {'Sharpe':>6} {'DD':>6}"
+    print(f"{'ticker':<14}{'window':<25}{'years':>5}  {'signal':^20}  {'buy & hold':^20}  "
+          f"{'Nifty 50':^20}  {'random (median)':^13}  {'pctl':>5}  {'up after BUY':>13}")
+    print(f"{'':<44}  {head}  {head}  {head}  {'CAGR':>6} {'Sharpe':>6}  {'':>5}  "
+          f"{'vs base':>13}")
+
+    def trio(d):
+        return f"{_pct(d.get('cagr'))} {_num(d.get('sharpe_ratio'))} {_pct(d.get('max_drawdown'))}"
+
     for ticker, r in results.items():
         e = r["evaluation"]
         if not e.get("ok"):
             print(f"{ticker:<14}{e.get('error')}")
             continue
-        s, b, n, rnd, h = e["signal"], e["buy_and_hold"], e["nifty"] or {}, e["random"], e["hit_rate"]
-        print(f"{ticker:<14}{e['start'] + ' to ' + e['end']:<24}{e['years']:>5} | "
-              f"{_pct(s['cagr'])}{_num(s['sharpe_ratio'])}{_pct(s['max_drawdown'])[2:]} | "
-              f"{_pct(b['cagr'])}{_num(b['sharpe_ratio'])}{_pct(b['max_drawdown'])[2:]} | "
-              f"{_pct(n.get('cagr'))}{_num(n.get('sharpe_ratio'))}{_pct(n.get('max_drawdown'))[2:]} | "
-              f"{_pct(rnd['cagr_median'])}{_num(rnd['sharpe_median'])}     | "
-              f"{_num(rnd['signal_sharpe_percentile'])} | "
+        rnd, h = e["random"], e["hit_rate"]
+        print(f"{ticker:<14}{e['start'] + ' to ' + e['end']:<25}{e['years']:>5}  "
+              f"{trio(e['signal'])}  {trio(e['buy_and_hold'])}  {trio(e['nifty'] or {})}  "
+              f"{_pct(rnd['cagr_median'])} {_num(rnd['sharpe_median'])}  "
+              f"{_num(rnd['signal_sharpe_percentile'])}  "
               f"{_pct(h['after_buy_up'])} vs{_pct(h['base_rate_up'])}")
     print()
     print("Today's signals (decided on the last completed bar)")
