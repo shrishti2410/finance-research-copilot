@@ -3,6 +3,7 @@
     GET /market/{ticker}/chart?start=2025-11-01&end=2026-11-13&indicators=sma50,bollinger,rsi14
     GET /market/{ticker}/analytics?start=...&end=...&benchmark=^NSEI   (default: the ticker's market index)
     GET  /market/strategies
+    GET  /market/watchlist           the dashboard: Nifty strip and the watchlist cards
     POST /market/{ticker}/backtest   {strategy, params, start, end, cost_bps, slippage_bps}
     GET  /market/{ticker}/signal     BUY / SELL / HOLD with its evidence (market/signals.py)
     GET  /market/{ticker}/signal/explain   the agent's explanation, local Ollama (market/explain.py)
@@ -81,6 +82,19 @@ async def analytics(ticker: str, start: date | None = None, end: date | None = N
                             f"The price provider could not be reached: {exc}") from None
     except LookupError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
+
+
+@router.get("/watchlist")
+async def watchlist_cards(user: User = Depends(get_current_user)) -> dict:
+    """Index strip and one card per watchlist stock: price, change, a 60-day
+    sparkline and the signal with its coverage."""
+    from market.service import watchlist
+
+    try:
+        return await watchlist()
+    except ProviderError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY,
+                            f"The price provider could not be reached: {exc}") from None
 
 
 @router.get("/strategies")

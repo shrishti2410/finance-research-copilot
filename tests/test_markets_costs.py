@@ -173,3 +173,14 @@ def test_todays_bar_is_ignored_until_its_session_has_closed():
     assert len(completed_bars(bars, US, after)) == 2        # 06:00 in New York
     tomorrow = datetime(today.year, today.month, today.day + 1, 1, 0, tzinfo=timezone.utc)
     assert len(completed_bars(bars, US, tomorrow)) == 3
+
+
+def test_the_watchlist_returns_the_index_strip_and_a_card_per_stock():
+    out = asyncio.run(service.watchlist(["SBIN.NS", "DIXON.NS"], data=_Recorder()))
+    assert out["index"]["ticker"] == "^NSEI" and "signal" not in out["index"]
+    assert [c["ticker"] for c in out["stocks"]] == ["SBIN.NS", "DIXON.NS"]
+    c = out["stocks"][0]
+    assert c["currency_symbol"] == "₹" and len(c["sparkline"]) == service.SPARKLINE_DAYS
+    assert c["change_pct"] == pytest.approx((c["sparkline"][-1] / c["sparkline"][-2] - 1) * 100,
+                                           abs=0.01)
+    assert c["signal"]["signal"] in ("BUY", "SELL", "HOLD") and " of " in c["signal"]["coverage"]
