@@ -261,3 +261,33 @@ approval.
 `derivation_operands`). The case above is in
 `benchmarks/results/2026-11-11-fixes/excerpt_rerun_traces.json` and is written
 up in `benchmarks/EXCERPT_CUT.md`.
+
+---
+
+## The signal's regime label can lag a sharp turn, and the page says so
+
+**What happens.** The signal engine labels a strong trend (ADX at or above
+25) "trending up" or "trending down" from the 20-day slope of the 50-day
+average. After a fall and a quick rebound the average is still falling, so
+the label can say "trending down" while the DI lines, part of the same ADX
+reading, point up. On 2026-11-16 SBIN.NS read `trending_down` with ADX 42.4,
++DI 38.3 and -DI 5.8.
+
+**What the page does.** The stock page's Signal tab shows a note under the
+regime whenever the DI lines point against the label, naming both readings
+and the reason (`diDisagreement` in `frontend/src/app/stock/[ticker]/page.tsx`).
+The engine's label is left as computed.
+
+**Why it is that way.** A rule that requires the slope and the DI lines to
+agree ("agree", in `market/regime.py`) was proposed for exactly this case and
+tested on ten NSE stocks used for nothing else, against a decision rule
+written down before the run. It raised the signal's Sharpe ratio on 3 of 10
+with a median change of 0.000 (4 of 10, 0.000 on the calendar refit
+schedule); the bar was 6 of 10 and a positive median. The change was not
+adopted (`benchmarks/REGIME_RULE_CHECK.md`). The label mostly affects how
+reversion rules are weighted, and its effect on results is smaller than the
+noise from scheduling choices measured in `benchmarks/SIGNALS_7C.md`.
+
+**When to revisit.** If the regime is ever used for more than weighting (for
+example shown as a headline or used to gate a strategy), or a different
+direction measure is proposed with its own hold-out test.

@@ -72,6 +72,22 @@ function TabSkeleton({ label }: { label: string }) {
   );
 }
 
+/**
+ * The regime label's direction comes from the 50-day average's 20-day slope,
+ * which lags a sharp turn. When the DI lines (part of the same ADX reading)
+ * point the other way, the page says so rather than show a label its own
+ * numbers contradict. The engine's rule is unchanged: a rule that required
+ * both to agree was tested on ten hold-out stocks and not adopted
+ * (benchmarks/REGIME_RULE_CHECK.md).
+ */
+function diDisagreement(regime: SignalReport["evidence"]["regime"]): string | null {
+  const { label, plus_di: plus, minus_di: minus } = regime;
+  if (plus === null || minus === null) return null;
+  if (label === "trending_down" && plus > minus) return "up";
+  if (label === "trending_up" && minus > plus) return "down";
+  return null;
+}
+
 function SignalTab({ report, token, ticker }: { report: SignalReport; token: string; ticker: string }) {
   const ev = report.evidence;
   const [explain, setExplain] = useState<{ busy: boolean; data?: SignalExplanation; error?: string }>({ busy: false });
@@ -79,6 +95,7 @@ function SignalTab({ report, token, ticker }: { report: SignalReport; token: str
   if (!ev.ok) return <EmptyState title="No signal yet">{ev.error}</EmptyState>;
   const cards = new Map(report.cards.map((c) => [c.strategy, c]));
   const counted = ev.votes.filter((v) => v.weight > 0);
+  const disagree = diDisagreement(ev.regime);
   return (
     <div className="flex flex-col gap-6" data-loaded="signal">
       <Verdict verdict={report.verdict} />
@@ -110,6 +127,14 @@ function SignalTab({ report, token, ticker }: { report: SignalReport; token: str
             ADX {num(ev.regime.adx, 1)} · +DI {num(ev.regime.plus_di, 1)} / −DI {num(ev.regime.minus_di, 1)} · volatility
             percentile {pct(ev.regime.volatility_percentile, 0).replace("+", "")}
           </p>
+          {disagree ? (
+            <p role="note" className="mt-3 rounded-md border border-warn/40 bg-surface-2 px-3 py-2 text-xs text-warn">
+              The DI lines point {disagree} (+DI {num(ev.regime.plus_di, 1)} vs −DI {num(ev.regime.minus_di, 1)}), against this
+              label. The label&apos;s direction comes from the 50-day average&apos;s 20-day slope, which lags a sharp
+              turn: after a fall and a rebound, the average is still falling. A rule requiring both to agree was tested on
+              ten unseen stocks and not adopted.
+            </p>
+          ) : null}
         </Card>
       </div>
       {ev.warnings.length ? (
