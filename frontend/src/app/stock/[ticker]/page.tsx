@@ -414,16 +414,20 @@ function ResearchTab({ ticker }: { ticker: string }) {
   const name = COMPANY_NAMES[ticker] ?? ticker;
   const questions = [
     `How has ${ticker} performed over the last year, and what was its largest drawdown?`,
+    `What is the current trading signal for ${ticker}, and why?`,
     `What is the latest news about ${name}?`,
-    `Show me a price chart of ${ticker} with its 50-day and 200-day averages.`,
   ];
   return (
     <div className="flex flex-col gap-4" data-loaded="research">
-      <p className="max-w-2xl text-sm text-fg-muted">
-        The research chat answers from live tools (prices, analytics, news) and from SEC 10-K filings, which cover
-        15 US companies; Indian companies do not file 10-Ks, so for {name} it works from prices and news. Every
-        figure in an answer is checked against what a tool returned.
-      </p>
+      <div className="max-w-2xl rounded-[var(--radius-card)] border border-border bg-surface-2 p-4 text-sm">
+        <p className="font-medium text-fg">No filings for {name}</p>
+        <p className="mt-1 text-fg-muted">
+          The filings search covers only the annual 10-K reports of 15 US companies, such as NVIDIA and Apple.
+          Indian companies do not file 10-Ks, so for {name} the research chat works from NSE prices and returns,
+          the signal engine and news. Every figure in an answer is checked against what a tool returned.
+        </p>
+      </div>
+      <p className="text-sm text-fg-muted">Questions the chat can answer from those tools:</p>
       <ul className="flex flex-col gap-2">
         {questions.map((q) => (
           <li key={q}>

@@ -29,10 +29,14 @@ interface Pending {
   status: string;
 }
 
+// US questions use the 10-K filings; NSE questions use prices, the signal
+// engine and news (Indian companies do not file 10-Ks).
 const EXAMPLES = [
   "What is NVIDIA's gross margin?",
-  "What are NVIDIA's main competitive risks?",
   "Compare NVIDIA's gross margin to Apple's.",
+  "How has SBIN.NS performed over the last year?",
+  "What is the current trading signal for DIXON.NS, and why?",
+  "What is the latest news about HDFC Bank?",
 ];
 
 export default function ResearchPage() {
