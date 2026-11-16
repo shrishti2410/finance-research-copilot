@@ -25,7 +25,7 @@ from market.store import MarketData
 __all__ = ["chart_data", "price_analytics", "backtest", "strategy_catalogue",
            "WARMUP_CALENDAR_DAYS", "BACKTEST_WARMUP_CALENDAR_DAYS", "DEFAULT_BENCHMARK",
            "parse_indicators", "default_benchmark", "market_info", "trading_signal",
-           "signal_evaluation", "option_ideas", "SIGNAL_HISTORY_CALENDAR_DAYS"]
+           "signal_evaluation", "option_ideas", "watchlist", "SIGNAL_HISTORY_CALENDAR_DAYS"]
 
 # Enough trading days for the slowest indicator offered (SMA 200) plus the
 # warm-up of the smoothed ones: 300 calendar days is about 205 trading days.
@@ -252,3 +252,52 @@ async def option_ideas(ticker: str, structure: str | None = None, days: int = 30
                  "Premiums are model estimates, not quotes."),
         "provider": data.provider.name, "disclaimer": DISCLAIMER,
     }
+
+
+SPARKLINE_DAYS = 60
+
+
+async def watchlist(tickers=None, benchmark: str | None = None,
+                    data: MarketData | None = None, now: datetime | None = None) -> dict:
+    """One call for the dashboard: the index strip and a card per stock.
+
+    Per ticker: the last close, the change on the previous close, the last
+    SPARKLINE_DAYS closes, and for stocks the signal with its coverage and
+    confidence. Prices are the traded (split-adjusted) close, as a quote
+    would show; the signal uses its own adjusted series."""
+    from market.signals import signal_evidence, walk_forward
+    from market.universe import INDIA_BENCHMARK, INDIA_WATCHLIST
+
+    data = data or MarketData()
+    tickers = [normalize_ticker(t) for t in (tickers or INDIA_WATCHLIST)]
+    benchmark = normalize_ticker(benchmark or INDIA_BENCHMARK)
+
+    def card(symbol, bars):
+        closes = [b.close for b in bars]
+        last, prev = closes[-1], closes[-2] if len(closes) > 1 else None
+        return {"ticker": symbol, **market_info(symbol), "as_of": bars[-1].day.isoformat(),
+                "price": round(last, 2),
+                "change_pct": round((last / prev - 1.0) * 100, 2) if prev else None,
+                "sparkline": [round(c, 2) for c in closes[-SPARKLINE_DAYS:]]}
+
+    out_index = None
+    bars = await _signal_bars(benchmark, data, now)
+    if len(bars) >= 2:
+        out_index = card(benchmark, bars)
+    cards = []
+    for symbol in tickers:
+        bars = await _signal_bars(symbol, data, now)
+        if len(bars) < 2:
+            cards.append({"ticker": symbol, "error": "no price history"})
+            continue
+        c = card(symbol, bars)
+        market = market_for(symbol)
+        ev = signal_evidence(walk_forward(bars, market), symbol, market)
+        c["signal"] = ({"signal": ev["signal"], "score": ev["score"],
+                        "confidence": ev["confidence"], "coverage": ev["coverage"]["text"],
+                        "regime": ev["regime"]["label"],
+                        "warnings": [w.split(":")[0] for w in ev["warnings"]]}
+                       if ev.get("ok") else {"error": ev.get("error")})
+        cards.append(c)
+    return {"index": out_index, "stocks": cards, "provider": data.provider.name,
+            "disclaimer": "Educational project, not investment advice."}
