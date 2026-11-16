@@ -290,6 +290,12 @@ class Settings(BaseSettings):
     # import and load at 0.1 CPU, which a visitor would otherwise wait out.
     embedding_preload: bool = False
 
+    # --- Market data (market/) ---
+    # How long a cached price range is served before it is fetched again. Not
+    # forever, even for old history: the adjusted close is restated back
+    # through history on every ex-dividend date. See market/store.py.
+    market_cache_ttl_hours: float = Field(default=24.0, gt=0)
+
     # --- Public access (see api/quotas.py and docs/DEPLOY.md) ---
     # Open signup. A public demo turns it off and offers the demo account only:
     # with signup open, a visitor's way round a per-user cap is another account.
