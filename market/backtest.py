@@ -42,6 +42,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from market.analytics import TRADING_DAYS
+from market.costs import CostModel, FlatBps
 from market.strategies import Prices, Strategy, get_strategy
 
 __all__ = ["Trade", "BacktestResult", "adjusted_prices", "run_backtest"]
@@ -86,38 +87,59 @@ def adjusted_prices(bars) -> Prices:
 
 
 def _simulate(p: Prices, target: np.ndarray, days: list[str], initial: float,
-              cost: float, slip: float):
-    """Equity and position per bar, trades, and costs paid. See the module docstring."""
+              model: CostModel, slip: float):
+    """Equity and position per bar, trades, and costs paid. See the module docstring.
+
+    Each change of position is priced as a sell leg (exposure reduced) and a
+    buy leg (exposure added), each through the cost model; slippage is charged
+    on the whole traded notional on top.
+    """
     n = len(p)
     equity = np.empty(n)
     held = np.zeros(n)
     equity[0] = initial
     position, trades, costs_paid, turnover = 0.0, [], 0.0, 0.0
     open_trade: Trade | None = None
-    entry_bar = 0
+    entry_bar, entry_fees, entry_notional = 0, 0.0, 0.0
     for t in range(1, n):
         value = equity[t - 1] * (1.0 + position * (p.open[t] / p.close[t - 1] - 1.0))
         wanted = float(target[t - 1])          # decided at yesterday's close
         if wanted != position:
-            traded = abs(wanted - position)
-            fee = value * traded * (cost + slip)
-            value -= fee
-            costs_paid += fee
-            turnover += traded
-            if open_trade is not None and (wanted == 0 or np.sign(wanted) != np.sign(position)):
+            bought = max(0.0, wanted - position)
+            sold = max(0.0, position - wanted)
+            # A long being reduced is a sale; a short being reduced is a
+            # purchase. Signs only matter to the market's side-specific
+            # charges (stamp duty on buys, the DP charge on sales).
+            sell_notional = value * (min(sold, max(position, 0.0)) + min(bought, max(-position, 0.0)))
+            buy_notional = value * (bought + sold) - sell_notional
+            sale = model.charges("sell", sell_notional).total if sell_notional else 0.0
+            purchase = model.charges("buy", buy_notional).total if buy_notional else 0.0
+            fee = sale + purchase + value * (bought + sold) * slip
+            closing = open_trade is not None and (wanted == 0 or np.sign(wanted) != np.sign(position))
+            if closing:
                 sign = 1.0 if open_trade.side == "long" else -1.0
                 fill = p.open[t] * (1.0 - sign * slip)
                 open_trade.exit_day, open_trade.exit_price = days[t], float(fill)
                 open_trade.bars_held = t - entry_bar
+                exit_fees = sale if sign > 0 else purchase
                 open_trade.net_return = float(
-                    sign * (fill / open_trade.entry_price - 1.0) - 2 * cost)
+                    sign * (fill / open_trade.entry_price - 1.0)
+                    - (entry_fees + exit_fees) / entry_notional)
                 trades.append(open_trade)
                 open_trade = None
+            value -= fee
+            costs_paid += fee
+            turnover += bought + sold
             if wanted != 0 and open_trade is None:
                 sign = 1.0 if wanted > 0 else -1.0
                 open_trade = Trade(side="long" if sign > 0 else "short", entry_day=days[t],
                                    entry_price=float(p.open[t] * (1.0 + sign * slip)))
                 entry_bar = t
+                entry_notional = value * abs(wanted)
+                entry_fees = (purchase if sign > 0 else sale) if not closing else (
+                    model.charges("buy" if sign > 0 else "sell", entry_notional).total)
+                # A trade's return is on the cash committed to it, fees included.
+                entry_notional += entry_fees
             position = wanted
         equity[t] = value * (1.0 + position * (p.close[t] / p.open[t] - 1.0))
         held[t] = position
@@ -125,7 +147,8 @@ def _simulate(p: Prices, target: np.ndarray, days: list[str], initial: float,
         sign = 1.0 if open_trade.side == "long" else -1.0
         open_trade.exit_day, open_trade.exit_price = days[-1], float(p.close[-1])
         open_trade.bars_held = n - 1 - entry_bar
-        open_trade.net_return = float(sign * (p.close[-1] / open_trade.entry_price - 1.0) - cost)
+        open_trade.net_return = float(sign * (p.close[-1] / open_trade.entry_price - 1.0)
+                                      - entry_fees / entry_notional)
         open_trade.status = "open"
         trades.append(open_trade)
     return equity, held, trades, costs_paid, turnover
@@ -170,13 +193,18 @@ def _from(prices: Prices, i: int) -> Prices:
 
 def run_backtest(bars, strategy: Strategy | str, params: dict | None = None,
                  initial_cash: float = 10_000.0, cost_bps: float = 5.0,
-                 slippage_bps: float = 5.0, start_day=None) -> BacktestResult:
+                 slippage_bps: float = 5.0, start_day=None,
+                 cost_model: CostModel | None = None) -> BacktestResult:
     """Backtest one strategy on daily bars, with buy-and-hold on the same terms.
 
     `start_day`: trade from the first bar on or after it; the bars before it are
     warm-up, read by the strategy (a 200-day average needs 200 days) but not
     traded. Without it a slow strategy sits flat for its first year while
     buy-and-hold is invested, and the comparison measures the warm-up.
+
+    `cost_model`: how each leg is charged (market/costs.py); `cost_bps` flat
+    when omitted. A model that does not allow shorts (Indian delivery) turns a
+    short position into flat.
     """
     if cost_bps < 0 or slippage_bps < 0:
         raise ValueError("Costs and slippage cannot be negative.")
@@ -191,12 +219,15 @@ def run_backtest(bars, strategy: Strategy | str, params: dict | None = None,
         raise ValueError("A backtest needs at least three bars to trade.")
     prices, target = _from(all_prices, first), all_target[first:]
     days = [b.day.isoformat() for b in bars[first:]]
-    cost, slip = cost_bps / 1e4, slippage_bps / 1e4
+    model = cost_model or FlatBps(cost_bps)
+    slip = slippage_bps / 1e4
+    if not model.allows_short:
+        target = np.clip(target, 0.0, None)
 
-    equity, held, trades, costs, turnover = _simulate(prices, target, days, initial_cash, cost, slip)
+    equity, held, trades, costs, turnover = _simulate(prices, target, days, initial_cash, model, slip)
     bench_target = np.ones(len(prices))
     b_equity, b_held, b_trades, b_costs, b_turnover = _simulate(
-        prices, bench_target, days, initial_cash, cost, slip)
+        prices, bench_target, days, initial_cash, model, slip)
     return BacktestResult(
         strategy=strategy.key, params=used, days=days,
         equity=[round(float(x), 4) for x in equity],

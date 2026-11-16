@@ -1,7 +1,7 @@
 """Market data for the chart page.
 
     GET /market/{ticker}/chart?start=2025-11-01&end=2026-11-13&indicators=sma50,bollinger,rsi14
-    GET /market/{ticker}/analytics?start=...&end=...&benchmark=SPY
+    GET /market/{ticker}/analytics?start=...&end=...&benchmark=^NSEI   (default: the ticker's market index)
     GET  /market/strategies
     POST /market/{ticker}/backtest   {strategy, params, start, end, cost_bps, slippage_bps}
 
@@ -21,7 +21,6 @@ from auth.deps import get_current_user
 from db.models import User
 from market.providers import ProviderError
 from market.service import (
-    DEFAULT_BENCHMARK,
     backtest,
     chart_data,
     parse_indicators,
@@ -66,11 +65,13 @@ async def chart(ticker: str, start: date | None = None, end: date | None = None,
 
 @router.get("/{ticker}/analytics")
 async def analytics(ticker: str, start: date | None = None, end: date | None = None,
-                    benchmark: str = DEFAULT_BENCHMARK,
+                    benchmark: str | None = None,
                     user: User = Depends(get_current_user)) -> dict:
+    """No `benchmark`: the ticker's own market index. `benchmark=` (empty): none."""
     start, end = _range(start, end)
     try:
-        return await price_analytics(ticker, start, end, benchmark or None)
+        return await price_analytics(ticker, start, end,
+                                     "auto" if benchmark is None else (benchmark or None))
     except ProviderError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY,
                             f"The price provider could not be reached: {exc}") from None

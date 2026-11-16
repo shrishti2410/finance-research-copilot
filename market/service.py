@@ -18,11 +18,13 @@ import math
 from datetime import date, timedelta
 
 from market import analytics, indicators
-from market.store import MarketData, normalize_ticker
+from market.costs import cost_model_for
+from market.markets import market_for, normalize_ticker
+from market.store import MarketData
 
 __all__ = ["chart_data", "price_analytics", "backtest", "strategy_catalogue",
            "WARMUP_CALENDAR_DAYS", "BACKTEST_WARMUP_CALENDAR_DAYS", "DEFAULT_BENCHMARK",
-           "parse_indicators"]
+           "parse_indicators", "default_benchmark", "market_info"]
 
 # Enough trading days for the slowest indicator offered (SMA 200) plus the
 # warm-up of the smoothed ones: 300 calendar days is about 205 trading days.
@@ -31,6 +33,8 @@ WARMUP_CALENDAR_DAYS = 300
 # calendar days, plus a margin.
 BACKTEST_WARMUP_CALENDAR_DAYS = 400
 DEFAULT_BENCHMARK = "SPY"
+# Each market's broad index, the default comparison for a stock that trades there.
+BENCHMARKS = {"US": "SPY", "NSE": "^NSEI", "BSE": "^BSESN"}
 MAX_INDICATORS = 8
 
 
@@ -47,6 +51,15 @@ def parse_indicators(raw) -> list[str]:
     if len(names) > MAX_INDICATORS:
         raise ValueError(f"At most {MAX_INDICATORS} indicators at once.")
     return list(dict.fromkeys(names))
+
+
+def default_benchmark(ticker: str) -> str:
+    return BENCHMARKS.get(market_for(ticker).exchange, DEFAULT_BENCHMARK)
+
+
+def market_info(ticker: str) -> dict:
+    m = market_for(ticker)
+    return {"exchange": m.exchange, "currency": m.currency, "currency_symbol": m.currency_symbol}
 
 
 def _num(value: float) -> float | None:
@@ -69,7 +82,8 @@ async def chart_data(ticker: str, start: date, end: date, names: list[str],
              "close": b.close, "adj_close": b.adj_close, "volume": b.volume}
             for b in warm[first:]]
     return {
-        "ticker": symbol, "start": start.isoformat(), "end": end.isoformat(),
+        "ticker": symbol, **market_info(symbol),
+        "start": start.isoformat(), "end": end.isoformat(),
         "provider": data.provider.name, "bars": bars, "series": series,
         "indicators": {n: indicators.INDICATORS[n] for n in names},
         "price_basis": "candles: split-adjusted traded prices; returns: dividend-adjusted close",
@@ -77,10 +91,14 @@ async def chart_data(ticker: str, start: date, end: date, names: list[str],
 
 
 async def price_analytics(ticker: str, start: date, end: date,
-                          benchmark: str | None = DEFAULT_BENCHMARK,
+                          benchmark: str | None = "auto",
                           data: MarketData | None = None) -> dict:
+    """`benchmark="auto"` compares with the stock's own market index (SPY for
+    a US stock, the Nifty 50 for an NSE one); None or "" compares with none."""
     data = data or MarketData()
     symbol = normalize_ticker(ticker)
+    if benchmark == "auto":
+        benchmark = default_benchmark(symbol)
     bars = await data.history(symbol, start, end)
     if len(bars) < 2:
         raise LookupError(f"No price history for {symbol} between {start} and {end}.")
@@ -89,7 +107,8 @@ async def price_analytics(ticker: str, start: date, end: date,
     if bench and bench != symbol:
         bench_bars = await data.history(bench, start, end)
     out = analytics.summary(bars, bench_bars)
-    return {"ticker": symbol, "benchmark": bench if bench_bars else None,
+    return {"ticker": symbol, **market_info(symbol),
+            "benchmark": bench if bench_bars else None,
             "provider": data.provider.name, **out}
 
 
@@ -103,9 +122,13 @@ def strategy_catalogue() -> list[dict]:
 async def backtest(ticker: str, strategy: str, start: date, end: date,
                    params: dict | None = None, cost_bps: float = 5.0,
                    slippage_bps: float = 5.0, initial_cash: float = 10_000.0,
-                   data: MarketData | None = None) -> dict:
+                   data: MarketData | None = None, cost_model: str | None = None) -> dict:
     """Run one strategy on `ticker` from `start` to `end`, with a warm-up
-    before `start` that the strategy reads but does not trade."""
+    before `start` that the strategy reads but does not trade.
+
+    The cost model follows the ticker's market unless `cost_model` names one:
+    Indian delivery charges for an NSE or BSE stock (long or flat only),
+    `cost_bps` per side otherwise."""
     from dataclasses import asdict
 
     from market.backtest import run_backtest
@@ -115,10 +138,13 @@ async def backtest(ticker: str, strategy: str, start: date, end: date,
     data = data or MarketData()
     symbol = normalize_ticker(ticker)
     bars = await data.history(symbol, start - timedelta(days=BACKTEST_WARMUP_CALENDAR_DAYS), end)
+    model = cost_model_for(cost_model or market_for(symbol).cost_model, cost_bps)
     result = run_backtest(bars, strategy, params, initial_cash=initial_cash,
-                          cost_bps=cost_bps, slippage_bps=slippage_bps, start_day=start)
+                          cost_bps=cost_bps, slippage_bps=slippage_bps, start_day=start,
+                          cost_model=model)
     return {
-        "ticker": symbol, "provider": data.provider.name,
+        "ticker": symbol, **market_info(symbol), "provider": data.provider.name,
+        "costs": model.describe(),
         "strategy": result.strategy, "params": result.params,
         "start": result.days[0], "end": result.days[-1],
         "cost_bps": cost_bps, "slippage_bps": slippage_bps, "initial_cash": initial_cash,

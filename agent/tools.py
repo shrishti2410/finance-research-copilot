@@ -244,7 +244,7 @@ async def get_price_analytics(
     ticker: str,
     start_date: str,
     end_date: str = "",
-    benchmark: str = "SPY",
+    benchmark: str = "auto",
 ) -> dict[str, Any]:
     """Return, risk and drawdown of a stock over a period, from daily prices.
 
@@ -254,17 +254,20 @@ async def get_price_analytics(
     dividend-adjusted close. For a single day's price, use get_stock_price.
 
     Args:
-        ticker: The stock symbol, e.g. "NVDA".
+        ticker: The stock symbol, e.g. "NVDA"; an Indian NSE stock takes
+            ".NS", e.g. "SBIN.NS".
         start_date: First day, YYYY-MM-DD.
         end_date: Last day, YYYY-MM-DD; today when omitted.
-        benchmark: Symbol to measure beta and correlation against; "SPY"
-            (the S&P 500 ETF) by default, "" for none.
+        benchmark: Symbol to measure beta and correlation against. "auto"
+            (the default) uses the stock's market index: SPY for a US stock,
+            ^NSEI (Nifty 50) for an NSE one. "" for none.
 
     Returns:
         A dict with "ok": True and total_return, annualised_return and
         annualised_volatility (fractions: 0.25 is 25%), sharpe_ratio,
         max_drawdown (negative fraction) with peak_day and trough_day,
-        best_day, worst_day, beta, correlation, trading_days, start, end. On
+        best_day, worst_day, beta, correlation, trading_days, start, end,
+        and currency (prices are in it: INR for an NSE stock). On
         failure, {"ok": False, "error": code, "message": ...}.
     """
     from market.providers import ProviderError

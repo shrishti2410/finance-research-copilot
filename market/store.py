@@ -28,6 +28,7 @@ from sqlalchemy import text
 
 from core.config import settings
 from db.base import engine
+from market.markets import normalize_ticker
 from market.providers import Bar, PriceProvider, ProviderError, YFinanceProvider
 
 __all__ = ["MarketData", "ProviderError", "normalize_ticker"]
@@ -42,9 +43,6 @@ _UPSERT = text("""
 """)
 
 
-def normalize_ticker(raw: str) -> str:
-    """Upper case, and Yahoo's dash for a class share ("BRK.B" -> "BRK-B")."""
-    return (raw or "").strip().upper().replace(".", "-")
 
 
 class MarketData:
