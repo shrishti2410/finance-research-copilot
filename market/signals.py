@@ -11,10 +11,11 @@ How a day's signal is made (all from bars 0..t, decided at bar t's close)
 2. **Votes.** Each strategy says long (+1) or out (-1) at t. Every strategy
    here is long or flat on an Indian stock, so "out" is a vote to sell or stay
    away.
-3. **Weights, walk-forward.** Every REFIT_EVERY bars, each strategy's weight
-   is reset to its Sharpe ratio over the previous TRAIN_DAYS bars, net of the
-   market's costs, floored at zero. Those weights are then used, unchanged,
-   for the next REFIT_EVERY bars, which they have not seen. The rules'
+3. **Weights, walk-forward.** On the first trading day of each month, each
+   strategy's weight is reset to its Sharpe ratio over the previous
+   TRAIN_DAYS bars, net of the market's costs, floored at zero. Those weights
+   are then used, unchanged, for the rest of the month, which they have not
+   seen. The rules'
    parameters are the textbook defaults and are never fitted, so the only
    thing learned from the past is how much to trust each rule.
 4. **Regime fit.** A strategy whose style suits the regime keeps its weight;
@@ -42,6 +43,18 @@ scaled by train / TRAIN_DAYS, and the result carries a warning.
 All of that is decided from the bars up to t, never from how many bars the
 series has in total. Otherwise the set of voters on a past day would depend
 on how much data came after it, which is look-ahead.
+
+Why a calendar day for the refit
+--------------------------------
+Until 2026-11-17 the weights were refitted every 21 bars counted from the
+first signal, so where the history happened to start decided which days were
+refit days. Fetching one day less history moved every refit, and moved the
+five-year results (COFORGE.NS: CAGR 3.5% on one start, 4.4% on the next). A
+result that depends on an arbitrary start is noise, and a live signal that
+changes because the fetch window rolled forward a day is worse. Refitting on
+the first trading day of each month ties the schedule to the calendar. The
+`refit_day` argument (the k-th trading day of the month) exists to measure
+how much that choice matters (benchmarks/SIGNALS_7C.md).
 
 The thresholds, the regime multipliers and the window lengths were set before
 the evaluation was run, and were not changed after it.
@@ -93,7 +106,8 @@ FIT = {  # regime -> style -> multiplier; any other regime leaves weights as the
 }
 TRAIN_DAYS = 504          # two years
 SHORT_TRAIN_DAYS = 126    # six months, for a stock with limited history
-REFIT_EVERY = 21          # about a month
+REFIT_EVERY = "monthly"   # on the REFIT_DAY-th trading day of each month
+REFIT_DAY = 0             # 0: the first trading day
 BUY_AT, SELL_AT = 0.25, -0.25
 MIN_COVERAGE = 0.5        # below this share of rules counting, the vote is "narrow"
 SLIPPAGE_BPS = 5.0
@@ -169,8 +183,17 @@ def _vote(position: float, allows_short: bool) -> float:
     return float(position) if allows_short else 2.0 * float(position) - 1.0
 
 
+def _day_in_month(bars) -> list[int]:
+    """For each bar, how many earlier bars of the same month there are."""
+    out = []
+    for i, b in enumerate(bars):
+        same = i > 0 and (b.day.year, b.day.month) == (bars[i - 1].day.year, bars[i - 1].day.month)
+        out.append(out[-1] + 1 if same else 0)
+    return out
+
+
 def walk_forward(bars, market: Market, model: CostModel | None = None,
-                 regime_rule: str = DEFAULT_RULE) -> WalkForward:
+                 regime_rule: str = DEFAULT_RULE, refit_day: int = REFIT_DAY) -> WalkForward:
     model = model or cost_model_for(market.cost_model)
     n = len(bars)
     candidates, excluded = _candidates(market)
@@ -201,8 +224,12 @@ def walk_forward(bars, market: Market, model: CostModel | None = None,
     fits: list[Fit] = []
     fit: Fit | None = None
     held = 0.0
+    in_month = _day_in_month(bars)
     for t in range(first, n):
-        if (t - first) % REFIT_EVERY == 0:
+        # The first signal needs weights; after that, refit on the calendar
+        # day. A month with fewer trading days than refit_day + 1 keeps the
+        # previous month's weights.
+        if fit is None or in_month[t] == refit_day:
             fit = _refit(t, bars[t].day, candidates, returns)
         mult = FIT.get(regime[t], {})
         num = den = 0.0

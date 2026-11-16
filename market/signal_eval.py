@@ -97,11 +97,16 @@ def _pct(values, q) -> float | None:
 
 
 def evaluate(bars, nifty_bars, market: Market, years: int = 5, n_random: int = N_RANDOM,
-             regime_rule: str | None = None,
+             regime_rule: str | None = None, refit_day: int | None = None,
              model: CostModel | None = None, wf: WalkForward | None = None) -> dict:
     model = model or cost_model_for(market.cost_model)
-    wf = wf or (walk_forward(bars, market, model, regime_rule) if regime_rule
-                else walk_forward(bars, market, model))
+    if wf is None:
+        kwargs = {}
+        if regime_rule:
+            kwargs["regime_rule"] = regime_rule
+        if refit_day is not None:
+            kwargs["refit_day"] = refit_day
+        wf = walk_forward(bars, market, model, **kwargs)
     n = len(bars)
     wanted = bars[-1].day - timedelta(days=round(365.25 * years))
     start = max(wf.first, next(i for i, b in enumerate(bars) if b.day >= wanted))

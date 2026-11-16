@@ -292,3 +292,35 @@ def test_the_agree_rule_is_causal_too():
     full = sg.walk_forward(BARS, NSE, regime_rule="agree")
     part = sg.walk_forward(BARS[:800], NSE, regime_rule="agree")
     np.testing.assert_array_equal(part.score, full.score[:800])
+
+
+# --- the refit schedule ------------------------------------------------------------
+
+def test_weights_are_refitted_on_the_first_trading_day_of_each_month():
+    wf = sg.walk_forward(BARS, NSE)
+    refits = sorted({f.on for f in wf.fits})
+    assert refits[0] == wf.days[wf.first]
+    for day in refits[1:]:
+        i = wf.days.index(day)
+        assert wf.days[i - 1].month != day.month          # the month's first bar
+
+
+def test_where_the_history_starts_no_longer_moves_later_signals():
+    """Fetching a few days less history used to shift every refit (it was
+    every 21 bars from the first signal) and change the five-year result."""
+    full = sg.walk_forward(BARS, NSE)
+    for skip in (1, 5, 13):
+        later = sg.walk_forward(BARS[skip:], NSE)
+        # Compare well after both are past warm-up and the limited-history
+        # threshold, where only the schedule could make them differ.
+        for t in range(850, len(BARS)):
+            assert later.decision[t - skip] == full.decision[t], (skip, t)
+
+
+def test_the_refit_day_can_be_moved_to_measure_its_effect():
+    a = sg.walk_forward(BARS, NSE, refit_day=0)
+    b = sg.walk_forward(BARS, NSE, refit_day=10)
+    days_b = sorted({f.on for f in b.fits})[1:]
+    assert all(sum(1 for d in b.days[:b.days.index(x)] if (d.year, d.month) == (x.year, x.month))
+               == 10 for x in days_b)
+    assert sorted({f.on for f in a.fits}) != sorted({f.on for f in b.fits})
