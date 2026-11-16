@@ -7,6 +7,7 @@ rather than silently at the first request.
 
 import secrets
 from functools import lru_cache
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from typing import Literal
 
@@ -17,9 +18,49 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # while `insecure_jwt_secret` can shout about it in any real deployment.
 DEV_JWT_SECRET = "dev-only-insecure-change-me"
 
+# The shortest JWT secret production accepts: 32 bytes is the HS256 key size.
+MIN_JWT_SECRET_LENGTH = 32
+
+# What SEC_EDGAR_USER_AGENT defaults to. Production refuses it: SEC asks for a
+# real contact, and blocks clients that do not give one.
+_PLACEHOLDER_USER_AGENT = "finance-research-copilot (contact: set SEC_EDGAR_USER_AGENT)"
+
+# Query parameters libpq understands and asyncpg does not. A hosted Postgres
+# (Neon, Supabase) hands out a URL ending in "?sslmode=require&channel_binding=
+# require"; passed through, asyncpg fails at the first connection with
+# "unexpected keyword argument 'sslmode'". They are removed from the URL and
+# sslmode becomes asyncpg's own `ssl` argument (`database_connect_args`).
+_LIBPQ_ONLY_PARAMS = ("sslmode", "channel_binding", "sslrootcert", "sslcert", "sslkey")
+
+
+def _asyncpg_url(url: str) -> tuple[str, str | None]:
+    """(the URL with the asyncpg driver and no libpq-only parameters, sslmode).
+
+    Accepts what a provider's dashboard gives: postgres://, postgresql://, or
+    postgresql+asyncpg://.
+    """
+    for prefix in ("postgres://", "postgresql://"):
+        if url.startswith(prefix):
+            url = "postgresql+asyncpg://" + url[len(prefix):]
+            break
+    parts = urlsplit(url)
+    query = parse_qsl(parts.query, keep_blank_values=True)
+    sslmode = next((value for key, value in query if key == "sslmode"), None)
+    kept = [(key, value) for key, value in query if key not in _LIBPQ_ONLY_PARAMS]
+    return urlunsplit(parts._replace(query=urlencode(kept))), sslmode
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
+    # hide_input_in_errors: a failed validation otherwise prints every setting
+    # it was given -- JWT_SECRET, the provider keys, the database password --
+    # into whatever log captures the boot.
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False,
+                                      hide_input_in_errors=True)
+
+    # --- Environment ---
+    # "production" turns the warnings this app prints about unsafe settings into
+    # a refusal to start. See `production_is_configured` and docs/DEPLOY.md.
+    environment: Literal["development", "production"] = "development"
 
     # --- Database ---
     # asyncpg for the app. Alembic reuses this URL and swaps the driver itself.
@@ -188,15 +229,20 @@ class Settings(BaseSettings):
         # Fail at boot, with the fix in the message. Without this the first
         # question after a deploy is what discovers the missing key, as a 503
         # from the proxy several layers away from the cause.
-        keys = {"groq": ("GROQ_API_KEY", self.groq_api_key),
-                "cerebras": ("CEREBRAS_API_KEY", self.cerebras_api_key)}
-        for provider, (setting, key) in keys.items():
-            if provider in (self.agent_provider, self.router_provider) and not key:
+        for provider, setting in self._missing_provider_keys():
+            if self.environment != "production":   # production lists it with the rest
                 raise ValueError(
                     f"AGENT_PROVIDER or AGENT_ROUTER_PROVIDER is {provider!r} but {setting} "
                     f"is empty. Set {setting} in .env, or set the provider back to 'ollama'."
                 )
         return self
+
+    def _missing_provider_keys(self) -> list[tuple[str, str]]:
+        """(provider, setting) for each hosted provider in use without its key."""
+        keys = {"groq": ("GROQ_API_KEY", self.groq_api_key),
+                "cerebras": ("CEREBRAS_API_KEY", self.cerebras_api_key)}
+        return [(provider, setting) for provider, (setting, key) in keys.items()
+                if provider in (self.agent_provider, self.router_provider) and not key]
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -206,6 +252,48 @@ class Settings(BaseSettings):
     @classmethod
     def strip_agent_trailing_slash(cls, v: str) -> str:
         return v.rstrip("/")
+
+    # The sslmode a hosted provider's URL asked for, kept when the URL is
+    # normalised. See _asyncpg_url.
+    database_sslmode: str | None = None
+
+    @model_validator(mode="after")
+    def normalise_database_url(self) -> "Settings":
+        url, sslmode = _asyncpg_url(self.database_url)
+        object.__setattr__(self, "database_url", url)
+        if sslmode and not self.database_sslmode:
+            object.__setattr__(self, "database_sslmode", sslmode)
+        return self
+
+    @property
+    def database_connect_args(self) -> dict:
+        """asyncpg's connect arguments for the sslmode the URL asked for.
+
+        "require" encrypts without checking the certificate, as libpq's does;
+        "verify-full" checks it against the system's trust store.
+        """
+        mode = (self.database_sslmode or "").lower()
+        if mode in ("require", "verify-ca", "verify-full"):
+            return {"ssl": "require" if mode == "require" else True}
+        return {}
+
+    # --- Public access (see api/quotas.py and docs/DEPLOY.md) ---
+    # Open signup. A public demo turns it off and offers the demo account only:
+    # with signup open, a visitor's way round a per-user cap is another account.
+    signup_enabled: bool = True
+    # POST /auth/demo hands out a fresh, isolated demo account.
+    demo_enabled: bool = False
+    # Questions one demo account may ask per UTC day, and all demo accounts
+    # together. 0 means no cap.
+    demo_questions_per_account: int = Field(default=5, ge=0)
+    demo_questions_per_day: int = Field(default=60, ge=0)
+    # Questions any other account may ask per UTC day. 0 means no cap.
+    user_questions_per_day: int = Field(default=0, ge=0)
+    # Prompt plus completion tokens the hosted provider may be sent per UTC day,
+    # across every user. 0 means no cap; production with a hosted provider
+    # requires one. A question is refused once the day's total has reached it,
+    # so the overshoot is at most the questions already running at that moment.
+    hosted_tokens_per_day: int = Field(default=0, ge=0)
 
     # --- Auth ---
     jwt_secret: str = DEV_JWT_SECRET
@@ -236,6 +324,60 @@ class Settings(BaseSettings):
     @property
     def insecure_jwt_secret(self) -> bool:
         return self.jwt_secret == DEV_JWT_SECRET
+
+    @property
+    def hosted(self) -> bool:
+        """Whether any model call goes to a metered hosted provider."""
+        return self.agent_provider != "ollama" or self.router_provider != "ollama"
+
+    @model_validator(mode="after")
+    def production_is_configured(self) -> "Settings":
+        """In production, refuse to start on a setting that is unsafe to expose.
+
+        Every problem is listed at once, each with the variable to set, so a
+        first deploy fails once rather than once per missing setting. Values
+        are never echoed: several of these are secrets.
+        """
+        if self.environment != "production":
+            return self
+        problems = [f"{setting} must be set: AGENT_PROVIDER or AGENT_ROUTER_PROVIDER is "
+                    f"{provider!r}." for provider, setting in self._missing_provider_keys()]
+        if self.insecure_jwt_secret or len(self.jwt_secret) < MIN_JWT_SECRET_LENGTH:
+            problems.append(
+                f"JWT_SECRET must be set to a random value of at least "
+                f"{MIN_JWT_SECRET_LENGTH} characters (python -c \"import secrets; "
+                f"print(secrets.token_urlsafe(48))\").")
+        if not self.cors_origin_list:
+            problems.append("CORS_ORIGINS must name the front end's origin, "
+                            "e.g. https://your-app.vercel.app.")
+        for origin in self.cors_origin_list:
+            if origin == "*" or not origin.startswith("https://") or origin.endswith("/"):
+                problems.append(
+                    f"CORS_ORIGINS entry {origin!r} is not allowed in production: each entry "
+                    f"must be an exact https:// origin with no path or trailing slash.")
+        if "@127.0.0.1" in self.database_url or "@localhost" in self.database_url:
+            problems.append("DATABASE_URL points at this machine. Set it to the hosted "
+                            "Postgres URL.")
+        if not self.database_connect_args:
+            problems.append("DATABASE_URL must ask for TLS (?sslmode=require), as hosted "
+                            "Postgres URLs do.")
+        if self.redis_url.startswith("redis://127.0.0.1") or self.redis_url.startswith(
+                "redis://localhost"):
+            problems.append("REDIS_URL points at this machine. Set it to the hosted Redis "
+                            "URL (rediss://...).")
+        if self.sec_edgar_user_agent == _PLACEHOLDER_USER_AGENT:
+            problems.append("SEC_EDGAR_USER_AGENT must name a real contact.")
+        if not self.rate_limit_enabled:
+            problems.append("RATE_LIMIT_ENABLED must stay true in production.")
+        if self.hosted and self.hosted_tokens_per_day <= 0:
+            problems.append("HOSTED_TOKENS_PER_DAY must be a positive cap when a hosted "
+                            "provider is used, or visitors can spend the whole allowance.")
+        if self.demo_enabled and self.demo_questions_per_day <= 0:
+            problems.append("DEMO_QUESTIONS_PER_DAY must be a positive cap when the demo "
+                            "account is on.")
+        if problems:
+            raise ValueError("ENVIRONMENT=production, but:\n- " + "\n- ".join(problems))
+        return self
 
     @property
     def sync_database_url(self) -> str:

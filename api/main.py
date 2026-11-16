@@ -4,6 +4,7 @@ Run: `uvicorn api.main:app --reload --port 8000`
 
 Mounted so far:
   /health                 process liveness (no upstream dependency)
+  /health/ready           readiness: database reachable and migrated to head
   /auth/*                 signup, login, current user
   /conversations/*        threads and their messages
   /ask                    put a question to the agent loop
@@ -17,6 +18,7 @@ client SDK expects to find it. This app's own API lives at the root.
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -69,12 +71,17 @@ app.add_middleware(RateLimitMiddleware, limiter=limiter)
 # An explicit allow-list, never "*": these requests carry a bearer token, and a
 # wildcard origin on a credentialed API is how one site reads another's data.
 if settings.cors_origin_list:
+    # Exact origins only; production refuses "*" and http:// at boot (see
+    # Settings.production_is_configured). No credentials: the front end sends
+    # its token in the Authorization header, never a cookie, so a browser has
+    # no ambient credential for another site to ride on.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origin_list,
-        allow_credentials=True,
+        allow_credentials=False,
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type"],
+        max_age=600,
     )
 
 app.include_router(routes_auth.router)
@@ -140,6 +147,48 @@ def health() -> dict[str, str]:
     database, so a container orchestrator won't restart this process just because
     vLLM is slow to load. Use /health/db and /v1/health for readiness."""
     return {"status": "ok"}
+
+
+def _migration_head() -> str | None:
+    """The newest revision in migrations/, or None if it cannot be read."""
+    try:
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        root = Path(__file__).resolve().parent.parent
+        config = Config(str(root / "alembic.ini"))
+        config.set_main_option("script_location", str(root / "migrations"))
+        return ScriptDirectory.from_config(config).get_current_head()
+    except Exception:  # noqa: BLE001 - reported as "unknown", not a crash
+        log.exception("could not read the migration head")
+        return None
+
+
+MIGRATION_HEAD = _migration_head()
+
+
+@app.get("/health/ready")
+async def health_ready() -> JSONResponse:
+    """Ready to serve: the database answers and is migrated to this code's head.
+
+    The check a deploy should gate traffic on. A database one migration behind
+    the code answers SELECT 1 and then fails the first query that touches the
+    new column, so "reachable" is not enough. Redis is reported but does not
+    fail readiness: the rate limiter fails open by default, which
+    /health/redis makes visible.
+    """
+    body: dict = {"database": "ok", "migration": None, "expected_migration": MIGRATION_HEAD,
+                  "redis": "ok" if await limiter.ping() else "unavailable"}
+    try:
+        async with SessionLocal() as session:
+            body["migration"] = await session.scalar(
+                text("SELECT version_num FROM alembic_version"))
+    except Exception as exc:  # noqa: BLE001 -- any failure here means "not ready"
+        body["database"] = f"unavailable ({type(exc).__name__})"
+    ready = (body["database"] == "ok" and MIGRATION_HEAD is not None
+             and body["migration"] == MIGRATION_HEAD)
+    body["status"] = "ok" if ready else "unavailable"
+    return JSONResponse(status_code=200 if ready else 503, content=body)
 
 
 @app.get("/health/db")

@@ -54,6 +54,8 @@ engine = create_async_engine(
     # Postgres behind a proxy or NAT drops idle connections without telling the
     # pool; without pre_ping the first request after an idle period fails.
     pool_pre_ping=True,
+    # TLS for a hosted Postgres; empty locally. See Settings.database_connect_args.
+    connect_args=settings.database_connect_args,
 )
 
 # expire_on_commit=False is load-bearing under asyncio. The default expires every

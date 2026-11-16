@@ -34,6 +34,7 @@ from sqlalchemy import select
 
 from agent.memory import load_history
 from agent.orchestrator import run_agent
+from api.quotas import admit, record_usage
 from api.routes_chat import append_message, owned_conversation
 from api.schemas import AskRequest, AskResponse
 from auth.deps import get_current_user
@@ -201,6 +202,10 @@ async def ask(
             session, conversation_id, limit=settings.agent_history_messages
         )
 
+    # After the ownership check, so a request for someone else's conversation
+    # is a 404 and spends nothing.
+    await admit(user)
+
     # ── no database connection is held from here until the write ─────────────
     result = await run_agent(
         body.message,
@@ -208,6 +213,7 @@ async def ask(
         max_iterations=settings.agent_max_iterations,
         max_tool_calls_per_iteration=settings.agent_max_tool_calls_per_iteration,
     )
+    await record_usage(result)
 
     log.info(
         "ask: conversation=%s user=%s history=%d iterations=%d completed=%s "
@@ -311,6 +317,7 @@ async def _run_and_store(*, conversation_id, user_id, question, history, queue, 
             on_token=lambda text: put({"type": "token", "text": text}),
             on_event=put,
         )
+        await record_usage(result)
 
         try:
             user_message, assistant_message = await _store_turn_in_new_session(
@@ -385,6 +392,9 @@ async def ask_stream(
         history = await load_history(
             session, conversation_id, limit=settings.agent_history_messages
         )
+    # Before the response starts, so a refusal is a real 429 rather than a 200
+    # whose first frame is bad news.
+    await admit(user)
     # From here on the request holds no connection.
 
     # A queue decouples the loop from the socket, so a slow reader cannot
