@@ -2,6 +2,8 @@
 
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { chartHref, PriceChart } from "@/components/PriceChart";
 import { Sidebar } from "@/components/Sidebar";
 import { Sources } from "@/components/Sources";
 import {
@@ -308,6 +310,18 @@ export default function ChatPage() {
                             reason={message.meta.agent.stop_reason}
                           />
                         )}
+                        {token &&
+                          (message.meta?.charts ?? []).map((spec, i) => (
+                            <div key={`${message.id}-chart-${i}`}>
+                              <PriceChart spec={spec} token={token} height={320} />
+                              <Link
+                                href={chartHref(spec)}
+                                className="text-xs text-neutral-400 underline"
+                              >
+                                Open on the chart page
+                              </Link>
+                            </div>
+                          ))}
                         <Sources steps={message.meta?.trace ?? []} />
                       </>
                     )}

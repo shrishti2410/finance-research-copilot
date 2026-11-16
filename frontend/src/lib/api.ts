@@ -151,6 +151,34 @@ export interface TraceStep {
   ok: boolean;
 }
 
+/** A chart the agent drew (show_price_chart). Mirrors AgentResult.charts. */
+export interface ChartSpec {
+  kind: "price_chart";
+  ticker: string;
+  start: string;
+  end: string;
+  indicators: string[];
+}
+
+/** GET /market/{ticker}/chart. Mirrors market/service.py chart_data. */
+export interface ChartData {
+  ticker: string;
+  start: string;
+  end: string;
+  provider: string;
+  bars: {
+    time: string;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    adj_close: number;
+    volume: number;
+  }[];
+  series: Record<string, { time: string; value: number }[]>;
+  indicators: Record<string, { label: string; pane: string }>;
+}
+
 export interface MessageMeta {
   agent?: {
     model: string;
@@ -162,6 +190,7 @@ export interface MessageMeta {
     history_messages: number;
   };
   trace?: TraceStep[];
+  charts?: ChartSpec[];
 }
 
 export interface Message {
@@ -192,6 +221,14 @@ export const api = {
   demo: () => request<TokenResponse>("/auth/demo", { method: "POST" }),
 
   options: () => request<AuthOptions>("/auth/options"),
+
+  chart: (token: string, ticker: string, start: string, end: string, indicators: string) =>
+    request<ChartData>(
+      `/market/${encodeURIComponent(ticker)}/chart?${new URLSearchParams({
+        start, end, indicators,
+      }).toString()}`,
+      { token },
+    ),
 
   me: (token: string) => request<User>("/auth/me", { token }),
 
