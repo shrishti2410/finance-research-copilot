@@ -41,10 +41,15 @@ export default function LoginPage() {
         options?.demo
           ? {
               label: "Try the demo",
-              note: options.demo_questions_per_account
-                ? `A fresh account, ${options.demo_questions_per_account} questions a day. ` +
-                  "Nothing you ask is visible to other visitors."
-                : undefined,
+              note:
+                (options.demo_questions_per_account
+                  ? `A fresh account, ${options.demo_questions_per_account} questions a day. ` +
+                    "Nothing you ask is visible to other visitors. "
+                  : "") +
+                // The free API host sleeps when idle and takes about a minute
+                // to wake (docs/DEPLOY.md), which otherwise looks like a hang.
+                "The demo runs on free hosting that sleeps when nobody is using it, so " +
+                "the first request after a quiet spell can take a minute or so.",
               onClick: async () => {
                 setPending(true);
                 try {
