@@ -267,11 +267,29 @@ class Registry:
         self._tools: dict[str, ToolSpec] = {}
         # name -> what to say when the tool is called with an unknown argument.
         self._reject_unknown: dict[str, str] = {}
+        # name -> {a name models send by mistake: the argument it means}.
+        self._aliases: dict[str, dict[str, str]] = {}
+        # name -> {an argument the tool does not have: the values of it that
+        # change nothing, and so are dropped even under reject_unknown}.
+        self._harmless: dict[str, dict[str, tuple]] = {}
 
     def register(self, fn: Callable, name: str | None = None,
                  description: str | None = None, hidden: tuple[str, ...] = (),
-                 reject_unknown: str | None = None) -> ToolSpec:
+                 reject_unknown: str | None = None,
+                 aliases: dict[str, str] | None = None,
+                 harmless: dict[str, tuple] | None = None) -> ToolSpec:
         """Register a tool.
+
+        `aliases` maps a name models send by mistake to the argument it means.
+        The tools here do not all call the company the same thing
+        (`ticker`, `company`), and a model that has just used one carries the
+        name over to the next. Dropped, `ticker="AAPL"` on the filing search
+        became a search of every company. An alias is used only when the real
+        argument was not also sent.
+
+        `harmless` names values of an unknown argument that change nothing,
+        such as period="annual" on a tool that is annual only. They are
+        dropped even when the tool rejects unknown arguments.
 
         `reject_unknown` makes an argument the tool does not accept an error
         carrying that text, instead of being dropped. Dropping is the default
@@ -284,6 +302,10 @@ class Registry:
         self._tools[spec.name] = spec
         if reject_unknown:
             self._reject_unknown[spec.name] = reject_unknown
+        if aliases:
+            self._aliases[spec.name] = dict(aliases)
+        if harmless:
+            self._harmless[spec.name] = dict(harmless)
         return spec
 
     def __contains__(self, name: object) -> bool:
@@ -333,16 +355,27 @@ class Registry:
         # plausible extras, and inside a five-iteration budget, spending a turn
         # on "you passed an argument I do not accept" is worse than ignoring it
         # -- the required ones below are still enforced.
+        for alias, real in self._aliases.get(name, {}).items():
+            if alias in arguments and real not in arguments:
+                value = arguments[alias]
+                arguments = {key: v for key, v in arguments.items() if key != alias}
+                arguments[real] = value
         properties = spec.parameters.get("properties", {})
         accepted = {
             key: coerce(value, properties.get(key, {}))
             for key, value in arguments.items() if key in spec.accepted
         }
         ignored = sorted(set(arguments) - spec.accepted)
-        if ignored and name in self._reject_unknown:
+        harmless = self._harmless.get(name, {})
+        rejected = [
+            key for key in ignored
+            if not (key in harmless
+                    and str(arguments[key]).strip().lower() in harmless[key])
+        ]
+        if rejected and name in self._reject_unknown:
             return finish(error(
                 ERROR_BAD_INPUT,
-                f"{name} has no argument named {', '.join(ignored)}. "
+                f"{name} has no argument named {', '.join(rejected)}. "
                 f"It accepts: {', '.join(sorted(spec.accepted))}. "
                 f"{self._reject_unknown[name]}",
             ))

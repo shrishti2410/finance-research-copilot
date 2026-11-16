@@ -470,3 +470,55 @@ def test_the_description_sends_dividends_buybacks_and_segments_to_the_filing_sea
     for phrase in ("no segment or product argument", "dividends and share repurchases",
                    "search_filings"):
         assert phrase in description
+
+
+# -- a ratio name is not a fact ------------------------------------------------
+
+def test_a_ratio_name_is_answered_as_the_ratio_with_both_readings_labelled(stored):
+    """Found on the full Qwen run of 2026-11-15: "gross_margin" was a spelling of
+    gross_profit, so "annual gross margin" came back as $153.463 billion where
+    the question wanted 71.07%. Refusing the name made the 7B model answer
+    from memory, so the result now carries both readings, labelled."""
+    for name in ("gross_margin", "Gross Margin", "gross_profit_margin"):
+        result = fact(name, 2025)
+        assert result["ok"] and result["ratio"] == "gross_margin"
+        assert result["formatted"] == "74.99%"
+        assert result["inputs"]["gross_profit"] == 97_858_000_000
+        assert "74.99%" in result["note"] and "$97.858 billion" in result["note"]
+        assert "'gross_profit'" in result["note"] and "ratio, not a reported figure" in result["note"]
+        assert result["accessions"] == ["0009999999-26-000001"]
+
+
+def test_a_ratio_with_no_dollar_twin_says_only_what_it_is(stored):
+    result = fact("current_ratio", 2026)
+    assert result["ok"] and result["ratio"] == "current_ratio"
+    assert "in dollars" not in result["note"]
+
+
+@pytest.mark.parametrize("name", ["pe_ratio", "debt_to_equity"])
+def test_a_ratio_with_no_fiscal_year_form_is_an_error_not_a_dollar_figure(stored, name):
+    result = fact(name, 2020)
+    assert not result["ok"] and "value" not in result
+
+
+def test_a_ratio_name_for_a_year_with_no_facts_is_no_data(stored):
+    assert fact("gross_margin", 1999)["error"] == "no_data"
+
+
+def test_gross_profit_is_still_the_dollar_figure(stored):
+    result = fact("gross_profit", 2025)
+    assert result["ok"] and result["unit"] == "USD" and result["value"] == 97_858_000_000
+
+
+def test_the_facts_tool_reads_the_year_under_the_names_the_model_sent(stored):
+    from agent.tools import build_registry
+    reg = build_registry()
+    for arguments in ({"period_end": 2026}, {"year": "2026"},
+                      {"fiscal_year": 2026, "period": "annual"}):
+        result = run(reg.call("get_financial_fact", {
+            "ticker": TEST_TICKER, "fact": "revenue", **arguments})).result
+        assert result["ok"] and result["value"] == 215_938_000_000, arguments
+    quarterly = run(reg.call("get_financial_fact", {
+        "ticker": TEST_TICKER, "fact": "revenue", "fiscal_year": 2026,
+        "period": "quarterly"})).result
+    assert quarterly["error"] == "bad_input"

@@ -44,6 +44,22 @@ raised its dividend. So:
   is an error that says there is no segment figure here, not a silent drop.
 - Every result still carries the `scope` line.
 
+The full Qwen run of 2026-11-15 found one more of the same kind. `gross_margin`
+was accepted as a spelling of `gross_profit`, because both companies label the
+dollar line "gross margin". Asked "What was NVIDIA's annual gross margin for
+fiscal 2026?", the model called this tool with fact="gross_margin" and
+answered "$153.463 billion" where the ratio tool gives 71.07%.
+
+Refusing the name was tried first and was not enough for the 7B model: told
+"that is a ratio, call calculate_ratio", it answered from memory in two of
+three re-asked questions and was only pulled back by the grounding guard, and
+"gross margin in dollars", which had passed, was lost. So a ratio name is
+answered here with the ratio for that fiscal year, computed as calculate_ratio
+computes it, and a `note` that states both readings with their labels: the
+percentage, and the dollar figure it was computed from. One call, and neither
+reading has to be guessed. Ratios with no fiscal-year form (pe_ratio,
+debt_to_equity) are still an error that says where to go.
+
 What is not here
 ----------------
 Segment figures. Company-facts holds only numbers reported for the whole
@@ -127,7 +143,6 @@ FactName = Literal[
 _ALIASES = {
     "revenues": "revenue", "total_revenue": "revenue", "net_sales": "revenue", "sales": "revenue",
     "cost_of_sales": "cost_of_revenue", "cogs": "cost_of_revenue",
-    "gross_margin": "gross_profit",
     "rnd": "research_and_development", "r&d": "research_and_development",
     "research_and_development_expense": "research_and_development",
     "sga": "selling_general_and_administrative", "sg&a": "selling_general_and_administrative",
@@ -163,8 +178,33 @@ UNKNOWN_ARGUMENT_HINT = (
 )
 
 
+# Ratio names a model sends here by mistake -> the calculate_ratio name, and
+# the fact that is the same words in dollars, if there is one. See the module
+# docstring: these are answered as the ratio, with both readings labelled.
+_RATIO_NAMES: dict[str, tuple[str, str | None]] = {
+    "gross_margin": ("gross_margin", "gross_profit"),
+    "gross_margin_percentage": ("gross_margin", "gross_profit"),
+    "gross_margin_pct": ("gross_margin", "gross_profit"),
+    "gross_profit_margin": ("gross_margin", "gross_profit"),
+    "operating_margin": ("operating_margin", "operating_income"),
+    "net_margin": ("net_margin", "net_income"),
+    "net_profit_margin": ("net_margin", "net_income"),
+    "profit_margin": ("net_margin", "net_income"),
+    "return_on_equity": ("return_on_equity", None),
+    "roe": ("return_on_equity", None),
+    "current_ratio": ("current_ratio", None),
+    "debt_to_equity": ("debt_to_equity", None),
+    "pe_ratio": ("pe_ratio", None),
+    "p/e": ("pe_ratio", None),
+}
+
+
+def _normalized(raw: str) -> str:
+    return (raw or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
 def _fact_name(raw: str) -> str | None:
-    name = (raw or "").strip().lower().replace("-", "_").replace(" ", "_")
+    name = _normalized(raw)
     name = _ALIASES.get(name, name)
     return name if name in FACTS else None
 
@@ -372,6 +412,18 @@ async def get_financial_fact(ticker: str, fact: FactName, fiscal_year: int) -> d
     if not symbol:
         return error(ERROR_BAD_INPUT, "ticker must be a non-empty symbol like 'NVDA'.")
     name = _fact_name(fact)
+    if name is None and _normalized(fact) in _RATIO_NAMES:
+        ratio, dollars = _RATIO_NAMES[_normalized(fact)]
+        result = await ratio_for_fiscal_year(symbol, ratio, fiscal_year)
+        if not result.get("ok"):
+            return result
+        note = (f"{ratio} is a ratio, not a reported figure: {result['formatted']} for "
+                f"fiscal {result['fiscal_year']}, computed as {result['formula']}.")
+        if dollars:
+            amount = _formatted(float(result["inputs"][dollars]), "USD")
+            note += (f" The same words in dollars are the fact {dollars!r}: {amount} "
+                     f"for fiscal {result['fiscal_year']}.")
+        return {**result, "asked_for": fact, "note": note, "scope": SCOPE}
     if name is None:
         return error(
             ERROR_BAD_INPUT,
