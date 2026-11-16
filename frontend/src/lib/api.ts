@@ -120,6 +120,13 @@ export interface TokenResponse {
   expires_in: number;
 }
 
+/** What this deployment offers at sign-in. Mirrors GET /auth/options. */
+export interface AuthOptions {
+  signup: boolean;
+  demo: boolean;
+  demo_questions_per_account: number | null;
+}
+
 export interface User {
   id: string;
   email: string;
@@ -180,6 +187,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ email, password }),
     }),
+
+  /** A fresh demo account, when the deployment offers one. */
+  demo: () => request<TokenResponse>("/auth/demo", { method: "POST" }),
+
+  options: () => request<AuthOptions>("/auth/options"),
 
   me: (token: string) => request<User>("/auth/me", { token }),
 

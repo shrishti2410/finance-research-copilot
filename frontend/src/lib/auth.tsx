@@ -36,6 +36,8 @@ interface AuthState {
   expired: boolean;
   signup: (email: string, password: string) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
+  /** Sign in as a fresh demo account. */
+  demo: () => Promise<void>;
   logout: () => void;
 }
 
@@ -116,6 +118,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [adopt],
   );
 
+  const demo = useCallback(async () => {
+    const { access_token } = await api.demo();
+    await adopt(access_token);
+  }, [adopt]);
+
   const logout = useCallback(() => {
     localStorage.removeItem(TOKEN_KEY);
     setToken(null);
@@ -124,8 +131,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ token, user, ready, expired, signup, login, logout }),
-    [token, user, ready, expired, signup, login, logout],
+    () => ({ token, user, ready, expired, signup, login, demo, logout }),
+    [token, user, ready, expired, signup, login, demo, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

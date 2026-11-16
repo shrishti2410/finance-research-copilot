@@ -12,10 +12,13 @@ interface Props {
   notice?: string;
   hint?: string;
   minPasswordLength?: number;
-  altHref: string;
-  altPrompt: string;
-  altLabel: string;
+  /** The link to the other form. Omitted when that form is closed. */
+  altHref?: string;
+  altPrompt?: string;
+  altLabel?: string;
   onSubmit: (email: string, password: string) => Promise<void>;
+  /** Shown above the form when the deployment offers a demo account. */
+  demo?: { label: string; note?: string; onClick: () => Promise<void> };
 }
 
 /** The login and signup forms differ only in labels and which call they make. */
@@ -30,6 +33,7 @@ export function AuthCard({
   altPrompt,
   altLabel,
   onSubmit,
+  demo,
 }: Props) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -42,6 +46,27 @@ export function AuthCard({
         <p className="mt-1 text-sm text-neutral-400">
           Grounded answers about public companies, with their sources.
         </p>
+
+        {demo && (
+          <div className="mt-8 space-y-2">
+            <button
+              type="button"
+              disabled={pending}
+              onClick={async () => {
+                setError(null);
+                try {
+                  await demo.onClick();
+                } catch (caught) {
+                  setError(errorMessage(caught));
+                }
+              }}
+              className="w-full rounded-md border border-neutral-700 px-3 py-2 text-sm font-medium text-neutral-100 disabled:opacity-50"
+            >
+              {demo.label}
+            </button>
+            {demo.note && <p className="text-xs text-neutral-500">{demo.note}</p>}
+          </div>
+        )}
 
         <form
           className="mt-8 space-y-4"
@@ -114,12 +139,14 @@ export function AuthCard({
           </button>
         </form>
 
-        <p className="mt-6 text-xs text-neutral-500">
-          {altPrompt}{" "}
-          <Link href={altHref} className="text-neutral-300 underline">
-            {altLabel}
-          </Link>
-        </p>
+        {altHref && (
+          <p className="mt-6 text-xs text-neutral-500">
+            {altPrompt}{" "}
+            <Link href={altHref} className="text-neutral-300 underline">
+              {altLabel}
+            </Link>
+          </p>
+        )}
       </div>
     </main>
   );

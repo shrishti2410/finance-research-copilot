@@ -3,12 +3,20 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { AuthCard } from "@/components/AuthCard";
+import { api, type AuthOptions } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 
 export default function LoginPage() {
-  const { login, token, ready, expired } = useAuth();
+  const { login, demo, token, ready, expired } = useAuth();
   const router = useRouter();
   const [pending, setPending] = useState(false);
+  // What the deployment offers. Until it is known, offer what a development
+  // server always has: sign-in and signup, no demo.
+  const [options, setOptions] = useState<AuthOptions | null>(null);
+
+  useEffect(() => {
+    api.options().then(setOptions).catch(() => setOptions(null));
+  }, []);
 
   useEffect(() => {
     if (ready && token) router.replace("/");
@@ -26,9 +34,29 @@ export default function LoginPage() {
           : undefined
       }
       pending={pending}
-      altHref="/signup"
+      altHref={options?.signup === false ? undefined : "/signup"}
       altPrompt="No account yet?"
       altLabel="Create one"
+      demo={
+        options?.demo
+          ? {
+              label: "Try the demo",
+              note: options.demo_questions_per_account
+                ? `A fresh account, ${options.demo_questions_per_account} questions a day. ` +
+                  "Nothing you ask is visible to other visitors."
+                : undefined,
+              onClick: async () => {
+                setPending(true);
+                try {
+                  await demo();
+                  router.replace("/");
+                } finally {
+                  setPending(false);
+                }
+              },
+            }
+          : undefined
+      }
       onSubmit={async (email, password) => {
         setPending(true);
         try {
