@@ -110,3 +110,22 @@ and its drawdown was smaller on 7 of 10.
 Against its random re-timings its percentile ranged from 0.10 to 0.80; none
 reached 0.95. The finding in `benchmarks/SIGNALS_7C.md` holds out of sample:
 no return edge, and smaller drawdowns, mostly from time out of the market.
+
+## Re-run on the calendar refit schedule (supplementary, measured)
+
+On 2026-11-17 the refit schedule changed from every 21 bars after the first
+signal to the first trading day of each month (`eac9d0c`; see
+`benchmarks/SIGNALS_7C.md`). Both rules were re-run on that commit,
+2026-11-16 19:10-19:16 UTC, into
+`benchmarks/results/2026-11-17-calendar-refit/regime-{holdout,watchlist}-{slope,agree}/`.
+
+- Hold-out: "agree" higher on **4 of 10**, median change **0.000**. Changes:
+  RELIANCE +0.067, TCS 0, ICICIBANK 0, ITC 0, LT 0, SUNPHARMA +0.021,
+  VOLTAS +0.108, TVSMOTOR -0.042, CUMMINSIND -0.011, PERSISTENT +0.018.
+- Watchlist: higher on 2 of 5, median 0.000.
+
+The pre-registered decision above stands: below the bar under either
+schedule. The refit-day spread in SIGNALS_7C.md (daily Sharpe moving by up
+to 0.66 across schedules on a full-history stock, TCS, and 1.03 on
+PREMIERENE) is far larger than any of these changes, so the rule's effect
+cannot be told from scheduling noise.

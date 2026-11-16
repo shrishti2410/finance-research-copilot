@@ -3,8 +3,136 @@
 Step 7C, phase 3. The method is in `market/signals.py`, the evaluation in
 `market/signal_eval.py`, the design in `docs/SIGNALS.md`.
 
+## Current numbers (calendar refit, commit `eac9d0c`, 2026-11-16 19:10 UTC)
+
 **The finding: no return edge; lower drawdowns, mostly from time out of the
-market.**
+market.** It holds on 15 stocks and on every one of 20 refit schedules except
+for one stock (DIXON.NS), which is about what chance gives in 15 tries.
+
+**Why these numbers replace the first ones.**
+- The first measurements (kept under "History" below) refitted the weights
+  every 21 bars counted from the first signal, so where the history started
+  decided the refit days.
+- A rerun six hours later fetched one day less history (the window rolls with
+  the date). Every refit moved, and COFORGE.NS's signal CAGR went from 3.5% to
+  4.4%.
+- Refits are now on the first trading day of each month (`eac9d0c`), and a
+  test checks that the start of the history no longer moves later signals.
+- The same rerun also caught Yahoo returning NSE histories without the latest
+  session. The cache now keeps bars a later fetch omits (`f74ef6d`).
+
+**How it was run:**
+- commands, all on `eac9d0c`, from 2026-11-16 19:10 to 19:16 UTC:
+  - `python scripts/evaluate_signals.py --out benchmarks/results/2026-11-17-calendar-refit/watchlist`
+  - the same with the ten hold-out tickers, into `.../holdout`
+  - `python scripts/refit_day_spread.py --out benchmarks/results/2026-11-17-calendar-refit/spread`
+- machine: the same laptop as below, with standby blocked.
+- data: the price cache as loaded on 2026-11-16 (bars to 2026-11-16).
+- the raw output is in that gitignored folder.
+
+### Watchlist, refit on the first trading day of the month
+
+Window 2021-11-16 to 2026-11-16 (PREMIERENE.NS from 2025-03-25), Indian
+delivery costs. Sharpe is daily, no risk-free rate; Calmar = CAGR ÷ |max DD|.
+"pctl" is the share of 200 random re-timings with a lower Sharpe.
+
+| ticker | | Sharpe | Sortino | Calmar | time in market | CAGR | max DD | pctl |
+|---|---|---|---|---|---|---|---|---|
+| COFORGE.NS | signal | 0.03 | 0.04 | −0.04 | 46.1% | −1.7% | −37.0% | 0.20 |
+| | buy & hold | 0.53 | 0.77 | 0.28 | 100% | 13.3% | −46.7% | |
+| DIXON.NS | signal | 1.08 | 1.63 | 1.02 | 44.6% | 26.8% | −26.3% | 0.89 |
+| | buy & hold | 0.65 | 0.95 | 0.36 | 100% | 19.1% | −53.7% | |
+| SBIN.NS | signal | −0.22 | −0.29 | −0.16 | 49.0% | −5.3% | −34.0% | 0.00 |
+| | buy & hold | 0.86 | 1.23 | 0.82 | 100% | 19.7% | −23.9% | |
+| PREMIERENE.NS (1.6 years) | signal | 0.11 | 0.15 | −0.00 | 38.0% | −0.1% | −33.1% | 0.64 |
+| | buy & hold | −0.02 | −0.03 | −0.16 | 100% | −6.4% | −39.3% | |
+| HDFCBANK.NS | signal | −0.22 | −0.30 | −0.09 | 20.6% | −2.1% | −24.1% | 0.27 |
+| | buy & hold | 0.23 | 0.32 | 0.08 | 100% | 2.6% | −31.7% | |
+| Nifty 50 (2021-11-16 on) | index | 0.57 | 0.81 | 0.44 | 100% | 7.3% | −16.5% | |
+
+**Return and Sharpe.**
+- Signal below buy-and-hold on CAGR and on all three ratios for COFORGE,
+  SBIN and HDFCBANK.
+- Above on all of them for DIXON.
+- Above for PREMIERENE, where buy-and-hold lost 6.4% a year over 1.6 years and
+  the signal, out 62% of the time, roughly broke even.
+
+**Timing.** No stock reached the 95th percentile against random re-timings.
+DIXON came closest at 0.89, so the verdict is still "no edge"
+(`backtest_verdict` needs 0.95).
+
+**Drawdown.** Smaller than buy-and-hold on four of five; SBIN is the
+exception.
+
+### Hold-out: ten stocks never used to build anything
+
+- CAGR below buy-and-hold on **10 of 10**.
+- Daily Sharpe below on **10 of 10**.
+- Max drawdown smaller on 7 of 10.
+- Time in market 21–64%.
+- Random-timing percentile 0.03 to 0.75.
+
+The per-stock figures are in `holdout/signals_eval.json`.
+
+### How much the refit day matters (measured)
+
+The evaluation was run once for each refit day, the 1st to the 20th trading
+day of the month: 20 schedules × 15 stocks. Buy-and-hold does not depend on
+the schedule.
+
+| ticker | signal Sharpe min / median / max | b&h Sharpe | signal CAGR min / median / max | b&h CAGR | schedules beating b&h on CAGR and Sharpe |
+|---|---|---|---|---|---|
+| COFORGE.NS | −0.01 / 0.20 / 0.30 | 0.53 | −2.4% / 2.0% / 4.3% | 13.3% | 0 of 20 |
+| DIXON.NS | 0.79 / 0.95 / 1.10 | 0.65 | 17.4% / 22.8% / 28.1% | 19.1% | 18 of 20 |
+| SBIN.NS | −0.24 / −0.04 / 0.16 | 0.86 | −5.6% / −2.4% / 1.2% | 19.7% | 0 of 20 |
+| PREMIERENE.NS | −0.85 / −0.26 / 0.18 | −0.02 | −17.4% / −6.8% / 1.6% | −6.4% | 5 of 20 |
+| HDFCBANK.NS | −0.41 / −0.01 / 0.18 | 0.23 | −3.7% / −0.4% / 1.0% | 2.6% | 0 of 20 |
+| RELIANCE.NS | −0.27 / −0.17 / −0.10 | 0.27 | −3.5% / −2.4% / −1.7% | 3.5% | 0 of 20 |
+| TCS.NS | −1.00 / −0.70 / −0.34 | −0.11 | −9.7% / −6.8% / −4.0% | −4.9% | 0 of 20 |
+| ICICIBANK.NS | 0.58 / 0.71 / 0.85 | 0.89 | 7.9% / 10.0% / 12.4% | 17.0% | 0 of 20 |
+| ITC.NS | 0.27 / 0.47 / 0.74 | 0.57 | 2.6% / 5.7% / 9.6% | 9.9% | 0 of 20 |
+| LT.NS | 0.58 / 0.70 / 0.78 | 0.79 | 9.2% / 11.8% / 13.7% | 17.8% | 0 of 20 |
+| SUNPHARMA.NS | 0.46 / 0.53 / 0.59 | 1.02 | 5.7% / 6.7% / 7.7% | 20.1% | 0 of 20 |
+| VOLTAS.NS | −0.37 / −0.13 / 0.04 | 0.12 | −8.3% / −3.8% / −0.8% | −0.9% | 0 of 20 |
+| TVSMOTOR.NS | 0.91 / 0.99 / 1.08 | 1.50 | 18.1% / 20.3% / 22.5% | 44.9% | 0 of 20 |
+| CUMMINSIND.NS | 1.02 / 1.22 / 1.34 | 1.24 | 21.7% / 27.5% / 30.6% | 38.4% | 0 of 20 |
+| PERSISTENT.NS | 0.46 / 0.61 / 0.79 | 0.80 | 7.6% / 11.1% / 15.2% | 24.1% | 0 of 20 |
+
+What the spread means:
+- **Single runs are noisy.** The scheduling choice alone moves a five-year
+  CAGR by up to 11 points for a stock with full history (DIXON: 17.4% to
+  28.1%; COFORGE: −2.4% to 4.3%), and by 19 points for PREMIERENE over 1.6
+  years. A difference between
+  two single runs smaller than this is not a finding.
+- **The finding holds across schedules.** On 13 of 15 stocks no schedule
+  beats buy-and-hold on both CAGR and Sharpe. PREMIERENE does on 5 of 20,
+  where buy-and-hold itself lost money.
+- **DIXON is the one exception.** It beats buy-and-hold on 18 of 20 schedules.
+  - With 15 stocks tested, one standing out is roughly what chance alone gives.
+  - Its timing still sits below the 95% random-timing bar.
+  - It is not evidence of an edge without a test on new data.
+
+**Today's signals** (2026-11-16 close, `eac9d0c`), each with its coverage:
+
+| ticker | signal | score | coverage | confidence | note |
+|---|---|---|---|---|---|
+| COFORGE.NS | BUY | +0.684 | 15 of 16 rules | 0.684 | |
+| DIXON.NS | BUY | +0.317 | 6 of 16 rules | 0.317 | narrow vote |
+| SBIN.NS | BUY | +0.437 | 12 of 16 rules | 0.437 | |
+| PREMIERENE.NS | BUY | +0.315 | 3 of 11 rules | 0.079 | limited history, narrow vote |
+| HDFCBANK.NS | SELL | −0.670 | 5 of 16 rules | 0.312 (uncapped 0.670) | narrow vote |
+
+---
+
+## History: the first measurements, on the old refit schedule
+
+Everything below was measured with refits every 21 bars from the first signal
+(commits `dd2dbb8` and `afe350b`). It is kept as measured and superseded by
+the section above; the refit-day spread shows how much of the difference is
+scheduling noise.
+
+**The finding at the time: no return edge; lower drawdowns, mostly from time
+out of the market.**
 - **Return.** The signal's CAGR was below buy-and-hold on all four stocks with
   five years of history. On risk-adjusted terms its daily Sharpe was higher on
   one stock (DIXON) and lower on the other three.
