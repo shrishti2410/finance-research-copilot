@@ -478,3 +478,12 @@ def test_the_agent_tools_take_the_names_the_model_sent():
     assert reg._aliases["search_filings"] == {"ticker": "company"}
     assert reg._aliases["get_financial_fact"]["period_end"] == "fiscal_year"
     assert "annual" in reg._harmless["get_financial_fact"]["period"]
+
+
+def test_an_alias_that_repeats_the_real_argument_is_dropped():
+    """qwen2.5:7b sent fiscal_year="latest" and period_end="latest" together."""
+    reg = _echo_registry(aliases={"ticker": "company"}, reject_unknown="No such argument.")
+    result = run(reg.call("echo", {"ticker": "AAPL", "company": "aapl"})).result
+    assert result["ok"] and result["company"] == "aapl"
+    differs = run(reg.call("echo", {"ticker": "AAPL", "company": "NVDA"})).result
+    assert differs["error"] == "bad_input" and "ticker" in differs["message"]

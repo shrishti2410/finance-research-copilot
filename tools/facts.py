@@ -209,6 +209,32 @@ def _fact_name(raw: str) -> str | None:
     return name if name in FACTS else None
 
 
+# What fiscal_year may say instead of a year: the company's most recent reported
+# fiscal year, resolved from the facts table. Companies' fiscal years end in
+# different months, so "latest" is per company, never one year for all.
+LATEST = "latest"
+
+
+def _wants_latest(raw) -> bool:
+    return isinstance(raw, str) and raw.strip().lower() == LATEST
+
+
+async def _latest_year(conn, ticker: str, *concept_sets: tuple[str, ...]) -> int | None:
+    """The most recent fiscal year for which `ticker` reported every concept set
+    (one concept of each). None if there is no such year."""
+    common: set[int] | None = None
+    for concepts in concept_sets:
+        rows = (await conn.execute(
+            select(XbrlFact.fiscal_year).where(
+                XbrlFact.ticker == ticker, XbrlFact.concept.in_(concepts),
+                XbrlFact.fiscal_period == "FY",
+            ).distinct()
+        )).all()
+        years = {r[0] for r in rows}
+        common = years if common is None else common & years
+    return max(common) if common else None
+
+
 def _fiscal_year(raw) -> int | None:
     """A fiscal year from whatever the model sent: 2026, "2026", "FY2026"."""
     if isinstance(raw, bool):
@@ -366,7 +392,7 @@ async def fiscal_year_end(ticker: str, fiscal_year) -> str | None:
 # The tool
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def get_financial_fact(ticker: str, fact: FactName, fiscal_year: int) -> dict[str, Any]:
+async def get_financial_fact(ticker: str, fact: FactName, fiscal_year: int | str) -> dict[str, Any]:
     """Get one reported financial figure for a company and fiscal year.
 
     Use this first for any reported number for a named fiscal year: revenue,
@@ -385,8 +411,11 @@ async def get_financial_fact(ticker: str, fact: FactName, fiscal_year: int) -> d
         fact: Which figure. "pretax_income" is income before income taxes;
             "shares_basic" and "shares_diluted" are the weighted-average share
             counts used for EPS; balance-sheet figures are at fiscal year end.
-        fiscal_year: The company's own fiscal year, e.g. 2026. NVIDIA's fiscal
-            2026 ended January 2026; Apple's fiscal 2025 ended September 2025.
+        fiscal_year: The company's own fiscal year, e.g. 2026, or "latest" for
+            its most recent reported fiscal year. Use "latest" when the question
+            names no year; it is resolved per company, and companies' fiscal
+            years end in different months (NVIDIA's in January, Apple's in
+            September), so two companies' latest years can differ.
 
     Returns:
         On success, a dict with "ok": True and:
@@ -412,6 +441,16 @@ async def get_financial_fact(ticker: str, fact: FactName, fiscal_year: int) -> d
     if not symbol:
         return error(ERROR_BAD_INPUT, "ticker must be a non-empty symbol like 'NVDA'.")
     name = _fact_name(fact)
+    basis = None
+    if _wants_latest(fiscal_year) and name is not None:
+        async with engine.connect() as conn:
+            fiscal_year = await _latest_year(conn, symbol, FACTS[name][1])
+        if fiscal_year is None:
+            return error(ERROR_NO_DATA,
+                         f"No {FACTS[name][0].lower()} is stored for {symbol} in any fiscal "
+                         f"year. Its facts may not be ingested; try search_filings.",
+                         ticker=symbol, fact=name)
+        basis = "latest reported"
     if name is None and _normalized(fact) in _RATIO_NAMES:
         ratio, dollars = _RATIO_NAMES[_normalized(fact)]
         result = await ratio_for_fiscal_year(symbol, ratio, fiscal_year)
@@ -445,8 +484,11 @@ async def get_financial_fact(ticker: str, fact: FactName, fiscal_year: int) -> d
         row = await _lookup(conn, symbol, concepts, year)
         if row is None:
             return await _not_found(conn, symbol, year, concepts, description.lower())
-    return ok(ticker=symbol, fact=name, description=description, scope=SCOPE,
-              fiscal_year=year, **_fact_fields(row))
+    result = ok(ticker=symbol, fact=name, description=description, scope=SCOPE,
+                fiscal_year=year, **_fact_fields(row))
+    if basis:
+        result["fiscal_year_basis"] = basis
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -476,6 +518,17 @@ async def ratio_for_fiscal_year(ticker: str, ratio_name: str, fiscal_year) -> di
     if not symbol:
         return error(ERROR_BAD_INPUT, "ticker must be a non-empty symbol like 'NVDA'.")
     ratio = (ratio_name or "").strip().lower()
+    basis = None
+    if _wants_latest(fiscal_year) and ratio in FACT_RATIOS:
+        top_name, bottom_name, _ = FACT_RATIOS[ratio]
+        async with engine.connect() as conn:
+            fiscal_year = await _latest_year(conn, symbol, FACTS[top_name][1],
+                                             FACTS[bottom_name][1])
+        if fiscal_year is None:
+            return error(ERROR_NO_DATA,
+                         f"No fiscal year has both {top_name} and {bottom_name} stored for "
+                         f"{symbol}.", ticker=symbol, ratio=ratio)
+        basis = "latest reported"
     year = _fiscal_year(fiscal_year)
     if year is None or not (1990 <= year <= 2100):
         return error(ERROR_BAD_INPUT,
@@ -529,4 +582,5 @@ async def ratio_for_fiscal_year(ticker: str, ratio_name: str, fiscal_year) -> di
         currency="USD" if top.unit == "USD" else top.unit,
         source="SEC XBRL company facts",
         accessions=sorted({top.accession, bottom.accession}),
+        **({"fiscal_year_basis": basis} if basis else {}),
     )

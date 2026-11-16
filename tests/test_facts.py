@@ -522,3 +522,48 @@ def test_the_facts_tool_reads_the_year_under_the_names_the_model_sent(stored):
         "ticker": TEST_TICKER, "fact": "revenue", "fiscal_year": 2026,
         "period": "quarterly"})).result
     assert quarterly["error"] == "bad_input"
+
+
+# -- "latest": each company's own most recent fiscal year ----------------------
+#
+# Live demo, 2026-11-16: "Compare NVIDIA's gross margin to Apple's" asked for
+# NVIDIA fiscal 2026 and Apple fiscal 2025, because the prompt said Apple's
+# indexed year was 2025. With no year in a question, each company's latest
+# reported year is the one to use, and the tools resolve it per company.
+
+@pytest.mark.parametrize("spelling", ["latest", "Latest", " LATEST "])
+def test_latest_resolves_to_the_most_recent_year_reported(stored, spelling):
+    result = fact("revenue", spelling)
+    assert result["ok"] and result["fiscal_year"] == 2026
+    assert result["value"] == 215_938_000_000
+    assert result["fiscal_year_basis"] == "latest reported"
+
+
+def test_latest_is_resolved_per_fact(stored):
+    """The diluted share count is only reported for 2026 in the fixture."""
+    assert fact("shares_diluted", "latest")["fiscal_year"] == 2026
+
+
+def test_a_ratio_for_the_latest_year_uses_a_year_both_inputs_have(stored):
+    result = ratio("gross_margin", "latest")
+    assert result["ok"] and result["fiscal_year"] == 2026
+    assert result["value"] == pytest.approx(153_463 / 215_938, abs=1e-6)
+    assert result["fiscal_year_basis"] == "latest reported"
+
+
+def test_latest_for_a_company_with_no_facts_is_no_data(stored):
+    result = fact("revenue", "latest", ticker="ZZNOTHERE")
+    assert result["error"] == "no_data"
+
+
+def test_a_word_that_is_not_latest_is_still_bad_input(stored):
+    assert fact("revenue", "last year")["error"] == "bad_input"
+
+
+def test_the_tools_offer_latest_to_the_model():
+    from agent.tools import build_registry
+    registry = build_registry()
+    for tool in ("get_financial_fact", "calculate_ratio"):
+        spec = registry.get(tool)
+        described = " ".join(spec.parameters["properties"]["fiscal_year"]["description"].split())
+        assert '"latest"' in described, tool

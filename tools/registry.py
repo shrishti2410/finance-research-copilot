@@ -356,10 +356,17 @@ class Registry:
         # on "you passed an argument I do not accept" is worse than ignoring it
         # -- the required ones below are still enforced.
         for alias, real in self._aliases.get(name, {}).items():
-            if alias in arguments and real not in arguments:
+            if alias not in arguments:
+                continue
+            same = (real in arguments and str(arguments[alias]).strip().lower()
+                    == str(arguments[real]).strip().lower())
+            if real not in arguments or same:
+                # Read the alias as the argument it means, or drop it when it
+                # only repeats it: qwen2.5:7b sent fiscal_year="latest" and
+                # period_end="latest" together, and the duplicate was refused.
                 value = arguments[alias]
                 arguments = {key: v for key, v in arguments.items() if key != alias}
-                arguments[real] = value
+                arguments.setdefault(real, value)
         properties = spec.parameters.get("properties", {})
         accepted = {
             key: coerce(value, properties.get(key, {}))

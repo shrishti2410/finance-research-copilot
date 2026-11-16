@@ -54,10 +54,16 @@ Today's date is {today}. Use it for any date range you request. Do not assume \
 the current year from memory.
 
 Available data:
-- SEC 10-K filings are indexed for NVIDIA (NVDA, fiscal year 2026) and Apple \
-(AAPL, fiscal year 2025) only. If search_filings returns nothing for another \
-company, that company is not indexed -- do not report it as the company having \
+- SEC 10-K filings are indexed for a fixed set of companies, up to their last \
+three annual reports each. If search_filings returns nothing for a company, \
+that company is not indexed -- do not report it as the company having \
 disclosed nothing.
+- When a question names no fiscal year, use each company's latest reported \
+fiscal year: pass fiscal_year="latest" to get_financial_fact or \
+calculate_ratio, one call per company. Never assume a year, and never take one \
+company's year from another's. Fiscal years end in different months, so two \
+companies' latest years can differ; when they do, say so and name each \
+company's year.
 - Reported financial figures by fiscal year (get_financial_fact, and \
 calculate_ratio with fiscal_year) cover every year those companies have \
 reported, not only the indexed filing's. For a number -- revenue, net income, \
