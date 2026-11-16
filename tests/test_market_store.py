@@ -141,3 +141,49 @@ def test_an_inverted_range_is_refused():
 @pytest.mark.parametrize("raw, symbol", [("aapl", "AAPL"), (" brk.b ", "BRK-B")])
 def test_tickers_are_normalised(raw, symbol):
     assert normalize_ticker(raw) == symbol
+
+
+def test_a_refetch_that_omits_a_cached_bar_does_not_lose_it(monkeypatch):
+    """Yahoo, at midnight in India, returned histories without that day's
+    session. The cached bar must survive the short response."""
+    import asyncio as _asyncio
+    from datetime import timedelta as _td
+
+    from db.base import engine as _engine
+    from market.providers import Bar as _Bar
+    from market.store import MarketData as _MarketData
+
+    days = [date(2026, 11, 11), date(2026, 11, 12), date(2026, 11, 13), date(2026, 11, 16)]
+
+    class Shrinking:
+        name = "fake"
+        calls = 0
+
+        def daily_bars(self, ticker, start, end):
+            Shrinking.calls += 1
+            use = days if Shrinking.calls == 1 else days[:-1]       # second call drops the last day
+            return [_Bar(day=d, open=1.0, high=1.0, low=1.0, close=float(i + 1),
+                         adj_close=float(i + 1), volume=1) for i, d in enumerate(use)]
+
+    async def go():
+        from sqlalchemy import text as _text
+        try:
+            async with _engine.begin() as conn:
+                for table in ("price_bars", "price_fetches"):
+                    await conn.execute(_text(f"DELETE FROM {table} WHERE ticker = 'ZZSHORT'"))
+            data = _MarketData(Shrinking(), ttl=_td(0))              # always refetch
+            first = await data.history("ZZSHORT", days[0], days[-1] + _td(days=1))
+            second = await data.history("ZZSHORT", days[0], days[-1] + _td(days=1))
+            async with _engine.begin() as conn:
+                for table in ("price_bars", "price_fetches"):
+                    await conn.execute(_text(f"DELETE FROM {table} WHERE ticker = 'ZZSHORT'"))
+            return first, second
+        finally:
+            await _engine.dispose()
+
+    try:
+        first, second = _asyncio.run(go())
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"price tables not available ({type(exc).__name__}); migrate to 0006")
+    assert [b.day for b in first] == days
+    assert [b.day for b in second] == days and second[-1].close == 4.0

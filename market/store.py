@@ -17,6 +17,14 @@ stale on every ex-dividend date. A day-old copy is close enough for analytics
 and charts; a week-old one may not be.
 
 Writes are upserts keyed by (ticker, day), so refetching is idempotent.
+
+A refetch can come back short. On 2026-11-16 at 18:30 UTC (midnight in
+India) Yahoo returned NSE histories without that day's session, which had
+been fetched and cached hours earlier. A signal built from the response
+alone was decided on the previous session's data. So a refetch is merged
+with the cache: a bar the provider returned replaces the cached one (an
+adjusted close does change), and a cached bar the provider did not return
+is kept.
 """
 
 from __future__ import annotations
@@ -93,4 +101,7 @@ class MarketData:
                 "INSERT INTO price_fetches (ticker, start_day, end_day, provider, bars) "
                 "VALUES (:t, :s, :e, :p, :n)"),
                 {"t": symbol, "s": start, "e": end, "p": self.provider.name, "n": len(bars)})
-        return [b for b in bars if start <= b.day <= end]
+            cached = await self._read(conn, symbol, start, end)
+        fresh = {b.day: b for b in bars if start <= b.day <= end}
+        kept = [b for b in cached if b.day not in fresh]
+        return sorted([*fresh.values(), *kept], key=lambda b: b.day)
