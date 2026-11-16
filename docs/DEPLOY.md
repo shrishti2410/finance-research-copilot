@@ -7,14 +7,14 @@ is the list of steps to do by hand in each dashboard, in order.
 For a single GPU machine running the whole stack, see [DEPLOYMENT.md](DEPLOYMENT.md)
 instead.
 
-> **Not deployed yet, and one blocker is open.** Nothing in this file has been run
-> against a real account. The API measured 581 MB resident with the embedding model
-> loaded (Windows, 2026-11-16), and Render's free instance has 512 MB. See
-> [Before you start](#0-before-you-start-the-memory-blocker).
+> **Not deployed yet.** Nothing in this file has been run against a real account.
+> The API image was built and run locally under Render Free's limits (512 MB, 0.1
+> CPU): it fits in memory, and it is slow to start. See
+> [Memory and CPU on the free instance](#0-memory-and-cpu-on-the-free-instance).
 
 ## Contents
 
-0. [Before you start: the memory blocker](#0-before-you-start-the-memory-blocker)
+0. [Memory and CPU on the free instance](#0-memory-and-cpu-on-the-free-instance)
 1. [The hosts, and why these](#1-the-hosts-and-why-these)
 2. [Neon: the database](#2-neon-the-database)
 3. [Load the filings and facts into Neon, from your laptop](#3-load-the-filings-and-facts-into-neon-from-your-laptop)
@@ -29,36 +29,57 @@ instead.
 
 ---
 
-## 0. Before you start: the memory blocker
+## 0. Memory and CPU on the free instance
 
-The API embeds each search query with bge-small. The model runs on torch, and torch
-and the model weights sit in memory for the life of the process.
+Render's Free instance has 512 MB and 0.1 CPU. The API keeps the bge-small
+embedding model (torch) in memory to embed each search query. On Windows the
+process measured 581 MB once the model was loaded, so the Linux image was built and
+measured under the same limits before anything else.
 
-| | measured on this laptop, 2026-11-16 |
+**How it was measured (2026-11-16).**
+- The deploy image (`docker build` of `feat/deploy-prep`, 2.44 GB) was run with
+  `docker run --memory=512m --memory-swap=512m`, and with `--cpus=0.1` where noted.
+- It started with `scripts/start.sh` and used the local Postgres, Redis and Ollama.
+- It was asked real questions, including two filing searches at once.
+- Memory is the container's own cgroup figures (`memory.peak`, `memory.events`).
+- Docker 29.9.3 on the Windows laptop (Linux VM).
+
+| | measured |
 |---|---|
-| API process after start-up | 151 MB |
-| after the first query embedding (model loaded) | 581 MB |
-| model load time | 39.8 s on this laptop's CPU |
-| Render Free instance | 512 MB RAM, 0.1 CPU (Render docs, compute plans) |
+| after start-up, before any question | 145 MiB |
+| peak after a filing-search question (model loaded) | 417 MiB |
+| peak after two filing searches at the same time | 417 MiB |
+| peak at 0.1 CPU, one thread, model preloaded, after a filing search | 426 MiB |
+| out-of-memory kills | 0 |
+| query embedding at 0.1 CPU, torch's default threads | **55 s** per query (first one 311 s, including the load) |
+| query embedding at 0.1 CPU, one thread | **0.4 to 0.6 s** per query (first one 180 s, including the load) |
+| from container start to listening, at 0.1 CPU | 157 s (migration check plus imports) |
+| a `search_filings` call at 0.1 CPU, one thread, model loaded | 19.6 s |
 
-Measured with `psutil` on Windows 11, Python 3.11, CPU torch. The Linux container
-was **not measured** and may be smaller or larger. If it is over 512 MB, Render
-restarts the service at the first search.
+What this means:
 
-**Options, in the order I recommend:**
+- **Memory fits, with about 85 MiB to spare.** torch stays; the ONNX change is not
+  needed. The Windows figure was higher because Windows counts differently, which
+  is why it had to be measured on Linux.
+- **CPU is the real limit.** torch starts one thread per core it can see, here
+  12, and a 0.1 CPU quota throttles them all. `EMBEDDING_THREADS=1` (with
+  `OMP_NUM_THREADS=1`) cut a query embedding from 55 s to under a second.
+  `deploy/free-tier.env.example` sets both.
+- **Waking is slow.** After a sleep the service takes about 2.5 minutes to listen
+  (157 s) at 0.1 CPU, on top of Render's own wake time. `EMBEDDING_PRELOAD=true`
+  loads the model in the background as soon as the server starts, so the first
+  search does not also pay for the load. The sign-in page warns visitors that the
+  first request can take a while.
+- **A filing search still takes about 20 s at 0.1 CPU**, against well under a
+  second on the laptop. Facts and prices do not embed anything and are not
+  affected.
 
-1. **Embed queries with ONNX instead of torch.** Same model, exported once to ONNX,
-   run with `onnxruntime`. Smaller and faster to load, and torch leaves the API
-   image (ingestion can keep it). It is only acceptable if its query vectors match
-   torch's and the retrieval eval does not move, which has to be measured on its own
-   branch before it ships.
-2. **Measure the Linux container first.** Build the image and run it with
-   `docker run --memory=512m`. It may already fit.
-3. **A host with more memory.** Each costs money or needs a card.
-
-Do not deploy the API until one of these is settled.
-
----
+Not measured:
+- Render itself. Its 0.1 CPU may not behave like Docker's `--cpus=0.1`.
+- How long Render waits for a starting service before failing the deploy.
+- A full answer from the hosted model inside the capped container. The model
+  calls in this test went to local Qwen on the laptop, which timed out at
+  0.1 CPU, so they say nothing about Groq.
 
 ## 1. The hosts, and why these
 
@@ -219,7 +240,7 @@ Expected start-up failures and what they mean:
 |---|---|
 | `ENVIRONMENT=production, but: - ...` | a placeholder or unsafe value; the line names it |
 | `alembic ... could not connect` | `DATABASE_URL` wrong, or the Neon project is suspended (compute-hours used up) |
-| the service restarts at the first question | the memory blocker in section 0 |
+| the service restarts at the first question | memory: check the Render metrics against section 0 |
 
 ---
 
@@ -302,7 +323,7 @@ Stated so nobody mistakes this file for a tested runbook:
   - No account was created on any of these hosts.
   - The Docker image was not built for this change.
   - Nothing was deployed.
-- **Memory on Linux.** Not measured (section 0).
+- **Memory and CPU on Render itself.** Measured only under Docker's limits on the laptop (section 0).
 - **Render's `X-Forwarded-For`.** Not checked. Until it is,
   `RATE_LIMIT_TRUST_PROXY=false`. The effect is that every visitor looks like
   Render's proxy to the per-IP limits: the anonymous limit (20 a minute) and the

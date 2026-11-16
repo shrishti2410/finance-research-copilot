@@ -364,3 +364,43 @@ def test_a_failed_boot_never_prints_the_values_it_was_given():
     with pytest.raises(ValueError) as caught:
         Settings(_env_file=None, jwt_secret="jwt-" + "q" * 40, db_pool_size="not-a-number")
     assert "q" * 40 not in str(caught.value)
+
+
+# -- embeddings on a fractional CPU --------------------------------------------
+
+def test_the_embedding_thread_count_is_applied_when_the_encoder_loads(monkeypatch):
+    import sys
+    import types
+
+    calls = []
+    fake_torch = types.SimpleNamespace(set_num_threads=calls.append,
+                                       set_grad_enabled=lambda flag: None)
+
+    class _Model:
+        def eval(self):
+            return self
+
+    fake_transformers = types.SimpleNamespace(
+        AutoTokenizer=types.SimpleNamespace(from_pretrained=lambda model_id: "tokenizer"),
+        AutoModel=types.SimpleNamespace(from_pretrained=lambda model_id: _Model()))
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+    from rag import embeddings
+    monkeypatch.setattr(settings, "embedding_threads", 1)
+    embeddings.get_encoder.cache_clear()
+    try:
+        embeddings.get_encoder("test-model")
+        assert calls == [1]
+        monkeypatch.setattr(settings, "embedding_threads", 0)
+        embeddings.get_encoder.cache_clear()
+        embeddings.get_encoder("test-model")
+        assert calls == [1], "0 leaves torch's default alone"
+    finally:
+        embeddings.get_encoder.cache_clear()
+
+
+def test_the_free_tier_example_runs_one_embedding_thread_and_preloads():
+    from pathlib import Path
+    text = (Path(__file__).resolve().parent.parent / "deploy" / "free-tier.env.example"
+            ).read_text(encoding="utf-8")
+    assert "\nEMBEDDING_THREADS=1\n" in text and "\nEMBEDDING_PRELOAD=true\n" in text

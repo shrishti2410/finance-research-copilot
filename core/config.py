@@ -277,6 +277,19 @@ class Settings(BaseSettings):
             return {"ssl": "require" if mode == "require" else True}
         return {}
 
+    # --- Query embeddings (rag/embeddings.py) ---
+    # torch's intra-op threads. 0 leaves torch's default, one per core it sees.
+    # On a host with a fractional CPU quota that default is ruinous: torch
+    # sees every core of the machine, starts that many threads, and the quota
+    # throttles them all. Measured 2026-11-16 in the deploy image under
+    # `docker run --cpus=0.1`: one query embedding took 55 s with the default
+    # and 0.4 to 0.6 s with one thread. docs/DEPLOY.md sets 1.
+    embedding_threads: int = Field(default=0, ge=0)
+    # Load the encoder in the background as the app starts, rather than in the
+    # first request that searches the filings. The same measurement: 180 s to
+    # import and load at 0.1 CPU, which a visitor would otherwise wait out.
+    embedding_preload: bool = False
+
     # --- Public access (see api/quotas.py and docs/DEPLOY.md) ---
     # Open signup. A public demo turns it off and offers the demo account only:
     # with signup open, a visitor's way round a per-user cap is another account.

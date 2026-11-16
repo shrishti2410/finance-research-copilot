@@ -16,6 +16,7 @@ Mounted so far:
 client SDK expects to find it. This app's own API lives at the root.
 """
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -55,7 +56,25 @@ async def lifespan(app: FastAPI):
     # Does not connect: redis-py dials lazily, so a Redis that is down at boot
     # degrades per the fail-open policy instead of preventing startup.
     await limiter.connect()
+    # In the background, so the server is listening (and the host's health
+    # check passes) while the encoder loads. get_encoder is an unlocked
+    # lru_cache, so a search arriving mid-load loads the model a second time:
+    # slower, and briefly twice the model's memory, but correct.
+    preload = None
+    if settings.embedding_preload:
+        from rag.embeddings import get_encoder
+
+        async def _preload() -> None:
+            try:
+                await asyncio.to_thread(get_encoder)
+                log.info("embedding model loaded")
+            except Exception:  # noqa: BLE001 - a search will retry and report it
+                log.exception("embedding model preload failed")
+
+        preload = asyncio.create_task(_preload())
     yield
+    if preload is not None and not preload.done():
+        preload.cancel()
     await inference_proxy.shutdown()
     await limiter.close()
     await dispose_engine()
