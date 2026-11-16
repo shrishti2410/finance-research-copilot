@@ -435,7 +435,7 @@ async def get_trading_signal(ticker: str) -> dict[str, Any]:
         ticker=current["ticker"], as_of=current["as_of"], currency=current["currency"],
         signal=current["signal"], score=current["score"],
         confidence=current["confidence"], coverage=coverage,
-        regime={k: regime[k] for k in ("label", "adx")},
+        regime={k: regime[k] for k in ("label", "adx", "plus_di", "minus_di")},
         votes=votes,
         backtest={k: v for k, v in backtest_verdict(current["ticker"], evaluation).items()
                   if k in ("verdict", "statement", "window")},

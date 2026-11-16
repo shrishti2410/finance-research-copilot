@@ -61,22 +61,24 @@ SIGNAL = {"ok": True, "ticker": "SBIN.NS", "as_of": "2026-11-16", "signal": "BUY
                      "source": "docs/strategies/adx_trend.md"}]}
 
 
-def test_a_missing_no_edge_statement_is_put_first_verbatim_and_reported():
+def test_the_verdict_is_put_first_verbatim_and_a_missing_no_edge_is_recorded():
     run = _stub("The signal engine's output is BUY on 12 of 16 rules "
                 "(docs/strategies/adx_trend.md).", SIGNAL)
     out = asyncio.run(explain_signal("sbin.ns", run=run))
     assert out["ok"] and out["answer"].startswith(SIGNAL["backtest"]["statement"])
-    assert out["added"] == ["no_edge_statement", "disclaimer"]
+    assert out["added"] == ["backtest_statement", "disclaimer"]
+    assert out["model_said_no_edge"] is False
     assert out["answer"].endswith("Educational project, not investment advice.")
     assert out["cards_cited_by_model"] == ["adx_trend"]
     assert run.kwargs["provider"] == "ollama" and run.kwargs["router_provider"] == "ollama"
 
 
-def test_an_answer_that_already_says_no_edge_is_left_as_written():
+def test_an_answer_that_already_says_no_edge_still_gets_the_verbatim_verdict_first():
     text = ("The signal engine's output is BUY (docs/strategies/adx_trend.md). The backtest "
             "shows no edge for SBIN.NS. Educational project, not investment advice.")
     out = asyncio.run(explain_signal("SBIN.NS", run=_stub(text, SIGNAL)))
-    assert out["answer"] == text and out["added"] == []
+    assert out["answer"] == SIGNAL["backtest"]["statement"] + "\n\n" + text
+    assert out["added"] == ["backtest_statement"] and out["model_said_no_edge"] is True
 
 
 def test_an_answer_naming_no_card_gets_the_supplied_cards_listed():

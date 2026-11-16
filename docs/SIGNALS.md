@@ -93,13 +93,15 @@ score. `tests/test_signals.py` checks both.
 - Anything less is **no edge**. The sentence saying so is written in Python
   from the evaluation's own figures.
 
-**Two checks after the guards:**
-- When the verdict is no edge and the answer does not say "no edge", the
-  tool's sentence is put first, verbatim.
+**After the guards:**
+- The verdict sentence always opens the explanation, verbatim.
+  `model_said_no_edge` records whether the model also said it. The model's
+  own restatement has been seen to get the reason or a figure wrong.
+- The supplied card files are listed if the answer names none.
 - The disclaimer is appended if missing.
 
-Both are listed in the result's `added`, so a model that left them out is
-visible.
+Each addition is listed in the result's `added`. The DI lines are in the
+tool output, so the model has no reason to guess them.
 
 **Which model:** local Ollama only (`qwen2.5:7b`, with `qwen2.5:1.5b` for tool
 selection). A hosted provider needs the owner's approval.

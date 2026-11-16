@@ -11,10 +11,15 @@ tool, and advice is replaced by the standard redirection.
 
 Then two checks that do not trust the model to remember:
 
-- **No edge, said plainly.** When the backtest verdict is "no_edge" and the
-  answer does not contain the words "no edge", the tool's own
-  backtest.statement is put first, verbatim. Every figure in it is from the
-  tool, so it adds nothing the grounding guard would have rejected.
+- **The verdict first, verbatim.** The tool's backtest.statement opens every
+  explanation: "The 4.9-year backtest shows no edge for SBIN.NS: ...". Every
+  figure in it is from the tool. It was first added only when the model left
+  "no edge" out, but the live run on 2026-11-17 showed qwen2.5:7b restating
+  the verdict wrongly even when it said "no edge" ("did not outperform
+  buy-and-hold" for a stock that did, on return and Sharpe, but whose timing
+  missed the luck bar; "beat 5%" for 0%). So the correct sentence now always
+  comes first, and `model_said_no_edge` records whether the model said it
+  unprompted.
 - **The disclaimer.** "Educational project, not investment advice." is
   appended when it is missing.
 - **The cards it was given.** When the answer names none of the card files
@@ -84,9 +89,10 @@ async def explain_signal(ticker: str, *, provider: str = LOCAL_PROVIDER,
     answer = (result.answer or "").strip()
     added = []
     backtest = data.get("backtest") or {}
-    if backtest.get("verdict") == "no_edge" and "no edge" not in answer.lower():
+    model_said_no_edge = "no edge" in answer.lower()
+    if backtest.get("statement"):
         answer = f"{backtest['statement']}\n\n{answer}".strip()
-        added.append("no_edge_statement")
+        added.append("backtest_statement")
     supplied = sorted({c["source"] for c in data.get("cards", [])})
     cited = sorted(set(_CARD.findall(answer)))
     if supplied and not cited:
@@ -97,7 +103,7 @@ async def explain_signal(ticker: str, *, provider: str = LOCAL_PROVIDER,
         added.append("disclaimer")
     return {
         "ok": True, "ticker": data["ticker"], "as_of": data["as_of"],
-        "answer": answer, "added": added,
+        "answer": answer, "added": added, "model_said_no_edge": model_said_no_edge,
         "signal": data["signal"], "score": data["score"],
         "confidence": data["confidence"], "coverage": data["coverage"],
         "backtest": backtest, "cards_cited_by_model": cited, "cards_supplied": supplied,
