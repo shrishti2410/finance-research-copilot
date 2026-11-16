@@ -22,7 +22,14 @@ How a day's signal is made (all from bars 0..t, decided at bar t's close)
    trend). Fixed beforehand, not fitted.
 5. **Score** = weighted mean vote, from -1 (every trusted rule out) to +1
    (every trusted rule in). BUY at >= +0.25, SELL at <= -0.25, HOLD between.
-   **Confidence** = |score| x history factor (below).
+6. **Coverage and confidence.** Coverage is how many of the rules eligible
+   at this refit carry any weight, e.g. "3 of 11 rules". **Confidence** =
+   |score| x history factor (below), capped at the coverage fraction: a
+   score that three rules out of eleven agree on cannot read as more than
+   0.27, however one-sided it is. Fewer than half the rules counting adds a
+   warning. Confidence is for display only; the decision in step 5 does not
+   use it. (Added 2026-11-16 after the first evaluation, which showed
+   PREMIERENE.NS at +0.89 on three rules; it changes no signal.)
 
 Limited history
 ---------------
@@ -88,6 +95,7 @@ TRAIN_DAYS = 504          # two years
 SHORT_TRAIN_DAYS = 126    # six months, for a stock with limited history
 REFIT_EVERY = 21          # about a month
 BUY_AT, SELL_AT = 0.25, -0.25
+MIN_COVERAGE = 0.5        # below this share of rules counting, the vote is "narrow"
 SLIPPAGE_BPS = 5.0
 NOTIONAL = 100_000.0      # the account the per-trade charges are computed on
 
@@ -243,7 +251,15 @@ def signal_evidence(wf: WalkForward, ticker: str, market: Market, t: int | None 
         })
     votes.sort(key=lambda v: (-(v["share_of_vote"] or 0), v["strategy"]))
     score = float(wf.score[t])
+    counted = sum(1 for f in fit.weights.values() if f["weight"] > 0)
+    eligible = len(fit.weights)
+    coverage = counted / eligible if eligible else 0.0
+    raw_confidence = abs(score) * fit.history_factor
     warnings = []
+    if eligible and coverage < MIN_COVERAGE:
+        warnings.append(f"Narrow vote: only {counted} of {eligible} rules had a positive "
+                        f"Sharpe ratio in training, so the score rests on few rules; "
+                        f"confidence capped at {round(coverage, 4)}.")
     if fit.limited:
         warnings.append(f"Limited history: {t + 1} trading days since "
                         f"{wf.days[0].isoformat()}. Trained on {fit.train_days} days instead "
@@ -257,7 +273,11 @@ def signal_evidence(wf: WalkForward, ticker: str, market: Market, t: int | None 
         "ok": True, "ticker": ticker, "as_of": wf.days[t].isoformat(),
         "exchange": market.exchange, "currency": market.currency,
         "signal": wf.decision[t], "score": round(score, 4),
-        "confidence": round(abs(score) * fit.history_factor, 4),
+        "confidence": round(min(raw_confidence, coverage), 4),
+        "confidence_uncapped": round(raw_confidence, 4),
+        "coverage": {"rules_counted": counted, "rules_eligible": eligible,
+                     "fraction": round(coverage, 4),
+                     "text": f"{counted} of {eligible} rules"},
         "thresholds": {"buy_at": BUY_AT, "sell_at": SELL_AT},
         "regime": {
             "label": regime, "adx": _num(m["adx"][t], 2), "plus_di": _num(m["plus_di"][t], 2),

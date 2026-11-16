@@ -99,9 +99,10 @@ async def main(tickers: list[str], years: int, out: Path | None) -> int:
             print(f"  {ticker:<14}{c.get('error')}")
             continue
         warn = "  [limited history]" if c["history"]["limited"] else ""
+        warn += "  [narrow vote]" if any(w.startswith("Narrow") for w in c["warnings"]) else ""
         print(f"  {ticker:<14}{c['as_of']}  {c['signal']:<4}  score {c['score']:+.3f}  "
-              f"confidence {c['confidence']:.3f}  regime {c['regime']['label']:<13} "
-              f"in {c['voters_in']} / out {c['voters_out']}{warn}")
+              f"on {c['coverage']['text']:<15} confidence {c['confidence']:.3f}  "
+              f"regime {c['regime']['label']:<13}{warn}")
     print(f"\n{len(tickers)} tickers in {elapsed:.1f}s, commit {commit}")
 
     if out:

@@ -144,11 +144,52 @@ def test_limited_history_trains_short_skips_slow_rules_and_lowers_confidence():
     wf = sg.walk_forward(short, NSE)
     ev = sg.signal_evidence(wf, "PREMIERENE.NS", NSE)
     assert ev["ok"] and ev["history"]["limited"] and ev["history"]["train_days"] == 126
-    assert ev["confidence"] == pytest.approx(abs(ev["score"]) * 126 / 504, abs=1e-4)
+    assert ev["confidence_uncapped"] == pytest.approx(abs(ev["score"]) * 126 / 504, abs=1e-4)
+    assert ev["confidence"] == pytest.approx(
+        min(ev["confidence_uncapped"], ev["coverage"]["fraction"]), abs=1e-4)
     for slow in ("sma_cross", "momentum", "trend_alignment", "price_above_sma"):
         assert "limited history" in ev["skipped_strategies"][slow]
     assert all(v["strategy"] not in ("momentum", "sma_cross") for v in ev["votes"])
-    assert ev["warnings"] and ev["warnings"][0].startswith("Limited history")
+    assert any(w.startswith("Limited history") for w in ev["warnings"])
+
+
+def test_coverage_is_shown_and_caps_confidence_without_changing_the_decision():
+    wf = sg.walk_forward(BARS, NSE)
+    seen_narrow = False
+    for t in range(wf.first, len(BARS), 7):
+        ev = sg.signal_evidence(wf, "X.NS", NSE, t)
+        c = ev["coverage"]
+        assert c["rules_counted"] == sum(1 for v in ev["votes"] if v["weight"] > 0)
+        assert c["rules_eligible"] == len(ev["votes"])
+        assert c["text"] == f"{c['rules_counted']} of {c['rules_eligible']} rules"
+        assert ev["confidence"] <= c["fraction"] + 1e-9
+        assert ev["confidence"] <= ev["confidence_uncapped"] + 1e-9
+        assert ev["signal"] == wf.decision[t]          # the decision rule is untouched
+        narrow = any(w.startswith("Narrow vote") for w in ev["warnings"])
+        assert narrow == (c["fraction"] < sg.MIN_COVERAGE)
+        seen_narrow |= narrow
+    assert seen_narrow, "the synthetic walk should produce at least one narrow vote"
+
+
+def test_a_three_of_eleven_vote_cannot_read_above_0_27():
+    fit = sg.Fit(on=date(2026, 1, 1), bars=1000, limited=False, train_days=504,
+                 weights={k: {"train_sharpe": (1.0 if i < 3 else -1.0),
+                              "weight": (1.0 if i < 3 else 0.0)}
+                          for i, k in enumerate(list(sg.STYLE)[:11])},
+                 skipped={})
+    n = 1000
+    wf = sg.WalkForward(
+        days=[date(2020, 1, 1) + timedelta(days=i) for i in range(n)],
+        candidates=list(fit.weights), excluded={}, first=n - 1,
+        score=np.r_[np.full(n - 1, np.nan), 1.0], decision=[None] * (n - 1) + ["BUY"],
+        position=np.zeros(n), targets={k: np.ones(n) for k in fit.weights}, fits=[fit],
+        regime=["transition"] * n,
+        measures={k: np.zeros(n) for k in ("adx", "plus_di", "minus_di", "sma50_slope_20d",
+                                           "volatility", "volatility_percentile")})
+    ev = sg.signal_evidence(wf, "X.NS", NSE)
+    assert ev["signal"] == "BUY" and ev["score"] == 1.0
+    assert ev["coverage"]["text"] == "3 of 11 rules"
+    assert ev["confidence_uncapped"] == 1.0 and ev["confidence"] == pytest.approx(3 / 11, abs=1e-4)
 
 
 def test_evidence_is_complete_and_adds_up():
@@ -187,6 +228,7 @@ def test_the_evaluation_is_out_of_sample_reproducible_and_complete():
         assert {"cagr", "sharpe_ratio", "max_drawdown", "costs_paid"} <= set(a[side])
     assert a["random"]["sharpe_p5"] <= a["random"]["sharpe_median"] <= a["random"]["sharpe_p95"]
     assert 0 <= a["hit_rate"]["base_rate_up"] <= 1
+
 
 def test_risk_metrics_match_their_definitions():
     import pandas as pd
