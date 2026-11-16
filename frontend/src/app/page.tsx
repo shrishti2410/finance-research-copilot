@@ -83,6 +83,12 @@ export default function Landing() {
             <Card key={m.label} className="flex flex-col gap-2 p-5">
               <p className="tabular text-3xl font-semibold tracking-tight text-fg">{m.value}</p>
               <p className="text-sm font-medium text-fg">{m.label}</p>
+              {"secondary" in m && m.secondary ? (
+                <p className="text-sm text-fg">
+                  <span className="tabular text-lg font-semibold">{m.secondary.value}</span>{" "}
+                  <span className="text-fg-muted">{m.secondary.label}</span>
+                </p>
+              ) : null}
               <p className="text-xs text-fg-muted">{m.detail}</p>
               <p className="mt-auto pt-2 text-[11px] text-fg-subtle">Source: {m.source}</p>
             </Card>
