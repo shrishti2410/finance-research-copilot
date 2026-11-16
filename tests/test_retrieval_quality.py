@@ -6,8 +6,10 @@ chunks to exercise the mechanics -- including one whose content is
 "table". Under the figure-query boost that fixture outranks the actual income
 statements, so a quality test sharing a database with it measures the fixture.
 
-These run against whatever `scripts/index_filings.py` last wrote and skip when
-NVDA and AAPL are not both present. They are the regression guard for the audit
+These run against whatever `scripts/index_filings.py` or `scripts/index_corpus.py`
+last wrote, and skip when NVDA and AAPL are not both present. Figure queries are
+asked per company, so the result does not depend on which other companies are
+indexed. They are the regression guard for the audit
 finding that "What was total revenue?" returned two passages discussing revenue
 without stating it, with NVDA's statement at rank 5 and Apple's at rank 13.
 """
@@ -58,21 +60,29 @@ def search(query: str, **kwargs):
     return run(search_filings(query, **kwargs))
 
 
-def test_income_statements_outrank_prose_for_a_figure_query(real_index):
+# Each eval company with its eval filing's fiscal year and its total revenue
+# there. The question is asked per company: with the 15-company corpus of step 4
+# indexed, "What was total revenue?" with no company is a different question,
+# and Microsoft's statement is a right answer to it.
+EVAL_FILINGS = {"NVDA": ("FY2026", "215,938"), "AAPL": ("FY2025", "416,161")}
+
+
+@pytest.mark.parametrize("ticker", sorted(EVAL_FILINGS))
+def test_income_statements_outrank_prose_for_a_figure_query(real_index, ticker):
     """The audit finding this fixes: 'What was total revenue?' used to return
     two passages that discuss revenue without stating it, with NVDA's statement
     at rank 5 and Apple's at rank 13."""
-    hits = search("What was total revenue?", k=3)
-    tables = [h for h in hits[:3] if h.content_type == "table"]
-
-    assert len(tables) >= 2, [f"{h.content_type}:{h.ticker}" for h in hits]
-    assert {h.ticker for h in tables} >= {"NVDA", "AAPL"}
+    period, _ = EVAL_FILINGS[ticker]
+    hits = search("What was total revenue?", company=ticker, fiscal_period=period, k=3)
+    assert hits and hits[0].content_type == "table", [f"{h.content_type}:{h.section}" for h in hits]
 
 
-def test_the_top_hit_for_a_figure_query_actually_contains_the_figure(real_index):
+@pytest.mark.parametrize("ticker", sorted(EVAL_FILINGS))
+def test_the_top_hit_for_a_figure_query_actually_contains_the_figure(real_index, ticker):
     """Rank is not the point; containing the answer is."""
-    top = search("What was total revenue?", k=1)[0]
-    assert "215,938" in top.content or "416,161" in top.content
+    period, revenue = EVAL_FILINGS[ticker]
+    top = search("What was total revenue?", company=ticker, fiscal_period=period, k=1)[0]
+    assert revenue in top.content
 
 
 def test_an_explanatory_query_still_returns_prose(real_index):
