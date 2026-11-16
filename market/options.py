@@ -196,7 +196,11 @@ def option_structure(key: str, spot: float, sigma: float, days: int = DEFAULT_DA
     ext = _extremes(legs)
     net = sum(-leg.side * leg.premium for leg in legs if leg.kind != "stock")
     lo, hi = spot * 0.7, spot * 1.3
-    grid = np.linspace(lo, hi, points)
+    # The strikes and breakevens are in the grid, so a chart drawn from it has
+    # its kinks and zero crossings exactly where they are, not between samples.
+    exact = [leg.strike for leg in legs if leg.strike is not None] + ext["breakevens"]
+    grid = np.unique(np.concatenate([np.linspace(lo, hi, points),
+                                     [x for x in exact if lo <= x <= hi]]))
     pay = _total(legs, grid)
 
     def scale(x):

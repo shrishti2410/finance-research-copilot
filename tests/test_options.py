@@ -120,7 +120,11 @@ def test_lot_size_scales_money_not_prices_and_the_payoff_curve_agrees():
     one, lot = _q("bull_call_spread"), _q("bull_call_spread", lot_size=750)
     assert lot["max_loss"] == pytest.approx(one["max_loss"] * 750, abs=10)
     assert lot["breakevens"] == one["breakevens"]
-    assert len(one["payoff"]) == 61
+    prices = [p["price"] for p in one["payoff"]]
+    assert len(prices) >= 61 and prices == sorted(prices)
+    for leg in one["legs"]:                       # the kinks are sampled exactly
+        assert leg["strike"] in prices
+    assert all(b in prices for b in one["breakevens"])
     assert min(p["profit"] for p in one["payoff"]) >= one["max_loss"] - 0.01
     assert max(p["profit"] for p in one["payoff"]) <= one["max_profit"] + 0.01
 
