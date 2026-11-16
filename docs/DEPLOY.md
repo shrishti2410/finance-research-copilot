@@ -56,6 +56,9 @@ measured under the same limits before anything else.
 | from container start to listening, at 0.1 CPU | 157 s (migration check plus imports) |
 | a `search_filings` call at 0.1 CPU, one thread, model loaded | 19.6 s |
 
+The full record, with a rerun whose raw output is saved, is
+[benchmarks/CONTAINER_MEMORY.md](../benchmarks/CONTAINER_MEMORY.md).
+
 What this means:
 
 - **Memory fits, with about 85 MiB to spare.** torch stays; the ONNX change is not
