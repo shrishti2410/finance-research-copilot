@@ -78,9 +78,14 @@ _hosted: dict[str, httpx.AsyncClient] = {}
 def _hosted_providers() -> dict[str, tuple[str, str]]:
     """name -> (base URL, key) for each hosted provider this build knows.
 
-    One entry today. Adding a provider is a line here and two settings.
+    Adding a provider is a line here and two settings. Both speak the OpenAI
+    chat-completions API with a bearer key, so nothing else differs per
+    provider.
     """
-    return {"groq": (settings.groq_base_url, settings.groq_api_key)}
+    return {
+        "groq": (settings.groq_base_url, settings.groq_api_key),
+        "cerebras": (settings.cerebras_base_url, settings.cerebras_api_key),
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -165,6 +170,9 @@ def _retry_after_seconds(headers) -> float:
         except ValueError:
             pass
     # Groq also states when the token budget refills, as "39.33s" or "1m2.5s".
+    # Cerebras documents no rate-limit headers (checked 2026-11-16), so until a
+    # real 429 from it has been seen, a Cerebras limit without retry-after
+    # falls to the default below and is retried up to RATE_LIMIT_ATTEMPTS times.
     match = _DURATION.match((headers.get("x-ratelimit-reset-tokens") or "").strip())
     if match and (match.group(1) or match.group(2)):
         return float(match.group(1) or 0) * 60 + float(match.group(2) or 0)

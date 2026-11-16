@@ -88,18 +88,24 @@ class Settings(BaseSettings):
     agent_router_model: str = "qwen2.5:1.5b"
     # Which provider serves each of the two models. "ollama" is whatever
     # INFERENCE_BASE_URL points at, and is the default so that tests and CI need
-    # no key. "groq" is the hosted provider, reached through the same proxy with
-    # GROQ_API_KEY. The router's provider defaults to the answer model's; set it
-    # to run a hosted router in front of a local answer model, or the reverse.
+    # no key. "groq" and "cerebras" are hosted providers, reached through the
+    # same proxy with GROQ_API_KEY or CEREBRAS_API_KEY. The router's provider
+    # defaults to the answer model's; set it to run a hosted router in front of
+    # a local answer model, or the reverse.
     #
     # A hosted provider only works when the agent calls the app's own proxy
     # (AGENT_INFERENCE_BASE_URL), because the proxy is what holds the key.
-    agent_provider: Literal["ollama", "groq"] = "ollama"
-    agent_router_provider: Literal["", "ollama", "groq"] = ""
-    # The hosted provider. The key is read from .env and nowhere else; it has no
-    # default, and a provider that needs it refuses to start without it.
+    agent_provider: Literal["ollama", "groq", "cerebras"] = "ollama"
+    agent_router_provider: Literal["", "ollama", "groq", "cerebras"] = ""
+    # The hosted providers. Each key is read from .env and nowhere else; it has
+    # no default, and a provider that needs it refuses to start without it.
     groq_api_key: str = ""
     groq_base_url: str = "https://api.groq.com/openai/v1"
+    # Cerebras serves the same open-weight model under a different id:
+    # "gpt-oss-120b" there, "openai/gpt-oss-120b" on Groq. AGENT_MODEL has to
+    # be the id of the provider it is sent to.
+    cerebras_api_key: str = ""
+    cerebras_base_url: str = "https://api.cerebras.ai/v1"
     # Generated-token caps. Ollama is unbounded by default, which on a CPU host
     # means one runaway answer can generate for minutes at ~4 tok/s. Across the
     # 40 eval questions the longest final answer was ~368 tokens and the median
@@ -167,9 +173,9 @@ class Settings(BaseSettings):
         # rate limited and refused the hosted provider. Empty means unset.
         return v or secrets.token_urlsafe(32)
 
-    @field_validator("groq_base_url")
+    @field_validator("groq_base_url", "cerebras_base_url")
     @classmethod
-    def strip_groq_trailing_slash(cls, v: str) -> str:
+    def strip_hosted_trailing_slash(cls, v: str) -> str:
         return v.rstrip("/")
 
     @property
@@ -182,11 +188,14 @@ class Settings(BaseSettings):
         # Fail at boot, with the fix in the message. Without this the first
         # question after a deploy is what discovers the missing key, as a 503
         # from the proxy several layers away from the cause.
-        if "groq" in (self.agent_provider, self.router_provider) and not self.groq_api_key:
-            raise ValueError(
-                "AGENT_PROVIDER or AGENT_ROUTER_PROVIDER is 'groq' but GROQ_API_KEY is "
-                "empty. Set GROQ_API_KEY in .env, or set the provider back to 'ollama'."
-            )
+        keys = {"groq": ("GROQ_API_KEY", self.groq_api_key),
+                "cerebras": ("CEREBRAS_API_KEY", self.cerebras_api_key)}
+        for provider, (setting, key) in keys.items():
+            if provider in (self.agent_provider, self.router_provider) and not key:
+                raise ValueError(
+                    f"AGENT_PROVIDER or AGENT_ROUTER_PROVIDER is {provider!r} but {setting} "
+                    f"is empty. Set {setting} in .env, or set the provider back to 'ollama'."
+                )
         return self
 
     @property
