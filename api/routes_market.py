@@ -7,6 +7,7 @@
     POST /market/{ticker}/backtest   {strategy, params, start, end, cost_bps, slippage_bps}
     GET  /market/{ticker}/signal     BUY / SELL / HOLD with its evidence (market/signals.py)
     GET  /market/{ticker}/signal/explain   the agent's explanation, local Ollama (market/explain.py)
+    GET  /market/{ticker}/signal/report    evidence, verdict, curves, markers, cards (the stock page)
     GET  /market/{ticker}/options?structure=&days=30&lot_size=1   priced structures (market/options.py)
 
 Authenticated like the rest of the app's API: the cache is shared and a
@@ -172,6 +173,20 @@ async def options(ticker: str, structure: str | None = None,
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, exc.args[0]) from None
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
+    except ProviderError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY,
+                            f"The price provider could not be reached: {exc}") from None
+    except LookupError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
+
+
+@router.get("/{ticker}/signal/report")
+async def report(ticker: str, user: User = Depends(get_current_user)) -> dict:
+    """The stock page's signal and backtest tabs in one response."""
+    from market.service import signal_report
+
+    try:
+        return await signal_report(ticker)
     except ProviderError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY,
                             f"The price provider could not be reached: {exc}") from None

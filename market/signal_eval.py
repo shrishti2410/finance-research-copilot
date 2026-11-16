@@ -98,7 +98,8 @@ def _pct(values, q) -> float | None:
 
 def evaluate(bars, nifty_bars, market: Market, years: int = 5, n_random: int = N_RANDOM,
              regime_rule: str | None = None, refit_day: int | None = None,
-             model: CostModel | None = None, wf: WalkForward | None = None) -> dict:
+             model: CostModel | None = None, wf: WalkForward | None = None,
+             curves: bool = False) -> dict:
     model = model or cost_model_for(market.cost_model)
     if wf is None:
         kwargs = {}
@@ -178,6 +179,8 @@ def evaluate(bars, nifty_bars, market: Market, years: int = 5, n_random: int = N
                 round(float(np.mean([s < sharpe for s in random_sharpes])), 4)
                 if sharpe is not None and random_sharpes else None),
         },
+        "curves": ({"days": signal.days, "signal": signal.equity,
+                    "buy_and_hold": signal.benchmark_equity} if curves else None),
         "hit_rate": {
             "horizon_days": HORIZON,
             "after_buy_up": share(buys), "buy_days": len(buys),

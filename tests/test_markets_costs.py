@@ -184,3 +184,24 @@ def test_the_watchlist_returns_the_index_strip_and_a_card_per_stock():
     assert c["change_pct"] == pytest.approx((c["sparkline"][-1] / c["sparkline"][-2] - 1) * 100,
                                            abs=0.01)
     assert c["signal"]["signal"] in ("BUY", "SELL", "HOLD") and " of " in c["signal"]["coverage"]
+
+
+def test_the_signal_report_has_evidence_verdict_curves_markers_and_cards():
+    from db.base import engine
+
+    async def go():
+        try:
+            return await service.signal_report("SBIN.NS", data=_Recorder())
+        finally:
+            await engine.dispose()
+
+    out = asyncio.run(go())
+    assert out["evidence"]["ok"] and out["verdict"]["verdict"] in ("edge", "no_edge", "untested")
+    curves = out["evaluation"]["curves"]
+    assert len(curves["days"]) == len(curves["signal"]) == len(curves["buy_and_hold"]) > 200
+    assert all(m["action"] in ("in", "out") for m in out["markers"])
+    days = [m["day"] for m in out["markers"]]
+    assert days == sorted(days)
+    for c in out["cards"]:                       # empty when the cards are not indexed
+        assert c["source"] == f"docs/strategies/{c['strategy']}.md" and c["summary"]
+    assert out["disclaimer"] == "Educational project, not investment advice."
