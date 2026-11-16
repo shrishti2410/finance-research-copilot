@@ -4,7 +4,7 @@ name: Iron condor
 kind: option
 regime: ranging
 view: the stock stays in a range
-code: pending
+code: market/options.py#iron_condor
 ---
 # Iron condor
 
@@ -37,4 +37,4 @@ Four strikes (the distance of the sold strikes and the width of the wings),
 days to expiry.
 
 ## Code
-Pending: step 7C phase 5.
+`iron_condor` in `market/options.py`: legs, Black-Scholes premium estimates from historical volatility, payoff at expiry, breakevens and maximum profit and loss, with every assumption listed in the result.

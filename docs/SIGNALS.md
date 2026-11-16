@@ -106,6 +106,31 @@ tool output, so the model has no reason to guess them.
 **Which model:** local Ollama only (`qwen2.5:7b`, with `qwen2.5:1.5b` for tool
 selection). A hosted provider needs the owner's approval.
 
+## Options (phase 5)
+
+`GET /market/{ticker}/options`, or `market.service.option_ideas`.
+- Prices the structures whose market view matches the engine's output: BUY →
+  bull call spread, long call, covered call; SELL → the bearish mirror; HOLD →
+  iron condor, covered call, straddle; a volatile regime adds the straddle.
+  `?structure=` asks for one by name.
+- Each structure comes with its legs, a premium estimate per leg, net premium,
+  payoff at expiry on a grid from −30% to +30%, breakevens, and maximum profit
+  and loss (exact, or flagged unbounded).
+- The signal's coverage and backtest verdict travel with the structures.
+
+**The premiums are Black-Scholes estimates**, from the stock's own 30-day
+historical volatility, not market quotes. The other assumptions, each
+returned with every result:
+- a risk-free rate of 6.5%, an assumed round figure that was not looked up;
+- no dividends; European exercise;
+- strikes are round numbers near the price, not NSE's listed strikes;
+- figures are per share (`lot_size` scales them; NSE lot sizes are not
+  guessed);
+- option trading costs are not included.
+
+`market/options.py`; tests against the textbook Black-Scholes case,
+put-call parity and each card's own max-loss and breakeven formulas.
+
 ## How well it works
 
 See `benchmarks/SIGNALS_7C.md`.

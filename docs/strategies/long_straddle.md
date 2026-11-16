@@ -4,7 +4,7 @@ name: Long straddle
 kind: option
 regime: volatile
 view: a big move, direction unknown
-code: pending
+code: market/options.py#long_straddle
 ---
 # Long straddle
 
@@ -36,4 +36,4 @@ unlimited upward and large downward.
 Strike, days to expiry.
 
 ## Code
-Pending: step 7C phase 5.
+`long_straddle` in `market/options.py`: legs, Black-Scholes premium estimates from historical volatility, payoff at expiry, breakevens and maximum profit and loss, with every assumption listed in the result.

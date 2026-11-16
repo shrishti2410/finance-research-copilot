@@ -4,7 +4,7 @@ name: Long call
 kind: option
 regime: trending
 view: bullish
-code: pending
+code: market/options.py#long_call
 ---
 # Long call
 
@@ -36,5 +36,4 @@ lots, so the smallest position can be large in rupees.
 Strike (moneyness), days to expiry, number of lots.
 
 ## Code
-Pending: step 7C phase 5 adds the payoff, breakeven and a Black-Scholes
-premium estimate.
+`long_call` in `market/options.py`: legs, Black-Scholes premium estimates from historical volatility, payoff at expiry, breakevens and maximum profit and loss, with every assumption listed in the result.

@@ -4,7 +4,7 @@ name: Covered call
 kind: option
 regime: ranging
 view: neutral to mildly bullish
-code: pending
+code: market/options.py#covered_call
 ---
 # Covered call
 
@@ -35,4 +35,4 @@ purchase price - premium. Maximum gain: strike - purchase price + premium.
 Call strike, days to expiry.
 
 ## Code
-Pending: step 7C phase 5.
+`covered_call` in `market/options.py`: legs, Black-Scholes premium estimates from historical volatility, payoff at expiry, breakevens and maximum profit and loss, with every assumption listed in the result.

@@ -4,7 +4,7 @@ name: Bull call spread
 kind: option
 regime: trending
 view: moderately bullish
-code: pending
+code: market/options.py#bull_call_spread
 ---
 # Bull call spread
 
@@ -33,4 +33,4 @@ premium.
 Both strikes, days to expiry.
 
 ## Code
-Pending: step 7C phase 5.
+`bull_call_spread` in `market/options.py`: legs, Black-Scholes premium estimates from historical volatility, payoff at expiry, breakevens and maximum profit and loss, with every assumption listed in the result.

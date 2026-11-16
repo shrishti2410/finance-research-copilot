@@ -25,7 +25,7 @@ from market.store import MarketData
 __all__ = ["chart_data", "price_analytics", "backtest", "strategy_catalogue",
            "WARMUP_CALENDAR_DAYS", "BACKTEST_WARMUP_CALENDAR_DAYS", "DEFAULT_BENCHMARK",
            "parse_indicators", "default_benchmark", "market_info", "trading_signal",
-           "signal_evaluation", "SIGNAL_HISTORY_CALENDAR_DAYS"]
+           "signal_evaluation", "option_ideas", "SIGNAL_HISTORY_CALENDAR_DAYS"]
 
 # Enough trading days for the slowest indicator offered (SMA 200) plus the
 # warm-up of the smoothed ones: 300 calendar days is about 205 trading days.
@@ -200,3 +200,55 @@ async def signal_evaluation(ticker: str, years: int = 5, data: MarketData | None
     out = evaluate(bars, bench_bars, market_for(symbol), years=years, regime_rule=regime_rule)
     return {"ticker": symbol, "benchmark": bench, **market_info(symbol),
             "provider": data.provider.name, **out}
+
+
+async def option_ideas(ticker: str, structure: str | None = None, days: int = 30,
+                       lot_size: int = 1, data: MarketData | None = None,
+                       now: datetime | None = None) -> dict:
+    """Option structures for `ticker`, priced with Black-Scholes from its own
+    historical volatility (market/options.py). Without `structure`, the ones
+    whose market view matches the signal engine's current output, which comes
+    with its coverage and its backtest verdict: a structure that follows a
+    signal with no edge inherits that."""
+    from market.options import (
+        DISCLAIMER,
+        VOL_WINDOW,
+        historical_volatility,
+        option_structure,
+        structures_for_signal,
+    )
+    from market.signal_eval import backtest_verdict, evaluate
+    from market.signals import signal_evidence, walk_forward
+
+    data = data or MarketData()
+    symbol = normalize_ticker(ticker)
+    bars = await _signal_bars(symbol, data, now)
+    if len(bars) < VOL_WINDOW + 1:
+        raise LookupError(f"Not enough price history for {symbol} to estimate volatility.")
+    market = market_for(symbol)
+    wf = walk_forward(bars, market)
+    sig = signal_evidence(wf, symbol, market)
+    if structure:
+        keys = [structure]
+    elif sig.get("ok"):
+        keys = structures_for_signal(sig["signal"], sig["regime"]["label"])
+    else:
+        keys = structures_for_signal("HOLD")
+    bench = default_benchmark(symbol)
+    bench_bars = await _signal_bars(bench, data, now) if bench != symbol else None
+    verdict = backtest_verdict(symbol, evaluate(bars, bench_bars, market, years=5, wf=wf))
+    closes = [b.close for b in bars]          # traded (split-adjusted) prices
+    spot, sigma = closes[-1], historical_volatility(closes)
+    return {
+        "ticker": symbol, **market_info(symbol), "as_of": bars[-1].day.isoformat(),
+        "spot": round(spot, 2), "volatility_30d": round(sigma, 4),
+        "signal": {k: sig.get(k) for k in ("signal", "score", "confidence")}
+                  | {"coverage": (sig.get("coverage") or {}).get("text"),
+                     "regime": (sig.get("regime") or {}).get("label")},
+        "backtest": {k: verdict[k] for k in ("verdict", "statement")},
+        "structures": [option_structure(k, spot, sigma, days=days, lot_size=lot_size)
+                       for k in keys],
+        "note": ("Structures whose market view matches the engine's output, for study. "
+                 "Premiums are model estimates, not quotes."),
+        "provider": data.provider.name, "disclaimer": DISCLAIMER,
+    }

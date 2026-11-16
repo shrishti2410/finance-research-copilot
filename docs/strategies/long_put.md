@@ -4,7 +4,7 @@ name: Long put
 kind: option
 regime: downtrend
 view: bearish
-code: pending
+code: market/options.py#long_put
 ---
 # Long put
 
@@ -33,4 +33,4 @@ gain: strike - premium, if the stock goes to zero.
 Strike, days to expiry, lots.
 
 ## Code
-Pending: step 7C phase 5.
+`long_put` in `market/options.py`: legs, Black-Scholes premium estimates from historical volatility, payoff at expiry, breakevens and maximum profit and loss, with every assumption listed in the result.

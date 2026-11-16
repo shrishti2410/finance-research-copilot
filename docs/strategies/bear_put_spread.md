@@ -4,7 +4,7 @@ name: Bear put spread
 kind: option
 regime: downtrend
 view: moderately bearish
-code: pending
+code: market/options.py#bear_put_spread
 ---
 # Bear put spread
 
@@ -33,4 +33,4 @@ premium.
 Both strikes, days to expiry.
 
 ## Code
-Pending: step 7C phase 5.
+`bear_put_spread` in `market/options.py`: legs, Black-Scholes premium estimates from historical volatility, payoff at expiry, breakevens and maximum profit and loss, with every assumption listed in the result.

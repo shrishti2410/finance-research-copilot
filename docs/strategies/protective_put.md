@@ -4,7 +4,7 @@ name: Protective put
 kind: option
 regime: any
 view: bullish, with insurance
-code: pending
+code: market/options.py#protective_put
 ---
 # Protective put
 
@@ -34,4 +34,4 @@ Put strike (how much loss is accepted before the insurance pays), days to
 expiry.
 
 ## Code
-Pending: step 7C phase 5.
+`protective_put` in `market/options.py`: legs, Black-Scholes premium estimates from historical volatility, payoff at expiry, breakevens and maximum profit and loss, with every assumption listed in the result.
