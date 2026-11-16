@@ -153,6 +153,8 @@ async def _store_turn(session, conversation, question, result, history_messages=
                 "history_messages": history_messages,
             },
             "trace": [step.to_dict() for step in result.steps[:MAX_STORED_STEPS]],
+            # Chart specifications the chat draws under this answer.
+            "charts": result.charts,
         },
     )
 
@@ -243,6 +245,7 @@ async def ask(
         total_tokens=result.total_tokens,
         usage_measured=result.usage_measured,
         final_figure=result.final_figure,
+        charts=result.charts,
         steps=[step.to_dict() for step in result.steps] if body.include_trace else None,
     )
 
@@ -347,6 +350,7 @@ async def _run_and_store(*, conversation_id, user_id, question, history, queue, 
             "model": result.model,
             "total_ms": round(result.total_ms, 1),
             "history_messages": len(history),
+            "charts": result.charts,
             "steps": [step.to_dict() for step in result.steps],
         })
     except Exception as exc:  # noqa: BLE001 - the client is owed a reason

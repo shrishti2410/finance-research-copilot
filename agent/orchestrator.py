@@ -503,6 +503,14 @@ class AgentResult:
     def total_tokens(self) -> int:
         return self.prompt_tokens + self.completion_tokens
 
+    @property
+    def charts(self) -> list[dict]:
+        """Charts the agent drew this turn, from successful show_price_chart
+        calls, in order. The chat renders these under the answer."""
+        return [step.result["chart"] for step in self.steps
+                if step.tool == "show_price_chart" and step.ok
+                and isinstance(step.result, dict) and step.result.get("chart")]
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "answer": self.answer,

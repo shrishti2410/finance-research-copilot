@@ -45,7 +45,7 @@ from datetime import date
 from typing import Any, Literal
 
 from rag.retriever import search_filings as _search_filings
-from tools.base import ok
+from tools.base import ERROR_BAD_INPUT, ERROR_NO_DATA, ERROR_UPSTREAM, error, ok
 from tools.facts import (
     UNKNOWN_ARGUMENT_HINT,
     fiscal_year_end,
@@ -240,6 +240,111 @@ def _same_year_end(a: str | None, b: str | None) -> bool:
         return False
 
 
+async def get_price_analytics(
+    ticker: str,
+    start_date: str,
+    end_date: str = "",
+    benchmark: str = "SPY",
+) -> dict[str, Any]:
+    """Return, risk and drawdown of a stock over a period, from daily prices.
+
+    Use this for questions about how a stock performed: total or annualised
+    return, volatility, the largest fall from a peak (max drawdown), Sharpe
+    ratio, or beta and correlation against a benchmark. Computed from the
+    dividend-adjusted close. For a single day's price, use get_stock_price.
+
+    Args:
+        ticker: The stock symbol, e.g. "NVDA".
+        start_date: First day, YYYY-MM-DD.
+        end_date: Last day, YYYY-MM-DD; today when omitted.
+        benchmark: Symbol to measure beta and correlation against; "SPY"
+            (the S&P 500 ETF) by default, "" for none.
+
+    Returns:
+        A dict with "ok": True and total_return, annualised_return and
+        annualised_volatility (fractions: 0.25 is 25%), sharpe_ratio,
+        max_drawdown (negative fraction) with peak_day and trough_day,
+        best_day, worst_day, beta, correlation, trading_days, start, end. On
+        failure, {"ok": False, "error": code, "message": ...}.
+    """
+    from market.providers import ProviderError
+    from market.service import price_analytics
+
+    try:
+        start, end = _date_range(start_date, end_date)
+        result = await price_analytics(ticker, start, end, benchmark or None)
+    except ValueError as exc:
+        return error(ERROR_BAD_INPUT, str(exc), ticker=ticker)
+    except LookupError as exc:
+        return error(ERROR_NO_DATA, str(exc), ticker=ticker)
+    except ProviderError as exc:
+        return error(ERROR_UPSTREAM, f"Price provider unreachable: {exc}", ticker=ticker)
+    return ok(**result)
+
+
+async def show_price_chart(
+    ticker: str,
+    start_date: str,
+    end_date: str = "",
+    indicators: list[str] | None = None,
+) -> dict[str, Any]:
+    """Show the user a price chart in the chat: candlesticks and volume, with
+    optional indicators.
+
+    Call this when the user asks to see, chart or plot a stock's price, or
+    asks about a technical indicator. The chart is drawn for the user; the
+    result also gives the latest value of each indicator, to quote.
+
+    Args:
+        ticker: The stock symbol, e.g. "AAPL".
+        start_date: First day shown, YYYY-MM-DD.
+        end_date: Last day shown, YYYY-MM-DD; today when omitted.
+        indicators: Any of "sma20", "sma50", "sma200", "ema12", "ema26",
+            "bollinger", "rsi14", "macd", "atr14", "volume", "obv".
+
+    Returns:
+        A dict with "ok": True, "chart" (what the chat draws), "bars" (how many
+        trading days), "last_close" and "latest" (each indicator's value on the
+        last day). On failure, {"ok": False, "error": code, "message": ...}.
+    """
+    from market.providers import ProviderError
+    from market.service import chart_data, parse_indicators
+
+    try:
+        start, end = _date_range(start_date, end_date)
+        names = parse_indicators(indicators or [])
+        data = await chart_data(ticker, start, end, names)
+    except ValueError as exc:
+        return error(ERROR_BAD_INPUT, str(exc), ticker=ticker)
+    except ProviderError as exc:
+        return error(ERROR_UPSTREAM, f"Price provider unreachable: {exc}", ticker=ticker)
+    if not data["bars"]:
+        return error(ERROR_NO_DATA, f"No price history for {data['ticker']} in that range.",
+                     ticker=data["ticker"])
+    last = data["bars"][-1]
+    return ok(
+        ticker=data["ticker"],
+        chart={"kind": "price_chart", "ticker": data["ticker"], "start": data["start"],
+               "end": data["end"], "indicators": names},
+        bars=len(data["bars"]),
+        last_day=last["time"], last_close=round(last["close"], 4),
+        latest={key: points[-1]["value"] for key, points in data["series"].items() if points},
+    )
+
+
+def _date_range(start_date: str, end_date: str):
+    from datetime import date as _date
+
+    try:
+        start = _date.fromisoformat((start_date or "").strip())
+        end = _date.fromisoformat(end_date.strip()) if (end_date or "").strip() else _date.today()
+    except ValueError:
+        raise ValueError("Dates must be YYYY-MM-DD.") from None
+    if start > end:
+        raise ValueError(f"start_date {start} is after end_date {end}.")
+    return start, end
+
+
 def build_registry() -> Registry:
     """The default tool set. One registry per process is plenty; it is stateless."""
     registry = Registry()
@@ -255,6 +360,8 @@ def build_registry() -> Registry:
     registry.register(get_stock_price)
     registry.register(calculate_ratio)
     registry.register(search_news)
+    registry.register(get_price_analytics)
+    registry.register(show_price_chart)
     return registry
 
 
