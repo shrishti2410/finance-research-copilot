@@ -226,7 +226,49 @@ def _cached_filings():
     return sorted(CACHE.glob("*/*.html"))
 
 
-@pytest.mark.parametrize("path", _cached_filings(), ids=lambda p: p.parent.name)
+# The labels each company really prints for its top line and its bottom line,
+# read from its own income statement in the 15-company corpus (2026-11-17). The
+# test was written when the cache held only Apple and NVIDIA, which use
+# "total net sales" / "revenue" and "net income". Only exact line items are
+# listed here, never a substring, so a sub-line such as "net product sales" or
+# "net income per share" cannot stand in for the total.
+NET_INCOME_LABELS = {
+    "net income",
+    "net income (loss)",           # Amazon
+    "consolidated net income",     # Coca-Cola, Walmart
+}
+REVENUE_LABELS = {
+    "revenue",
+    "total net sales",             # Apple, Amazon
+    "revenues",                    # Alphabet, Netflix
+    "total revenues",              # Tesla, Walmart
+    "net revenue",                 # Visa
+    "net operating revenues",      # Coca-Cola
+}
+
+# Filings the parser does not handle yet. Strict: if one starts passing, the
+# test fails, so the entry is removed rather than left to hide a regression.
+# Recorded in docs/KNOWN_LIMITATIONS.md.
+PARSER_KNOWN_FAILURES = {
+    "JNJ": "the parser finds no income statement in Johnson & Johnson's 10-K",
+    "PG": "the parser finds no income statement in Procter & Gamble's 10-K",
+    "JPM": ("JPMorgan's 10-K incorporates MD&A and the financial statements by "
+            "reference to the annual report; the parser does not follow it"),
+    "XOM": ("ExxonMobil's 10-K incorporates MD&A and the financial statements by "
+            "reference to its Financial Section; the parser does not follow it"),
+}
+
+
+def _real_filing_params():
+    out = []
+    for p in _cached_filings():
+        why = PARSER_KNOWN_FAILURES.get(p.parent.name)
+        marks = [pytest.mark.xfail(strict=True, reason=why)] if why else []
+        out.append(pytest.param(p, marks=marks, id=p.parent.name))
+    return out
+
+
+@pytest.mark.parametrize("path", _real_filing_params())
 def test_real_filing_parses(path):
     if not _cached_filings():
         pytest.skip("no cached filings; run scripts/ingest_demo.py first")
@@ -240,8 +282,8 @@ def test_real_filing_parses(path):
     table = parsed.income_statement
     assert table is not None and len(table.periods) >= 2
     labels = {r.label.lower().rstrip(":") for r in table.rows}
-    assert "net income" in labels
-    assert any(term in labels for term in ("revenue", "total net sales"))
+    assert labels & NET_INCOME_LABELS, sorted(labels)
+    assert labels & REVENUE_LABELS, sorted(labels)
 
 
 # ── units notes and per-row scale ────────────────────────────────────────────

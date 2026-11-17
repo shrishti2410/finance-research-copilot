@@ -163,6 +163,11 @@ JPMorgan, and parse Exxon's Financial Section as a section of its own.
 **Where the code is.** `ingestion/parser.py`; the coverage table is in
 `benchmarks/STEP4_CORPUS.md`.
 
+**How it is tested.** `tests/test_parser.py::test_real_filing_parses` marks
+the JNJ, PG, JPM and XOM filings as strict `xfail` with these reasons
+(`PARSER_KNOWN_FAILURES`). Strict means that once one of them starts passing,
+the test fails until its entry is removed.
+
 ---
 
 ## The calculator computes what it is asked to, not what the question needs
