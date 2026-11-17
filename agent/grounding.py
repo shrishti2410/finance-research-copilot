@@ -205,6 +205,21 @@ _HYPHENS = str.maketrans({
 def _plain_hyphens(text: str) -> str:
     return text.translate(_HYPHENS)
 
+
+# A citation marker as gpt-oss writes it: 【0†value】, 【3†L10-L22】. The digits
+# inside are a source index and line numbers, never figures. Read as figures,
+# they put the [Unverified] banner on four correct answers in the 2026-11-17
+# calculator run (benchmarks/HOSTED_RUN_2026-11-17_CALCULATOR.md). Only a closed
+# marker with the dagger is blanked; a "[0]" or an unclosed bracket is not.
+_CITATION_MARKER = re.compile(r"【[^】†\n]{0,40}†[^】\n]{0,80}】")
+
+
+def _without_citation_markers(text: str) -> str:
+    """The text with each citation marker blanked to spaces of the same length,
+    so the figures around it keep their positions."""
+    return _CITATION_MARKER.sub(lambda m: " " * len(m.group(0)), text)
+
+
 # A rendered statement says once, above the grid, what its cells are in:
 # "(In millions, except per share data)". Under that note a bare "68" is a
 # figure -- $68 million -- even though nothing on the cell itself says so. The
@@ -433,7 +448,7 @@ def answer_figures(answer: str) -> list[Figure]:
     "fiscal year 2026" and "January 31, 2026" do not become claims that need
     supporting.
     """
-    answer = _plain_hyphens(answer)
+    answer = _without_citation_markers(_plain_hyphens(answer))
     figures: list[Figure] = []
     seen: set[float] = set()
     for candidate in candidates(answer):
