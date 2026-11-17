@@ -70,8 +70,18 @@ function points(data: ChartData, key: string): Point[] {
   return (data.series[key] ?? []).map((p) => ({ time: p.time as Time, value: p.value }));
 }
 
+/** The first day to show when only the last `months` of the data are wanted:
+ * the bar `months` calendar months before the last bar, or the first bar. */
+export function visibleFrom(times: string[], months: number): string | null {
+  if (!times.length) return null;
+  const last = new Date(`${times[times.length - 1]}T00:00:00Z`);
+  last.setUTCMonth(last.getUTCMonth() - months);
+  const cutoff = last.toISOString().slice(0, 10);
+  return times.find((t) => t >= cutoff) ?? times[0];
+}
+
 function draw(container: HTMLElement, data: ChartData, height: number,
-              markers: SignalMarker[] = []): IChartApi {
+              markers: SignalMarker[] = [], visibleMonths?: number): IChartApi {
   const chart = createChart(container, {
     height,
     autoSize: true,
@@ -83,7 +93,13 @@ function draw(container: HTMLElement, data: ChartData, height: number,
       panes: { separatorColor: THEME.border },
     },
     grid: { vertLines: { color: THEME.grid }, horzLines: { color: THEME.grid } },
-    timeScale: { borderColor: THEME.border },
+    // The bars always reach both edges: no scrolling or zooming out into empty
+    // space, and a resize keeps the same dates in view instead of leaving the
+    // new width blank.
+    timeScale: {
+      borderColor: THEME.border, rightOffset: 0,
+      fixLeftEdge: true, fixRightEdge: true, lockVisibleTimeRangeOnResize: true,
+    },
     rightPriceScale: { borderColor: THEME.border },
   });
 
@@ -142,7 +158,13 @@ function draw(container: HTMLElement, data: ChartData, height: number,
   }
   const panes = chart.panes();
   panes.forEach((p, i) => p.setStretchFactor(i === 0 ? 3 : 1));
-  chart.timeScale().fitContent();
+  const times = data.bars.map((b) => b.time);
+  const from = visibleMonths ? visibleFrom(times, visibleMonths) : null;
+  if (from && from !== times[0]) {
+    chart.timeScale().setVisibleRange({ from: from as Time, to: times[times.length - 1] as Time });
+  } else {
+    chart.timeScale().fitContent();
+  }
   return chart;
 }
 
@@ -160,12 +182,15 @@ export function PriceChart({
   height = 420,
   markers,
   onLoaded,
+  visibleMonths,
 }: {
   spec: ChartSpec;
   token: string;
   height?: number;
   markers?: SignalMarker[];
   onLoaded?: () => void;
+  /** Open on the last N months of the data (the rest is a scroll away). */
+  visibleMonths?: number;
 }) {
   const container = useRef<HTMLDivElement>(null);
   const indicatorKey = spec.indicators.join(",");
@@ -195,10 +220,10 @@ export function PriceChart({
   const markerKey = JSON.stringify(markers ?? []);
   useEffect(() => {
     if (!data || !container.current) return;
-    const chart = draw(container.current, data, height, JSON.parse(markerKey));
+    const chart = draw(container.current, data, height, JSON.parse(markerKey), visibleMonths);
     onLoaded?.();
     return () => chart.remove();
-  }, [data, height, markerKey, onLoaded]);
+  }, [data, height, markerKey, onLoaded, visibleMonths]);
 
   const labels = data ? Object.values(data.indicators).map((i) => i.label) : [];
   return (

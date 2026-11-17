@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 
 import { SiteFooter, SiteHeader } from "@/components/SiteChrome";
+import { SessionWakingNotice } from "@/components/states";
 import { AuthProvider } from "@/lib/auth";
 import "./globals.css";
 
@@ -23,6 +24,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <body className="flex min-h-screen flex-col bg-bg text-fg antialiased">
         <AuthProvider>
           <SiteHeader />
+          <SessionWakingNotice />
           <div className="flex-1">{children}</div>
           <SiteFooter />
         </AuthProvider>

@@ -22,6 +22,7 @@ import {
 import { useRouter } from "next/navigation";
 import { api, ApiError, type User } from "./api";
 import { onSessionExpired } from "./session";
+import { ATTEMPT_TIMEOUT_MS, checkStoredSession } from "./sessionCheck.mjs";
 
 const TOKEN_KEY = "frc.token";
 
@@ -34,6 +35,9 @@ interface AuthState {
   /** Set when a request came back 401 rather than the user signing out, so the
    *  login page can say why they are looking at it. */
   expired: boolean;
+  /** True while the stored token's check is being retried because the API is
+   *  asleep or busy (no answer, 429 or 5xx); the layout shows a notice. */
+  waking: boolean;
   signup: (email: string, password: string) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   /** Sign in as a fresh demo account. */
@@ -48,6 +52,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [ready, setReady] = useState(false);
   const [expired, setExpired] = useState(false);
+  const [waking, setWaking] = useState(false);
   const router = useRouter();
 
   // Any 401 from anywhere in the app lands here. Dropping the dead token
@@ -65,9 +70,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [router],
   );
 
-  // On boot, adopt a stored token only if it still works. A token that expired
-  // while the tab was closed would otherwise put the app in a logged-in state
-  // where every request 401s.
+  // On boot, check the stored token. Only a 401 means it is bad: a token that
+  // expired while the tab was closed would otherwise put the app in a
+  // logged-in state where every request 401s. A sleeping or busy API (no
+  // answer, 429, 5xx) says nothing about the token, so the session is kept and
+  // the check retried with backoff (src/lib/sessionCheck.mjs). If the API never
+  // answers, the token is kept unverified; any later 401 still ends the session.
   useEffect(() => {
     let alive = true;
     const stored =
@@ -77,18 +85,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // for the no-token case: a synchronous setState here is a second render
     // before the first has painted, which is what React 19 flags.
     const check = stored
-      ? api
-          .me(stored)
-          .then((me) => {
-            if (!alive) return;
-            setToken(stored);
-            setUser(me);
-          })
-          .catch(() => localStorage.removeItem(TOKEN_KEY))
+      ? checkStoredSession(() => api.me(stored, AbortSignal.timeout(ATTEMPT_TIMEOUT_MS)), {
+          onWaiting: () => alive && setWaking(true),
+          isAlive: () => alive,
+        }).then((result) => {
+          if (!alive) return;
+          if (result.outcome === "invalid") {
+            localStorage.removeItem(TOKEN_KEY);
+            return;
+          }
+          setToken(stored);
+          if (result.outcome === "valid") setUser(result.user);
+        })
       : Promise.resolve();
 
     check.finally(() => {
-      if (alive) setReady(true);
+      if (!alive) return;
+      setWaking(false);
+      setReady(true);
     });
     return () => {
       alive = false;
@@ -131,8 +145,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ token, user, ready, expired, signup, login, demo, logout }),
-    [token, user, ready, expired, signup, login, demo, logout],
+    () => ({ token, user, ready, expired, waking, signup, login, demo, logout }),
+    [token, user, ready, expired, waking, signup, login, demo, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

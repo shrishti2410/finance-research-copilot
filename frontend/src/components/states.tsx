@@ -5,6 +5,7 @@ import { AlertTriangle, Coffee, Inbox } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/lib/auth";
 
 /**
  * True once `active` has stayed true for `afterMs`. The API runs on a free
@@ -36,6 +37,18 @@ export function ColdStartNotice() {
         sleeps when nobody is using it, so the first request can take up to a minute. Later ones are
         quick.
       </p>
+    </div>
+  );
+}
+
+/** The cold-start notice while the stored session's check is being retried
+ * (the API is asleep or busy). Shown once, under the header, on any page. */
+export function SessionWakingNotice() {
+  const { waking } = useAuth();
+  if (!waking) return null;
+  return (
+    <div className="mx-auto max-w-6xl px-4 pt-4 sm:px-6">
+      <ColdStartNotice />
     </div>
   );
 }

@@ -437,7 +437,8 @@ export const api = {
       { token },
     ),
 
-  me: (token: string) => request<User>("/auth/me", { token }),
+  /** `signal` lets the boot-time session check give up on a sleeping API. */
+  me: (token: string, signal?: AbortSignal) => request<User>("/auth/me", { token, signal }),
 
   watchlist: (token: string) => request<Watchlist>("/market/watchlist", { token }),
 
