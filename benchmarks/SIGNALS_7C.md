@@ -1,5 +1,11 @@
 # The signal engine out of sample: five NSE stocks, 2021-11-16 to 2026-11-16
 
+> **Later finding (2026-11-17,
+> [QUANT_HONESTY.md](QUANT_HONESTY.md)).** The smaller drawdowns reported here are
+> what the signal's lower exposure gives anyway. Against buy-and-hold held at
+> the signal's own exposure, its drawdown was smaller on only 2 of 15 stocks.
+> The measurements here stand; the reading of them as a benefit does not.
+
 Step 7C, phase 3. The method is in `market/signals.py`, the evaluation in
 `market/signal_eval.py`, the design in `docs/SIGNALS.md`.
 

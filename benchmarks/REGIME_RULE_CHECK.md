@@ -111,6 +111,12 @@ Against its random re-timings its percentile ranged from 0.10 to 0.80; none
 reached 0.95. The finding in `benchmarks/SIGNALS_7C.md` holds out of sample:
 no return edge, and smaller drawdowns, mostly from time out of the market.
 
+> **Later finding (2026-11-17,
+> [QUANT_HONESTY.md](QUANT_HONESTY.md)).** The smaller drawdowns reported here are
+> what the signal's lower exposure gives anyway. Against buy-and-hold held at
+> the signal's own exposure, its drawdown was smaller on only 2 of 15 stocks.
+> The measurements here stand; the reading of them as a benefit does not.
+
 ## Re-run on the calendar refit schedule (supplementary, measured)
 
 On 2026-11-17 the refit schedule changed from every 21 bars after the first
