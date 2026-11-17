@@ -392,6 +392,23 @@ async def watchlist(tickers=None, benchmark: str | None = None,
                                    lambda: compute_watchlist(now=now), now=now)
 
 
+def strip_entries(watchlist: dict) -> list[dict]:
+    """The landing page's market strip from a stored watchlist: the indices,
+    then each stock that loaded, with its price and day change only. No signal
+    and no error text: the strip is public, and a stock that failed to load is
+    left out rather than shown as a failure."""
+    indices = watchlist.get("indices") or ([watchlist["index"]] if watchlist.get("index") else [])
+    out = []
+    for kind, cards in (("index", indices), ("stock", watchlist.get("stocks") or [])):
+        for c in cards:
+            if not c or c.get("error") or c.get("price") is None:
+                continue
+            out.append({"ticker": c["ticker"], "exchange": c.get("exchange"), "kind": kind,
+                        "currency_symbol": c.get("currency_symbol"), "price": c["price"],
+                        "change_pct": c.get("change_pct"), "as_of": c.get("as_of")})
+    return out
+
+
 async def signal_report(ticker: str, data: MarketData | None = None,
                         now: datetime | None = None) -> dict:
     from market import precompute
