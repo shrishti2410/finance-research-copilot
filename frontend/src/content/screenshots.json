@@ -1,0 +1,76 @@
+{
+  "_comment": "Written by scripts/capture-screenshots.mjs; do not edit by hand. Regenerate after a UI change.",
+  "captured": "2026-11-17",
+  "images": {
+    "hero-dashboard": {
+      "src": "/shots/hero-dashboard.webp",
+      "width": 1280,
+      "height": 800,
+      "alt": "The watchlist dashboard: the Nifty 50 and S&P 500, and a card per stock with its price, day change, 60-day sparkline and signal.",
+      "path": "/dashboard"
+    },
+    "tour-chart": {
+      "src": "/shots/tour-chart.webp",
+      "width": 1136,
+      "height": 820,
+      "alt": "State Bank of India's Chart tab: candles, 50- and 200-day averages, volume, RSI and MACD, with arrows where the signal went in or out.",
+      "path": "/stock/SBIN.NS"
+    },
+    "tour-signal": {
+      "src": "/shots/tour-signal.webp",
+      "width": 1136,
+      "height": 820,
+      "alt": "State Bank of India's Signal tab: the vote of each rule with its weight, and the market regime.",
+      "path": "/stock/SBIN.NS"
+    },
+    "feature-signal": {
+      "src": "/shots/feature-signal.webp",
+      "width": 568,
+      "height": 410,
+      "alt": "State Bank of India's Signal tab: the vote of each rule with its weight, and the market regime.",
+      "path": "/stock/SBIN.NS"
+    },
+    "tour-backtest": {
+      "src": "/shots/tour-backtest.webp",
+      "width": 1136,
+      "height": 820,
+      "alt": "State Bank of India's Backtest tab: the walk-forward result after costs, against buy-and-hold and random timing.",
+      "path": "/stock/SBIN.NS"
+    },
+    "feature-backtest": {
+      "src": "/shots/feature-backtest.webp",
+      "width": 568,
+      "height": 410,
+      "alt": "State Bank of India's Backtest tab: the walk-forward result after costs, against buy-and-hold and random timing.",
+      "path": "/stock/SBIN.NS"
+    },
+    "tour-options": {
+      "src": "/shots/tour-options.webp",
+      "width": 1136,
+      "height": 820,
+      "alt": "State Bank of India's Options tab: an option structure with estimated premium, payoff at expiry, breakevens and Greeks.",
+      "path": "/stock/SBIN.NS"
+    },
+    "feature-options": {
+      "src": "/shots/feature-options.webp",
+      "width": 568,
+      "height": 410,
+      "alt": "State Bank of India's Options tab: an option structure with estimated premium, payoff at expiry, breakevens and Greeks.",
+      "path": "/stock/SBIN.NS"
+    },
+    "tour-research": {
+      "src": "/shots/tour-research.webp",
+      "width": 1136,
+      "height": 434,
+      "alt": "NVIDIA's Research tab: its 10-K filings are indexed, and suggested questions open the research chat.",
+      "path": "/stock/NVDA"
+    },
+    "feature-research": {
+      "src": "/shots/feature-research.webp",
+      "width": 568,
+      "height": 217,
+      "alt": "NVIDIA's Research tab: its 10-K filings are indexed, and suggested questions open the research chat.",
+      "path": "/stock/NVDA"
+    }
+  }
+}
