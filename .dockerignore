@@ -33,3 +33,8 @@ docs
 scratchpad
 *.md
 !README.md
+
+# The strategy cards go into the image for scripts/index_strategies.py
+# (Dockerfile); the rest of docs/ and other markdown stay out.
+!docs/strategies
+!docs/strategies/*.md

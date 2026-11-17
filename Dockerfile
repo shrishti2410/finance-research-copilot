@@ -79,11 +79,14 @@ COPY core/ ./core/
 COPY db/ ./db/
 COPY eval/ ./eval/
 COPY ingestion/ ./ingestion/
+COPY market/ ./market/
 COPY rag/ ./rag/
 COPY scripts/ ./scripts/
 RUN chmod +x scripts/start.sh
 COPY tools/ ./tools/
 COPY tests/ ./tests/
+# The strategy cards, so scripts/index_strategies.py can run in the container.
+COPY docs/strategies/ ./docs/strategies/
 
 # The EDGAR cache lives here and is a mounted volume in compose. Created (and
 # owned) before dropping privileges, or the unprivileged user cannot write the
