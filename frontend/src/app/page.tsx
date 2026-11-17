@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Markdown } from "@/components/Markdown";
 import { Sidebar } from "@/components/Sidebar";
 import { Sources } from "@/components/Sources";
 import {
@@ -300,7 +301,11 @@ export default function ChatPage() {
               {messages.map((message) => (
                 <li key={message.id}>
                   <Bubble role={message.role}>
-                    <p className="whitespace-pre-wrap">{message.content}</p>
+                    {message.role === "assistant" ? (
+                      <Markdown text={message.content} />
+                    ) : (
+                      <p className="whitespace-pre-wrap">{message.content}</p>
+                    )}
                     {message.role === "assistant" && (
                       <>
                         {message.meta?.agent?.completed === false && (
@@ -325,10 +330,10 @@ export default function ChatPage() {
                   <li>
                     <Bubble role="assistant">
                       {pending.answer ? (
-                        <p className="whitespace-pre-wrap">
-                          {pending.answer}
+                        <div>
+                          <Markdown text={pending.answer} />
                           <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-neutral-500 align-text-bottom" />
-                        </p>
+                        </div>
                       ) : (
                         <p className="text-sm text-neutral-500">
                           {pending.status || "…"}

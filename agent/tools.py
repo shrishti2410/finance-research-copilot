@@ -121,10 +121,10 @@ async def search_filings(
     (section="income") is here too, returned whole with all three fiscal
     years. For a margin or ratio, use calculate_ratio.
 
-    Only filings that have been indexed are searchable. Currently that is NVIDIA
-    (NVDA, fiscal 2026) and Apple (AAPL, fiscal 2025), one 10-K each. A search
-    for any other company returns no results; that means it is not indexed, not
-    that the company said nothing.
+    Only filings that have been indexed are searchable: up to the last three
+    10-Ks of each indexed company. A search for a company that is not indexed
+    returns no results; that means it is not indexed, not that the company said
+    nothing.
 
     Args:
         query: What to look for, in natural language. Describe the topic
@@ -173,7 +173,7 @@ async def calculate_ratio(
     ticker: str,
     ratio_name: RatioName,
     period: Period = "annual",
-    fiscal_year: int | None = None,
+    fiscal_year: int | str | None = None,
 ) -> dict[str, Any]:
     """Calculate a financial ratio for a company from its reported financials.
 
@@ -206,8 +206,11 @@ async def calculate_ratio(
             "quarterly" the most recent reported quarter, "ttm" trailing
             twelve months.
         fiscal_year: The company's own fiscal year, e.g. 2025, for a ratio of
-            that year. Fiscal years are the company's, not calendar: NVDA's
-            FY2026 ended January 2026. Omit for the most recent period.
+            that year, or "latest" for the company's most recent reported fiscal
+            year from its SEC filings. Use "latest" when the question names no
+            year, one call per company: fiscal years end in different months
+            (NVDA's in January, Apple's in September), so two companies'
+            latest years can differ.
 
     Returns:
         On success, a dict with "ok": True and: ticker, ratio, period,
@@ -220,6 +223,9 @@ async def calculate_ratio(
     """
     if fiscal_year is None or str(fiscal_year).strip() == "":
         return _latest_ratio(ticker, ratio_name, period)
+    if (ratio_name or "").strip().lower() == "debt_to_equity" and             str(fiscal_year).strip().lower() == "latest":
+        # The one source for this ratio is the latest annual statement already.
+        return _latest_ratio(ticker, ratio_name, "annual")
     if (ratio_name or "").strip().lower() == "debt_to_equity":
         # Total debt is Yahoo's definition, which no single XBRL concept
         # matches, so this ratio has one source. It answers a fiscal-year
