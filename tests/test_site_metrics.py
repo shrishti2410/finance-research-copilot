@@ -1,4 +1,6 @@
-"""Every number on the landing page is quoted from a committed benchmark record.
+"""Every measured number on the site is quoted from a committed benchmark record.
+
+The measured figures are shown on /methodology (the landing page carries none).
 
 frontend/src/content/site-metrics.json lists each figure with its source file and
 the exact text it comes from. If a record is rewritten and the quote no longer
@@ -47,3 +49,23 @@ def test_every_other_figure_on_a_card_is_quoted_too():
             if figure in (m["value"], "10-K") or figure.isdigit() and len(figure) <= 2:
                 continue                 # counts in prose: "40-question", "15 US companies"
             assert any(figure in t for t in also), (m["value"], figure)
+
+
+PAGES = ROOT / "frontend/src/app"
+
+
+def test_the_methodology_page_renders_every_metric_from_the_quoted_file():
+    page = (PAGES / "methodology/page.tsx").read_text(encoding="utf-8")
+    assert 'from "@/content/site-metrics.json"' in page
+    assert "metrics.metrics.map(" in page
+
+
+def test_the_landing_page_states_no_measurement_of_its_own():
+    """Accuracy, latency and backtest figures belong on /methodology, where the
+    tests above tie each to its record. The landing page may name counts of
+    what is covered ("15 US companies") but no score, rate, duration or ratio."""
+    page = (PAGES / "page.tsx").read_text(encoding="utf-8")
+    assert "site-metrics.json" not in page
+    measured = re.findall(r"\d+(?:\.\d+)?\s?(?:%|ms|s|seconds?|minutes?|x)|\d+\s?/\s?\d+|\d+ of \d+",
+                          page)
+    assert measured == [], measured

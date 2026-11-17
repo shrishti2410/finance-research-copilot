@@ -1,0 +1,76 @@
+{
+  "_comment": "Written by scripts/capture-screenshots.mjs; do not edit by hand. Regenerate after a UI change.",
+  "captured": "2026-11-17",
+  "images": {
+    "hero-dashboard": {
+      "src": "/shots/hero-dashboard.webp",
+      "width": 1920,
+      "height": 1350,
+      "alt": "The watchlist dashboard: the Nifty 50 with five NSE stocks, and the S&P 500 with three US stocks, each with its price, day change, 60-day sparkline and signal.",
+      "path": "/dashboard"
+    },
+    "tour-chart": {
+      "src": "/shots/tour-chart.webp",
+      "width": 1136,
+      "height": 820,
+      "alt": "State Bank of India's Chart tab: candles, 50- and 200-day averages, volume, RSI and MACD, with arrows where the signal went in or out.",
+      "path": "/stock/SBIN.NS"
+    },
+    "tour-signal": {
+      "src": "/shots/tour-signal.webp",
+      "width": 1136,
+      "height": 820,
+      "alt": "State Bank of India's Signal tab: the backtest verdict, the engine's output, the market regime and the vote of each rule.",
+      "path": "/stock/SBIN.NS"
+    },
+    "feature-signal": {
+      "src": "/shots/feature-signal.webp",
+      "width": 1352,
+      "height": 1344,
+      "alt": "The signal's verdict, no edge in the backtest, and the first two rule votes with their weights and reasons.",
+      "path": "/stock/SBIN.NS"
+    },
+    "tour-backtest": {
+      "src": "/shots/tour-backtest.webp",
+      "width": 1136,
+      "height": 820,
+      "alt": "State Bank of India's Backtest tab: the walk-forward result after costs, against buy-and-hold and random timing.",
+      "path": "/stock/SBIN.NS"
+    },
+    "feature-backtest": {
+      "src": "/shots/feature-backtest.webp",
+      "width": 1352,
+      "height": 836,
+      "alt": "The signal's equity curve against buy-and-hold, over five years.",
+      "path": "/stock/SBIN.NS"
+    },
+    "tour-options": {
+      "src": "/shots/tour-options.webp",
+      "width": 1136,
+      "height": 820,
+      "alt": "State Bank of India's Options tab: an option structure with estimated premium, payoff at expiry, breakevens and Greeks.",
+      "path": "/stock/SBIN.NS"
+    },
+    "feature-options": {
+      "src": "/shots/feature-options.webp",
+      "width": 1268,
+      "height": 744,
+      "alt": "The payoff at expiry of a bull call spread, with its maximum loss, maximum profit and breakeven.",
+      "path": "/stock/SBIN.NS"
+    },
+    "tour-research": {
+      "src": "/shots/tour-research.webp",
+      "width": 1136,
+      "height": 434,
+      "alt": "NVIDIA's Research tab: its 10-K filings are indexed, and suggested questions open the research chat.",
+      "path": "/stock/NVDA"
+    },
+    "feature-research": {
+      "src": "/shots/feature-research.webp",
+      "width": 1368,
+      "height": 868,
+      "alt": "NVIDIA's Research tab: its 10-K filings are indexed, and suggested questions open the research chat.",
+      "path": "/stock/NVDA"
+    }
+  }
+}

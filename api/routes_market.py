@@ -17,6 +17,7 @@ the last year up to today.
 
 from __future__ import annotations
 
+import logging
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -35,6 +36,7 @@ from market.service import (
 )
 
 router = APIRouter(prefix="/market", tags=["market"])
+log = logging.getLogger(__name__)
 
 MAX_RANGE_DAYS = 366 * 10
 
@@ -96,6 +98,32 @@ async def watchlist_cards(user: User = Depends(get_current_user)) -> dict:
     except ProviderError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY,
                             f"The price provider could not be reached: {exc}") from None
+
+
+@router.get("/strip")
+async def market_strip() -> dict:
+    """The landing page's market strip, public: the indices and watchlist
+    stocks with their day change, read from the stored precomputed watchlist.
+
+    It never computes a watchlist, so no visitor without an account can make
+    the API call the price provider. With nothing stored it answers 404, and
+    with the database unreachable 503, each with a fixed message; the page
+    hides the strip in both cases."""
+    from db.base import engine
+    from market import precompute
+    from market.service import strip_entries
+
+    try:
+        async with engine.connect() as conn:
+            row = await precompute.load(conn, precompute.KEY_WATCHLIST)
+    except Exception as exc:  # noqa: BLE001  (the message may carry the DSN)
+        log.warning("market strip: could not read the stored watchlist (%s)", type(exc).__name__)
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                            "The market strip is unavailable.") from None
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No market strip stored yet.")
+    return {"entries": strip_entries(row["payload"]),
+            "served": {"from": "precomputed", "computed_at": row["computed_at"].isoformat()}}
 
 
 @router.get("/strategies")

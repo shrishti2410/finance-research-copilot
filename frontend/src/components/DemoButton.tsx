@@ -9,8 +9,10 @@ import { ColdStartNotice, useSlow } from "@/components/states";
 import { Button } from "@/components/ui/button";
 import { errorMessage, useAuth } from "@/lib/auth";
 
-/** Sign in to the shared demo account and open the dashboard. */
-export function DemoButton() {
+/** Sign in to the shared demo account and open the dashboard. `compact` is
+ * the header's version: small, and the slow-start notice is left to the
+ * spinner (there is no room for it under a header button). */
+export function DemoButton({ compact = false }: { compact?: boolean }) {
   const { token, demo } = useAuth();
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -19,17 +21,17 @@ export function DemoButton() {
 
   if (token) {
     return (
-      <Button asChild size="lg">
+      <Button asChild size={compact ? "sm" : "lg"}>
         <Link href="/dashboard">
-          Open the dashboard <ArrowRight className="size-4" aria-hidden="true" />
+          {compact ? "Dashboard" : "Open the dashboard"} <ArrowRight className="size-4" aria-hidden="true" />
         </Link>
       </Button>
     );
   }
   return (
-    <div className="flex flex-col gap-3">
+    <div className={compact ? "flex" : "flex flex-col gap-3"}>
       <Button
-        size="lg"
+        size={compact ? "sm" : "lg"}
         disabled={busy}
         onClick={async () => {
           setBusy(true);
@@ -38,6 +40,9 @@ export function DemoButton() {
             await demo();
             router.push("/dashboard");
           } catch (err) {
+            // The header has no room for the message: the sign-in page shows
+            // its own, with the demo button there to retry.
+            if (compact) router.push("/login");
             setError(errorMessage(err));
             setBusy(false);
           }
@@ -47,8 +52,8 @@ export function DemoButton() {
         Try the demo
         {busy ? null : <ArrowRight className="size-4" aria-hidden="true" />}
       </Button>
-      {slow ? <ColdStartNotice /> : null}
-      {error ? (
+      {slow && !compact ? <ColdStartNotice /> : null}
+      {error && !compact ? (
         <p role="alert" className="text-sm text-down">
           {error}
         </p>
