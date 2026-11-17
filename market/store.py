@@ -55,8 +55,12 @@ _UPSERT = text("""
 
 class MarketData:
     def __init__(self, provider: PriceProvider | None = None,
-                 ttl: timedelta | None = None) -> None:
+                 ttl: timedelta | None = None, write: bool = True) -> None:
+        """`write=False`: read the cache, but keep a provider fetch in memory
+        instead of storing it. For the daily precompute job, whose database
+        role may not write the price cache (market/precompute.py)."""
         self.provider = provider or YFinanceProvider()
+        self.write = write
         self.ttl = ttl if ttl is not None else timedelta(hours=settings.market_cache_ttl_hours)
 
     async def _covered(self, conn, ticker: str, start: date, end: date) -> bool:
@@ -91,6 +95,12 @@ class MarketData:
 
         # The provider call is blocking network I/O; keep it off the event loop.
         bars = await asyncio.to_thread(self.provider.daily_bars, symbol, start, end)
+        if not self.write:
+            async with engine.connect() as conn:
+                cached = await self._read(conn, symbol, start, end)
+            fresh = {b.day: b for b in bars if start <= b.day <= end}
+            return sorted([*fresh.values(), *(b for b in cached if b.day not in fresh)],
+                          key=lambda b: b.day)
         async with engine.begin() as conn:
             if bars:
                 await conn.execute(_UPSERT, [
