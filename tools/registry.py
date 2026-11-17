@@ -52,6 +52,14 @@ def parse_docstring(fn: Callable) -> tuple[str, dict[str, str]]:
     """(description, {parameter: description}) from a Google-style docstring."""
     doc = inspect.getdoc(fn) or ""
     lines = doc.splitlines()
+    # Only the function's own parameters start an entry. A continuation line
+    # can look like one: calculate's "TICKER:fact:fiscal_year (...)" was read as
+    # a parameter named TICKER, and the model saw `a` described as "Either a
+    # fact reference written".
+    try:
+        own = set(inspect.signature(fn).parameters)
+    except (TypeError, ValueError):
+        own = None
 
     description: list[str] = []
     params: dict[str, list[str]] = {}
@@ -77,7 +85,7 @@ def parse_docstring(fn: Callable) -> tuple[str, dict[str, str]]:
             continue
 
         match = _ARG_LINE.match(line)
-        if match and line.strip():
+        if match and line.strip() and (own is None or match.group(1).lstrip("*") in own):
             current = match.group(1).lstrip("*")
             params[current] = [match.group(3).strip()]
         elif current and line.strip():
