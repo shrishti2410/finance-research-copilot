@@ -73,11 +73,68 @@ def test_full_text_search_finds_the_words_and_respects_filters():
     if not hits:
         pytest.skip("no Apple chunks indexed")
     assert all(h.ticker == "AAPL" for h in hits)
-    # OR semantics: every hit has one of the words; the best has both.
+    # OR semantics: every hit has one of the words. Which chunk ranks first
+    # depends on the indexed filings (CI indexes only NVDA and AAPL's pinned
+    # 10-Ks, and ts_rank_cd can put a chunk that repeats "quarter" above one with
+    # both words), so the ranking is checked on fixed rows in the next test.
     assert all(("dividend" in h.content.lower()) or ("quarter" in h.content.lower()) for h in hits)
-    assert "dividend" in hits[0].content.lower() and "quarter" in hits[0].content.lower()
     ranks = [h.score for h in hits]
     assert ranks == sorted(ranks, reverse=True) and all(h.vector_score == 0.0 for h in hits)
+
+
+# Rows written inside a transaction that is rolled back, so the ranking check
+# does not depend on which filings are indexed. Each mentions its words once, at
+# a similar length, so ts_rank_cd's order follows the number of query words.
+_FIXTURE_TICKER = "ZZFTS"
+_FIXTURE_ROWS = {
+    "both": (_FIXTURE_TICKER, "The board declared a quarterly dividend payable to holders of record."),
+    "dividend": (_FIXTURE_TICKER, "The board declared a special dividend payable to holders of record."),
+    "quarter": (_FIXTURE_TICKER, "The board met during the quarter to review holders of record."),
+    "neither": (_FIXTURE_TICKER, "The board approved a share repurchase program for holders of record."),
+    "other-company": ("ZZOTH", "The board declared a quarterly dividend payable to holders of record."),
+}
+
+
+def test_full_text_ranking_on_fixed_rows_puts_both_words_first():
+    from sqlalchemy import text
+
+    from db.base import engine
+    from rag.vector_store import text_search
+
+    async def go():
+        try:
+            async with engine.connect() as conn:
+                tx = await conn.begin()
+                try:
+                    for key, (ticker, content) in _FIXTURE_ROWS.items():
+                        await conn.execute(text(
+                            "INSERT INTO filing_chunks (chunk_id, content, token_count, content_type,"
+                            " company, ticker, cik, accession, filing_type, fiscal_period, section,"
+                            " chunk_index, source_url, embedding_model)"
+                            " VALUES (:cid, :content, 12, 'text', :company, :ticker, '0', 'fixture',"
+                            " '10-K', 'FY2099', 'Item 7', 0, '', 'fixture')"),
+                            {"cid": f"fixture:{key}", "content": content,
+                             "company": f"{ticker} Fixture Inc", "ticker": ticker})
+                    return await text_search(conn, "quarterly dividend", 10, company=_FIXTURE_TICKER)
+                finally:
+                    await tx.rollback()
+        finally:
+            await engine.dispose()
+
+    try:
+        hits = asyncio.run(go())
+    except Exception as exc:  # noqa: BLE001
+        if "content_tsv" in str(exc) or type(exc).__name__ in ("OSError", "ConnectionRefusedError"):
+            pytest.skip(f"full-text column not available ({type(exc).__name__}); migrate to 0009")
+        raise
+
+    ids = [h.chunk_id for h in hits]
+    # The company filter keeps out the other ticker's identical row; OR semantics
+    # keeps both one-word rows; the row with neither word is not a hit.
+    assert sorted(ids) == ["fixture:both", "fixture:dividend", "fixture:quarter"]
+    assert ids[0] == "fixture:both"
+    assert hits[0].score > hits[1].score
+    assert all(h.vector_score == 0.0 for h in hits)
 
 
 def test_hybrid_search_returns_fused_hits_under_the_same_filters():
