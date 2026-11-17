@@ -85,6 +85,38 @@ _EXPLANATORY = re.compile(
     r"|\boutlook\b|\bstrategy\b", re.I
 )
 
+# ─────────────────────────────────────────────────────────────────────────────
+# The fiscal year a question names
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# With three 10-Ks per company indexed, "NVIDIA's R&D in fiscal 2026" came back
+# with the FY2024 and FY2025 statements: three years written in nearly the same
+# words, and nothing in the search knew which year was asked about. The
+# retrieval eval's hit@5 fell from 100% on one filing per company to 75.9% on
+# three (benchmarks/STEP4_CORPUS.md).
+#
+# So a year the question names as a *fiscal* year ("fiscal 2026", "fiscal year
+# 2026", "FY2026") filters the search to the filings that report it: that
+# year's 10-K and the next two, because a 10-K's statements carry its own year
+# and the two before it. Apple's FY2023 net income is in its FY2024 and FY2025
+# 10-Ks. A plain date ("May 2025") is not a fiscal year and sets no filter.
+# Where several are named ("from fiscal 2025 to fiscal 2026"), the latest wins:
+# its filing reports the earlier one too. If the filter matches nothing, the
+# search runs again without it rather than returning nothing.
+_FISCAL_YEAR = re.compile(r"\b(?:fiscal(?:\s+year)?\s+|FY\s?)((?:19|20)\d{2})\b", re.I)
+FILINGS_REPORTING_A_YEAR = 3
+
+
+def fiscal_periods_named(query: str) -> list[str] | None:
+    """The fiscal-period labels of the filings that report the latest fiscal
+    year `query` names, or None when it names none."""
+    years = [int(y) for y in _FISCAL_YEAR.findall(query or "")]
+    if not years:
+        return None
+    year = max(years)
+    return [f"FY{year + i}" for i in range(FILINGS_REPORTING_A_YEAR)]
+
+
 # Weights. Small on purpose: they reorder near-ties, they do not overrule the
 # encoder. Both were set by measuring the four audit queries, not guessed -- see
 # tests/test_retrieval.py, which pins the behaviour they produce.
@@ -240,6 +272,9 @@ async def search_filings(
     vector = embed_query(query, model)
 
     intent = query_intent(query)
+    # A period the caller passes wins; otherwise the one the question names.
+    # See "The fiscal year a question names" above.
+    named = None if fiscal_period else fiscal_periods_named(query)
     # Over-fetch, then re-rank. min_score is applied after re-ranking, so a
     # threshold means what the caller thinks it means -- the final score.
     kwargs = dict(
@@ -247,14 +282,21 @@ async def search_filings(
         company=company,
         section=resolve_section(section),
         content_type=content_type,
-        fiscal_period=fiscal_period,
+        fiscal_period=fiscal_period or named,
     )
 
+    async def run(conn):
+        found = await search(conn, vector, **kwargs)
+        if not found and named:
+            # The named year is not indexed for this company: search all years.
+            found = await search(conn, vector, **{**kwargs, "fiscal_period": None})
+        return found
+
     if conn is not None:
-        candidates = await search(conn, vector, **kwargs)
+        candidates = await run(conn)
     else:
         async with connection() as own_conn:
-            candidates = await search(own_conn, vector, **kwargs)
+            candidates = await run(own_conn)
 
     hits = rerank(candidates, intent, k) if rerank_results else candidates[:k]
     if min_score is not None:
