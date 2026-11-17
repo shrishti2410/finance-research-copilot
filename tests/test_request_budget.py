@@ -44,10 +44,15 @@ def _conversation(results: dict[str, dict]):
 TOOLS = [{"type": "function", "function": {"name": "search_filings", "parameters": {}}}]
 
 
-def test_estimates_err_high_for_prose_and_json():
-    # Measured with o200k_base: prose 4.5, JSON schemas 3.9 characters a token.
-    assert CHARS_PER_TOKEN <= 3.9
+def test_estimates_stay_on_the_high_side_of_what_groq_counted():
+    # Calibrated on the 108 calls of the 2026-11-17 calculator run (agent/budget.py):
+    # messages at about 4.9 characters a token, the schemas far cheaper than
+    # their JSON. Both rates stay below what was observed, so the estimate is high.
+    from agent.budget import TOOL_CHARS_PER_TOKEN
+    assert CHARS_PER_TOKEN <= 4.9 and TOOL_CHARS_PER_TOKEN < 12875 / 2121 + 0.1
     assert estimate_tokens("x" * 35) == 10
+    tools = [{"x": "y" * 588}]                      # 599 characters of JSON; "[]" is 2
+    assert request_tokens([], tools) == 1 + 100
 
 
 def test_a_request_within_budget_goes_out_unchanged():

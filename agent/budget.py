@@ -18,10 +18,19 @@ trimmed until it fits:
 - only the copy sent to the model is trimmed. The tool's full result stays in
   the turn's steps, and the grounding guard checks figures against that.
 
-The size is an estimate from length (`CHARS_PER_TOKEN`), deliberately on the
-high side: measured with tiktoken's o200k_base on 2026-11-17, the system prompt
-is 4.5 characters a token and the tool schemas 3.9. No tokenizer is needed at
-run time. Every call's estimate is logged and kept in the turn's trace
+The size is an estimate from length, calibrated against what Groq actually
+counted. All 108 model calls of the 2026-11-17 calculator run were rebuilt from
+their traces and compared with the prompt_tokens Groq reported for each:
+- the messages run at about 4.9 characters a token, and the tool schemas at
+  far more than their JSON suggests (the provider renders them compactly):
+  12,875 characters of schema cost about 2,100 tokens;
+- one rate for everything (3.5) over-estimated by 1.41 to 1.90 times (median
+  1.60), so a 7,000 budget would have trimmed at a real 4,400 tokens;
+- `CHARS_PER_TOKEN` for the messages and `TOOL_CHARS_PER_TOKEN` for the
+  schemas over-estimate by 1.09 to 1.58 times (median 1.18) and never
+  under-estimated a call. Under the 7,000 budget a real request is then at
+  most about 6,420 tokens.
+No tokenizer is needed at run time. Every call's estimate is logged and kept in the turn's trace
 (`AgentResult.request_sizes`), so a 413 risk is measured, not reconstructed.
 """
 
@@ -32,6 +41,7 @@ import math
 from typing import Any, Callable
 
 CHARS_PER_TOKEN = 3.5
+TOOL_CHARS_PER_TOKEN = 6.0
 # A result is never trimmed below this, however tight the budget: a result cut
 # to nothing helps no one, and the request then goes out over budget, logged.
 MIN_RESULT_TOKENS = 150
@@ -43,7 +53,8 @@ def estimate_tokens(value: Any) -> int:
 
 
 def request_tokens(messages: list[dict], tools: list[dict]) -> int:
-    return estimate_tokens(messages) + estimate_tokens(tools)
+    tools_text = json.dumps(tools, ensure_ascii=False, default=str)
+    return estimate_tokens(messages) + math.ceil(len(tools_text) / TOOL_CHARS_PER_TOKEN)
 
 
 def _size(result: Any) -> int:
