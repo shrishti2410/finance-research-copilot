@@ -6,99 +6,108 @@ tools. The model is reached through an OpenAI-compatible proxy: Qwen on Ollama
 locally, or a hosted provider set in `.env`. Start with `docs/PROJECT.md`.
 `frontend/CLAUDE.md` adds rules for the Next.js code.
 
-## Current plan (set 2026-11-16)
+## Plan (set 2026-11-17, after the version 2 deploy)
 
-Speed matters. Ship a minimal version 1, then make version 2 the priority.
+Versions 1 and 2 are live (master `b9499ba`, Render and Vercel). Work through
+the items below in order.
+- **Each item gets its own branch, with tests written first.**
+- **Each ends with a short report.**
+- **Diffs are shown before merging to master.**
+- **Nothing is deployed without the user's yes.** A push to master redeploys
+  Render and Vercel, so it counts as a deploy.
 
-**Version 1, minimal.** Only these, in this order where they depend on each other:
-- merge the calculator branch after its full hosted eval (scheduled 2026-11-17);
-- deploy the public demo (docs/DEPLOY.md; Vercel, Render, Neon, Upstash);
-- finish the 15-company ingestion (`feat/step4-corpus`) and make pgvector the
-  default database;
-- add 20 eval questions for the new companies, then one hosted eval run
-  (eval questions still need approval: see "When to stop for approval");
-- finish the README (`docs/readme-hiring`).
+**Tonight (small, no Groq tokens):**
+- **A. CI fix.**
+  - The two environment-dependent test failures on master:
+    `test_deploy` (`SEC_EDGAR_USER_AGENT` from CI's environment) and
+    `test_hybrid_retrieval` (the AAPL dividend ranking on CI's two-company
+    corpus).
+  - The eval-gate question: what it runs, whether it spends Groq tokens, and
+    whether it should run on every push.
+- **B. Live-site fixes.**
+  - The chart tab fits the data, with about 6 to 12 months visible, and shows
+    RSI, MACD and Bollinger.
+  - The landing copy says 8 stocks (5 NSE + 3 US), not five NSE.
+- **C. End-to-end live check with screenshots.**
+  - Pages: landing, dashboard, one NSE and one US stock with all tabs, at phone
+    width.
+  - Confirm the pages are served from precomputed data.
 
-**Dropped for now:** the 100-question set, hybrid search and re-ranking work,
-the hosted noise repeat, and the final Qwen run. Do not start them.
+**From 2026-11-18 (the Groq allowance resets at 00:00 UTC):**
 
-**Version 2, in parallel on its own branch.** It needs no Groq tokens.
-- Step 7A: market data (daily prices cached in Postgres behind a provider
-  interface), indicators, price analytics, a chart page, and charts returned by
-  the agent and rendered in the chat.
-- Step 7B: a strategy library and a backtester, with an equity-curve and trade
-  page.
-
-**How to split the time.** Work on version 1 whenever it can move: when the user
-is available for a step that needs them, or when the Groq daily allowance is
-there for a hosted run. Work on version 2 the rest of the time.
-
-## Backlog after version 2 is deployed (set 2026-11-17)
-
-A hardening phase, in this order. Each item is tests-first and ends with a
-short report. Do not start it before version 2 is live. Items 1 and 2 bring
-back the hybrid search and the larger question set dropped above.
-
-0. **Guard fixes, first (from 2026-11-18).** Each is a grounding or advice
-   guard change: tests first, show the diff and wait. In this order:
-   - **Citation markers read as figures.** The model writes markers such as
-     `【0†value】`. The guard reads the `0` as an untraced figure and puts the
-     `[Unverified]` banner on a correct answer. This happened to 4 passing
-     cases in the 2026-11-17 calculator run
-     (`benchmarks/HOSTED_RUN_2026-11-17_CALCULATOR.md`).
-   - **A per-request token budget.** No request to the model may exceed about
-     7,000 tokens, under Groq's 8,000 tokens-a-minute limit.
-     - Two 413s in the calculator run were estimated at 8,100 and 8,250
-       tokens.
+0. **Guard fixes, first.** Each one is a grounding or advice guard change:
+   tests first, then show the diff and wait. In this order:
+   - **Citation markers read as figures.**
+     - The model writes markers such as `【0†value】`.
+     - The guard reads the `0` as an untraced figure and puts the
+       `[Unverified]` banner on a correct answer.
+     - This happened to 4 passing cases in the 2026-11-17 calculator run
+       (`benchmarks/HOSTED_RUN_2026-11-17_CALCULATOR.md`).
+   - **A per-request token budget.**
+     - No request to the model may exceed about 7,000 tokens, under Groq's
+       8,000 tokens-a-minute limit. Two 413s in the calculator run were
+       estimated at 8,100 and 8,250 tokens.
      - Trim large tool results rather than removing tools: keep the relevant
        table rows and sections, and say in the result what was trimmed.
-     - Log the request size for every model call, so the risk of a 413 is
-       measured, not reconstructed.
+     - Log the request size for every model call.
    - **Unit-aware grounding.** A percentage must match a percentage, or a ratio
      times 100 (the SBIN "5%" case).
    - **Price-prediction language.** The advice guard flags it.
-1. **Hybrid retrieval.**
-   - Postgres full-text (BM25-style ranking) alongside pgvector, fused with
-     Reciprocal Rank Fusion, plus metadata filters.
-   - No cross-encoder: the free tier's CPU cannot afford it.
-   - Measure on the retrieval check and on the dev eval.
-2. **Held-out eval.**
-   - Keep the 40 questions as the dev set.
-   - Write about 60 new held-out questions: unanswerable, multi-hop,
-     cross-company, multi-year and unit traps. Freeze them before any tuning.
-   - Report accuracy with 95% Wilson intervals, and abstention accuracy on the
-     unanswerable ones.
-   - Run the held-out set only once per change set, within the Groq budget.
-   - Include cross-company questions ("compare NVIDIA and Apple"). Retrieval's
-     company filter (`RETRIEVAL_INFER_COMPANY`) applies only when a question
-     names exactly one company, and these questions check it never hurts the
-     ones that name two. Hybrid retrieval and that filter stay off until this
-     set decides (2026-11-17).
-   - New eval questions need approval (see "When to stop for approval").
-3. **Claim-level verification.**
-   - For each figure in an answer, store the claim, value, unit, type
-     (extracted, derived or interpretation), source id (accession, section),
-     and the formula for derived ones.
-   - Builds on the unit-aware grounding fix. It is a grounding-guard change, so
-     show the diff and wait.
-   - Frontend: clicking a figure opens its source passage.
-4. **Ensemble robustness.**
-   - A minimum trade count, shrinkage toward equal weights, and a weight cap.
-   - Compare against an equal-weight ensemble, and add the Deflated Sharpe
-     Ratio.
-   - Evaluate on the 10 hold-out stocks, with the adoption rule written down
-     and committed before running.
-5. **Strategy drift detection.**
-   - Rolling Sharpe against each strategy's own history, with CUSUM.
-   - Flag and down-weight drifting strategies, and show it on the signal page.
-6. **NVDA, AAPL and MSFT in the signals watchlist**, so one stock page has both
-   10-K research and signals.
-7. **Light observability and Greeks.**
-   - Per-stage timings, tokens, p50 and p95, on a small System page.
-   - Greeks (delta, gamma, theta, vega) on the options tab.
+
+   Then:
+   - **The grader extension:** an "expected: decline" outcome and a count unit.
+     Tests first, prove the 40 dev cases rescore identically, and show the diff.
+   - **Freeze the held-out set:** commit it, and put the hash in the record,
+     before any tuning.
+1. **Claim-level verification with independent recomputation.**
+   - Recompute every derived figure (growth, margin, ratio) from its cited
+     operands, and reject on a mismatch.
+   - Record per claim whether it is supported, unsupported or conflicting.
+   - This is a grounding-guard change, so show the diff and wait.
+2. **Quant honesty.**
+   - (a) An exposure-matched benchmark: buy-and-hold scaled to the signal's
+     average exposure, with the rest in cash. Report CAGR, max drawdown,
+     Sharpe, Sortino, exposure, turnover and cost drag for the signal,
+     buy-and-hold and the exposure-matched benchmark.
+   - (b) An ensemble ablation: the best single rule, equal-weight, majority,
+     performance-weighted and regime-weighted. Add a correlation matrix of the
+     16 voting rules.
+   - (c) A three-universe evaluation: development, validation and final test,
+     plus a final untouched time period. Freeze all parameters and commit them
+     before the final test.
+   - If there is no risk-adjusted edge, say so, and reposition the signal as a
+     strategy-audit tool.
+3. **Evaluation rigor.**
+   - `docs/EVALUATION.md`: what the tests cover and the dev against held-out
+     sets.
+   - Retrieval metrics (Recall@5, MRR, nDCG), reported separately from answer
+     correctness.
+   - A held-out run with Wilson intervals and abstention.
+4. **System design.**
+   - `docs/SYSTEM_DESIGN.md`: failure boundaries, data flows, concurrency,
+     retries, caching and TTLs, staleness.
+   - A light load test (10 to 25 concurrent users) on the non-LLM endpoints
+     only: p50/p95/p99, error rate, memory.
+   - A backup LLM provider.
+5. **Product.**
+   - A Strategy Lab comparison, extending `/backtest`: strategies side by side
+     on the same stock, period and costs.
+   - A data provenance and observability page.
+6. **Futures.** Turn the Options tab into a "Derivatives" tab that adds:
+   - cost-of-carry fair value;
+   - the NSE lot size;
+   - margin;
+   - leveraged P&L and daily mark-to-market scenarios.
+
+   Label everything as an estimate: there is no live NSE futures data. Reuse
+   the options pricing and payoff code.
+
+Facts to keep straight: the signal has **16 voting rules**. The **26 strategy
+cards** are handbook cards, 8 of them for options.
 
 **Out of scope for now:** Celery, a full Grafana stack, a portfolio engine,
-paper trading, live option chains.
+paper trading, live option chains, and more strategies or indicators beyond
+this list.
 
 These five rules are not optional.
 
