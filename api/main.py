@@ -26,7 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
-from api import inference_proxy, routes, routes_auth, routes_chat
+from api import inference_proxy, routes, routes_auth, routes_chat, routes_market
 from api.rate_limit import RateLimiter, RateLimitMiddleware
 from core.config import settings
 from db.base import (
@@ -106,6 +106,7 @@ if settings.cors_origin_list:
 app.include_router(routes_auth.router)
 app.include_router(routes_chat.router)
 app.include_router(routes.router)
+app.include_router(routes_market.router)
 app.include_router(inference_proxy.router, prefix="/v1")
 
 

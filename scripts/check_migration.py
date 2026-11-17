@@ -40,7 +40,8 @@ DIALECT = postgresql.dialect()
 #                     vector(384) or real[] depending on whether pgvector is
 #                     installed on the target server, which is not something
 #                     Base.metadata can express.
-IGNORED = {"alembic_version", "filing_chunks"}
+#   strategy_cards    raw DDL in migration 0007, for the same vector column.
+IGNORED = {"alembic_version", "filing_chunks", "strategy_cards"}
 
 
 def normalize(statement: str) -> str:

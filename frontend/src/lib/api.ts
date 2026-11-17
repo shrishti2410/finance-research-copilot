@@ -151,6 +151,72 @@ export interface TraceStep {
   ok: boolean;
 }
 
+/** A chart the agent drew (show_price_chart). Mirrors AgentResult.charts. */
+export interface ChartSpec {
+  kind: "price_chart";
+  ticker: string;
+  start: string;
+  end: string;
+  indicators: string[];
+}
+
+/** GET /market/{ticker}/chart. Mirrors market/service.py chart_data. */
+export interface ChartData {
+  ticker: string;
+  start: string;
+  end: string;
+  provider: string;
+  bars: {
+    time: string;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    adj_close: number;
+    volume: number;
+  }[];
+  series: Record<string, { time: string; value: number }[]>;
+  indicators: Record<string, { label: string; pane: string }>;
+}
+
+export interface StrategyInfo {
+  key: string;
+  name: string;
+  description: string;
+  params: Record<string, number>;
+  allows_short: boolean;
+}
+
+export interface BacktestTrade {
+  side: "long" | "short";
+  entry_day: string;
+  entry_price: number;
+  exit_day: string | null;
+  exit_price: number | null;
+  bars_held: number;
+  net_return: number | null;
+  status: "open" | "closed";
+}
+
+/** POST /market/{ticker}/backtest. Mirrors market/service.py backtest(). */
+export interface BacktestResult {
+  ticker: string;
+  strategy: string;
+  params: Record<string, number>;
+  start: string;
+  end: string;
+  cost_bps: number;
+  slippage_bps: number;
+  initial_cash: number;
+  days: string[];
+  equity: number[];
+  benchmark_equity: number[];
+  trades: BacktestTrade[];
+  stats: Record<string, number | null>;
+  benchmark_stats: Record<string, number | null>;
+  execution: string;
+}
+
 export interface MessageMeta {
   agent?: {
     model: string;
@@ -162,6 +228,7 @@ export interface MessageMeta {
     history_messages: number;
   };
   trace?: TraceStep[];
+  charts?: ChartSpec[];
 }
 
 export interface Message {
@@ -192,6 +259,34 @@ export const api = {
   demo: () => request<TokenResponse>("/auth/demo", { method: "POST" }),
 
   options: () => request<AuthOptions>("/auth/options"),
+
+  strategies: (token: string) => request<StrategyInfo[]>("/market/strategies", { token }),
+
+  backtest: (
+    token: string,
+    ticker: string,
+    body: {
+      strategy: string;
+      params: Record<string, number>;
+      start: string;
+      end: string;
+      cost_bps: number;
+      slippage_bps: number;
+    },
+  ) =>
+    request<BacktestResult>(`/market/${encodeURIComponent(ticker)}/backtest`, {
+      method: "POST",
+      token,
+      body: JSON.stringify(body),
+    }),
+
+  chart: (token: string, ticker: string, start: string, end: string, indicators: string) =>
+    request<ChartData>(
+      `/market/${encodeURIComponent(ticker)}/chart?${new URLSearchParams({
+        start, end, indicators,
+      }).toString()}`,
+      { token },
+    ),
 
   me: (token: string) => request<User>("/auth/me", { token }),
 

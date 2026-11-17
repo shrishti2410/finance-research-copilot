@@ -45,7 +45,7 @@ from datetime import date
 from typing import Any, Literal
 
 from rag.retriever import search_filings as _search_filings
-from tools.base import ok
+from tools.base import ERROR_BAD_INPUT, ERROR_NO_DATA, ERROR_UPSTREAM, error, ok
 from tools.calculator import calculate
 from tools.facts import (
     UNKNOWN_ARGUMENT_HINT,
@@ -247,6 +247,210 @@ def _same_year_end(a: str | None, b: str | None) -> bool:
         return False
 
 
+async def get_price_analytics(
+    ticker: str,
+    start_date: str,
+    end_date: str = "",
+    benchmark: str = "auto",
+) -> dict[str, Any]:
+    """Return, risk and drawdown of a stock over a period, from daily prices.
+
+    Use this for questions about how a stock performed: total or annualised
+    return, volatility, the largest fall from a peak (max drawdown), Sharpe
+    ratio, or beta and correlation against a benchmark. Computed from the
+    dividend-adjusted close. For a single day's price, use get_stock_price.
+
+    Args:
+        ticker: The stock symbol, e.g. "NVDA"; an Indian NSE stock takes
+            ".NS", e.g. "SBIN.NS".
+        start_date: First day, YYYY-MM-DD.
+        end_date: Last day, YYYY-MM-DD; today when omitted.
+        benchmark: Symbol to measure beta and correlation against. "auto"
+            (the default) uses the stock's market index: SPY for a US stock,
+            ^NSEI (Nifty 50) for an NSE one. "" for none.
+
+    Returns:
+        A dict with "ok": True and total_return, annualised_return and
+        annualised_volatility (fractions: 0.25 is 25%), sharpe_ratio,
+        max_drawdown (negative fraction) with peak_day and trough_day,
+        best_day, worst_day, beta, correlation, trading_days, start, end,
+        and currency (prices are in it: INR for an NSE stock). On
+        failure, {"ok": False, "error": code, "message": ...}.
+    """
+    from market.providers import ProviderError
+    from market.service import price_analytics
+
+    try:
+        start, end = _date_range(start_date, end_date)
+        result = await price_analytics(ticker, start, end, benchmark or None)
+    except ValueError as exc:
+        return error(ERROR_BAD_INPUT, str(exc), ticker=ticker)
+    except LookupError as exc:
+        return error(ERROR_NO_DATA, str(exc), ticker=ticker)
+    except ProviderError as exc:
+        return error(ERROR_UPSTREAM, f"Price provider unreachable: {exc}", ticker=ticker)
+    return ok(**result)
+
+
+async def show_price_chart(
+    ticker: str,
+    start_date: str,
+    end_date: str = "",
+    indicators: list[str] | None = None,
+) -> dict[str, Any]:
+    """Show the user a price chart in the chat: candlesticks and volume, with
+    optional indicators.
+
+    Call this when the user asks to see, chart or plot a stock's price, or
+    asks about a technical indicator. The chart is drawn for the user; the
+    result also gives the latest value of each indicator, to quote.
+
+    Args:
+        ticker: The stock symbol, e.g. "AAPL".
+        start_date: First day shown, YYYY-MM-DD.
+        end_date: Last day shown, YYYY-MM-DD; today when omitted.
+        indicators: Any of "sma20", "sma50", "sma200", "ema12", "ema26",
+            "bollinger", "rsi14", "macd", "atr14", "volume", "obv".
+
+    Returns:
+        A dict with "ok": True, "chart" (what the chat draws), "bars" (how many
+        trading days), "last_close" and "latest" (each indicator's value on the
+        last day). On failure, {"ok": False, "error": code, "message": ...}.
+    """
+    from market.providers import ProviderError
+    from market.service import chart_data, parse_indicators
+
+    try:
+        start, end = _date_range(start_date, end_date)
+        names = parse_indicators(indicators or [])
+        data = await chart_data(ticker, start, end, names)
+    except ValueError as exc:
+        return error(ERROR_BAD_INPUT, str(exc), ticker=ticker)
+    except ProviderError as exc:
+        return error(ERROR_UPSTREAM, f"Price provider unreachable: {exc}", ticker=ticker)
+    if not data["bars"]:
+        return error(ERROR_NO_DATA, f"No price history for {data['ticker']} in that range.",
+                     ticker=data["ticker"])
+    last = data["bars"][-1]
+    return ok(
+        ticker=data["ticker"],
+        chart={"kind": "price_chart", "ticker": data["ticker"], "start": data["start"],
+               "end": data["end"], "indicators": names},
+        bars=len(data["bars"]),
+        last_day=last["time"], last_close=round(last["close"], 4),
+        latest={key: points[-1]["value"] for key, points in data["series"].items() if points},
+    )
+
+
+def _date_range(start_date: str, end_date: str):
+    from datetime import date as _date
+
+    try:
+        start = _date.fromisoformat((start_date or "").strip())
+        end = _date.fromisoformat(end_date.strip()) if (end_date or "").strip() else _date.today()
+    except ValueError:
+        raise ValueError("Dates must be YYYY-MM-DD.") from None
+    if start > end:
+        raise ValueError(f"start_date {start} is after end_date {end}.")
+    return start, end
+
+
+# How many of the heaviest votes, and which card sections, the tool returns.
+# Kept small on purpose: on a CPU host the answer model reads the whole tool
+# result before its first token, and the first live run (2026-11-16) timed out
+# on 3 of 5 stocks with a 4.6k-character result.
+SIGNAL_TOP_VOTES = 4
+SIGNAL_SUMMARY_CARDS = 3          # Summary section for the three heaviest voters
+SIGNAL_FAILURE_CARDS = 2          # "When it fails" for the two heaviest
+SIGNAL_CARD_CHARS = 280
+
+
+def _trim(text: str, limit: int) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[:limit].rsplit(" ", 1)[0] + "..."
+
+
+async def get_trading_signal(ticker: str) -> dict[str, Any]:
+    """Get the rule engine's current BUY / SELL / HOLD output for a stock, the
+    evidence behind it, its five-year backtest, and the strategy cards that
+    explain the rules.
+
+    Call this when the user asks about a trading signal, what the rules or
+    strategies say about a stock, or why the signal is what it is. Indian NSE
+    stocks take ".NS", e.g. "SBIN.NS".
+
+    The signal is a mechanical vote of textbook trading rules computed from
+    past prices; it is not your view and not a recommendation. Report it as
+    the engine's output ("the signal engine's output is BUY"), never as
+    advice, and never predict a price. Explain it from "votes", "regime" and
+    "cards", naming each card you use by its "source" path. Always state
+    "backtest.statement" in full and plainly: when "backtest.verdict" is
+    "no_edge", the answer must say the backtest shows no edge. Include
+    "coverage" next to the signal, any "warnings", and end with the
+    "disclaimer".
+
+    Args:
+        ticker: The stock symbol, e.g. "SBIN.NS" or "NVDA".
+
+    Returns:
+        A dict with "ok": True and signal, score, confidence, coverage, as_of,
+        regime, votes (the heaviest first: strategy, position, share_of_vote),
+        backtest (verdict, statement, window), cards (section, text, source),
+        warnings and disclaimer. On failure, {"ok": False, "error": code,
+        "message": ...}.
+    """
+    from db.base import engine
+    from market.providers import ProviderError
+    from market.service import signal_evaluation, trading_signal
+    from market.signal_eval import backtest_verdict
+    from rag.strategy_cards import card_sections
+
+    if not ticker or not str(ticker).strip():
+        return error(ERROR_BAD_INPUT, "ticker is required", ticker=ticker)
+    try:
+        current = await trading_signal(ticker)
+        evaluation = await signal_evaluation(ticker, years=5)
+    except LookupError as exc:
+        return error(ERROR_NO_DATA, str(exc), ticker=ticker)
+    except ProviderError as exc:
+        return error(ERROR_UPSTREAM, f"Price provider unreachable: {exc}", ticker=ticker)
+    if not current.get("ok"):
+        return error(ERROR_NO_DATA, current.get("error", "no signal"), ticker=ticker)
+
+    top = current["votes"][:SIGNAL_TOP_VOTES]
+    votes = [{"strategy": v["name"], "position": v["position"],
+              "share_of_vote": v["share_of_vote"]} for v in top]
+    cards = []
+    try:
+        async with engine.connect() as conn:
+            for rank, v in enumerate(top[:SIGNAL_SUMMARY_CARDS]):
+                sections = await card_sections(conn, v["strategy"])
+                wanted = ["Summary"] + (["When it fails"] if rank < SIGNAL_FAILURE_CARDS else [])
+                for name in wanted:
+                    if sections.get(name):
+                        cards.append({"section": f"{v['name']}: {name}",
+                                      "text": _trim(sections[name], SIGNAL_CARD_CHARS),
+                                      "source": v["card"]})
+    except Exception:  # noqa: BLE001  (the signal stands without its cards)
+        cards = []
+    cov = current["coverage"]
+    coverage = (f"{cov['text']} carry weight; the other "
+                f"{cov['rules_eligible'] - cov['rules_counted']} had no positive Sharpe ratio "
+                f"in training and count for nothing")
+    regime = current["regime"]
+    return ok(
+        ticker=current["ticker"], as_of=current["as_of"], currency=current["currency"],
+        signal=current["signal"], score=current["score"],
+        confidence=current["confidence"], coverage=coverage,
+        regime={k: regime[k] for k in ("label", "adx", "plus_di", "minus_di")},
+        votes=votes,
+        backtest={k: v for k, v in backtest_verdict(current["ticker"], evaluation).items()
+                  if k in ("verdict", "statement", "window")},
+        cards=cards, cards_note=None if cards else "strategy cards are not indexed",
+        warnings=current["warnings"], disclaimer=current["disclaimer"],
+    )
+
+
 def build_registry() -> Registry:
     """The default tool set. One registry per process is plenty; it is stateless."""
     registry = Registry()
@@ -264,6 +468,9 @@ def build_registry() -> Registry:
     registry.register(calculate, aliases={"op": "operation", "operator": "operation",
                                           "x": "a", "y": "b"})
     registry.register(search_news)
+    registry.register(get_price_analytics)
+    registry.register(show_price_chart)
+    registry.register(get_trading_signal)
     return registry
 
 

@@ -161,4 +161,6 @@ class AskResponse(BaseModel):
     # The answer's "Final figure:" line, as written; "none" if the model
     # declined, null if it did not write one. Not repeated in `answer`.
     final_figure: str | None = None
+    # Charts the agent drew (show_price_chart): ticker, date range, indicators.
+    charts: list[dict] = []
     steps: list[AskStep] | None = None

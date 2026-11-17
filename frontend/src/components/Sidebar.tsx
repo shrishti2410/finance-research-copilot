@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import type { Conversation } from "@/lib/api";
 
 interface Props {
@@ -32,6 +33,18 @@ export function Sidebar({
         >
           + New conversation
         </button>
+        <Link
+          href="/chart"
+          className="mt-2 block w-full rounded-md px-3 py-1.5 text-center text-xs text-neutral-400 hover:bg-neutral-900"
+        >
+          Price charts
+        </Link>
+        <Link
+          href="/backtest"
+          className="block w-full rounded-md px-3 py-1.5 text-center text-xs text-neutral-400 hover:bg-neutral-900"
+        >
+          Backtests
+        </Link>
       </div>
 
       <nav className="min-h-0 flex-1 overflow-y-auto px-2">

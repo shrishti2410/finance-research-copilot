@@ -164,6 +164,49 @@ class Message(Base):
         return f"<Message {self.id} {self.role}>"
 
 
+class PriceBar(Base):
+    """One trading day of prices, cached from a market-data provider.
+
+    `close` is split-adjusted, `adj_close` also dividend-adjusted; see
+    market/providers.py for which one each calculation uses. Keyed by ticker
+    and day: one provider at a time feeds the cache, and `provider` says which.
+    """
+
+    __tablename__ = "price_bars"
+
+    ticker: Mapped[str] = mapped_column(String(16), primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    open: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    high: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    low: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    close: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    adj_close: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    volume: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
+class PriceFetch(Base):
+    """A range the cache has asked a provider for, and when.
+
+    What makes "no bar for that day" mean a holiday rather than "never asked":
+    a request is served from the cache when one fetch covers it and is younger
+    than MARKET_CACHE_TTL_HOURS. See market/store.py.
+    """
+
+    __tablename__ = "price_fetches"
+    __table_args__ = (Index("ix_price_fetches_ticker", "ticker"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
+    ticker: Mapped[str] = mapped_column(String(16), nullable=False)
+    start_day: Mapped[date] = mapped_column(Date, nullable=False)
+    end_day: Mapped[date] = mapped_column(Date, nullable=False)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    bars: Mapped[int] = mapped_column(Integer, nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class UsageCounter(Base):
     """Questions and hosted-model tokens per UTC day, for the caps in api/quotas.py.
 
