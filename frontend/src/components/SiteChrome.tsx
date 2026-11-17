@@ -1,14 +1,18 @@
 "use client";
 
-import { LineChart } from "lucide-react";
+import { LineChart, Menu, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { useState } from "react";
 
+import { DemoButton } from "@/components/DemoButton";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 
-export const GITHUB_URL = "https://github.com/shrishti2410/finance-research-copilot";
+import { GITHUB_URL } from "@/lib/site";
+
+export { GITHUB_URL };
 
 function GitHubMark({ className }: { className?: string }) {
   return (
@@ -18,14 +22,54 @@ function GitHubMark({ className }: { className?: string }) {
   );
 }
 
+const NAV = [
+  { href: "/research", label: "Research" },
+  { href: "/dashboard", label: "Signals" },
+  { href: "/methodology", label: "Methodology" },
+];
+
 export function SiteHeader() {
   const { token, logout } = useAuth();
   const path = usePathname();
   const router = useRouter();
-  const nav = [
-    { href: "/dashboard", label: "Dashboard" },
-    { href: "/research", label: "Research" },
-  ];
+  const [open, setOpen] = useState(false);
+  // Close the phone menu whenever the page changes.
+  const [menuPath, setMenuPath] = useState(path);
+  if (menuPath !== path) {
+    setMenuPath(path);
+    setOpen(false);
+  }
+
+  const links = NAV.map((item) => (
+    <Link
+      key={item.href}
+      href={item.href}
+      aria-current={path?.startsWith(item.href) ? "page" : undefined}
+      className={cn(
+        "rounded-md px-2.5 py-1.5 text-sm text-fg-muted hover:text-fg",
+        path?.startsWith(item.href) && "bg-surface-2 text-fg",
+      )}
+    >
+      {item.label}
+    </Link>
+  ));
+  const account = token ? (
+    <Button
+      variant="ghost"
+      size="sm"
+      onClick={() => {
+        logout();
+        router.replace("/");
+      }}
+    >
+      Sign out
+    </Button>
+  ) : (
+    <Button asChild variant="ghost" size="sm">
+      <Link href="/login">Sign in</Link>
+    </Button>
+  );
+
   return (
     <header className="sticky top-0 z-30 border-b border-border bg-bg/85 backdrop-blur">
       <div className="mx-auto flex h-14 max-w-6xl items-center gap-2 px-4 sm:gap-4 sm:px-6">
@@ -33,69 +77,119 @@ export function SiteHeader() {
           <span className="grid size-7 place-items-center rounded-md bg-accent-strong text-bg">
             <LineChart className="size-4" aria-hidden="true" />
           </span>
-          <span className="hidden sm:inline">Finance Research Copilot</span>
-          <span className="sm:hidden">FRC</span>
+          <span className="hidden lg:inline">Finance Research Copilot</span>
+          <span className="lg:hidden">FRC</span>
         </Link>
-        {token ? (
-          <nav aria-label="Main" className="flex items-center gap-1">
-            {nav.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                aria-current={path?.startsWith(item.href) ? "page" : undefined}
-                className={cn(
-                  "rounded-md px-2.5 py-1.5 text-sm text-fg-muted hover:text-fg",
-                  path?.startsWith(item.href) && "bg-surface-2 text-fg",
-                )}
-              >
-                {item.label}
-              </Link>
-            ))}
-          </nav>
-        ) : null}
-        <div className="ml-auto flex items-center gap-2">
+        <nav aria-label="Main" className="hidden items-center gap-1 md:flex">
+          {links}
+        </nav>
+        <div className="ml-auto flex items-center gap-1 sm:gap-2">
           <a
             href={GITHUB_URL}
             target="_blank"
             rel="noreferrer noopener"
-            className={cn("rounded-md p-2 text-fg-muted hover:text-fg", token && "hidden sm:block")}
+            className="hidden rounded-md p-2 text-fg-muted hover:text-fg md:block"
             aria-label="Source code on GitHub"
           >
             <GitHubMark className="size-5" />
           </a>
-          {token ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                logout();
-                router.replace("/");
-              }}
-            >
-              Sign out
-            </Button>
-          ) : (
-            <Button asChild variant="secondary" size="sm">
-              <Link href="/login">Sign in</Link>
-            </Button>
-          )}
+          <div className="hidden md:block">{account}</div>
+          <DemoButton compact />
+          <button
+            type="button"
+            className="rounded-md p-2 text-fg-muted hover:text-fg md:hidden"
+            aria-label={open ? "Close the menu" : "Open the menu"}
+            aria-expanded={open}
+            aria-controls="phone-menu"
+            onClick={() => setOpen((o) => !o)}
+          >
+            {open ? <X className="size-5" aria-hidden="true" /> : <Menu className="size-5" aria-hidden="true" />}
+          </button>
         </div>
       </div>
+      {open ? (
+        <nav id="phone-menu" aria-label="Main" className="border-t border-border px-4 py-3 md:hidden">
+          <div className="flex flex-col gap-1">
+            {links}
+            <a
+              href={GITHUB_URL}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-sm text-fg-muted hover:text-fg"
+            >
+              <GitHubMark className="size-4" /> GitHub
+            </a>
+            <div className="pt-1">{account}</div>
+          </div>
+        </nav>
+      ) : null}
     </header>
   );
 }
 
+const FOOTER_LINKS: { title: string; links: { label: string; href: string; external?: boolean }[] }[] = [
+  {
+    title: "Product",
+    links: [
+      { label: "Research", href: "/research" },
+      { label: "Signals", href: "/dashboard" },
+      { label: "Backtests", href: "/backtest" },
+      { label: "Methodology", href: "/methodology" },
+    ],
+  },
+  {
+    title: "Source",
+    links: [
+      { label: "GitHub", href: GITHUB_URL, external: true },
+      { label: "Benchmark records", href: `${GITHUB_URL}/tree/master/benchmarks`, external: true },
+      { label: "Known limitations", href: `${GITHUB_URL}/blob/master/docs/KNOWN_LIMITATIONS.md`, external: true },
+    ],
+  },
+  {
+    title: "Data",
+    links: [
+      { label: "SEC EDGAR (10-K filings, XBRL)", href: "https://www.sec.gov/edgar/search/", external: true },
+      { label: "Yahoo Finance (daily prices)", href: "https://finance.yahoo.com/", external: true },
+    ],
+  },
+];
+
 export function SiteFooter() {
   return (
     <footer className="mt-16 border-t border-border">
-      <div className="mx-auto flex max-w-6xl flex-col gap-2 px-4 py-6 text-xs text-fg-subtle sm:flex-row sm:items-center sm:justify-between sm:px-6">
-        <p className="font-medium text-fg-muted">Educational project, not investment advice.</p>
-        <p>
-          Daily prices from Yahoo Finance. Filings from SEC EDGAR.{" "}
-          <a href={GITHUB_URL} className="text-accent underline" target="_blank" rel="noreferrer noopener">
-            Source on GitHub
-          </a>
-        </p>
+      <div className="mx-auto grid max-w-6xl gap-8 px-4 py-10 text-sm sm:px-6 md:grid-cols-[1.4fr_1fr_1fr_1.2fr]">
+        <div className="flex flex-col gap-2">
+          <p className="flex items-center gap-2 font-semibold text-fg">
+            <span className="grid size-6 place-items-center rounded-md bg-accent-strong text-bg">
+              <LineChart className="size-3.5" aria-hidden="true" />
+            </span>
+            Finance Research Copilot
+          </p>
+          <p className="text-xs text-fg-muted">
+            An educational project. Nothing here is investment advice: the site reports what filings and
+            past prices show, and never tells you to buy or sell.
+          </p>
+        </div>
+        {FOOTER_LINKS.map((col) => (
+          <div key={col.title}>
+            <p className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">{col.title}</p>
+            <ul className="mt-3 flex flex-col gap-2">
+              {col.links.map((l) => (
+                <li key={l.label}>
+                  {l.external ? (
+                    <a href={l.href} target="_blank" rel="noreferrer noopener" className="text-fg-muted hover:text-fg">
+                      {l.label}
+                    </a>
+                  ) : (
+                    <Link href={l.href} className="text-fg-muted hover:text-fg">
+                      {l.label}
+                    </Link>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
       </div>
     </footer>
   );
