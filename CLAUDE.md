@@ -39,6 +39,16 @@ A hardening phase, in this order. Each item is tests-first and ends with a
 short report. Do not start it before version 2 is live. Items 1 and 2 bring
 back the hybrid search and the larger question set dropped above.
 
+0. **Guard fixes, first (from 2026-11-18).** Each is a grounding or advice
+   guard change: tests first, show the diff and wait. In this order:
+   - **Citation markers read as figures.** The model writes markers such as
+     `【0†value】`. The guard reads the `0` as an untraced figure and puts the
+     `[Unverified]` banner on a correct answer. This happened to 4 passing
+     cases in the 2026-11-17 calculator run
+     (`benchmarks/HOSTED_RUN_2026-11-17_CALCULATOR.md`).
+   - **Unit-aware grounding.** A percentage must match a percentage, or a ratio
+     times 100 (the SBIN "5%" case).
+   - **Price-prediction language.** The advice guard flags it.
 1. **Hybrid retrieval.**
    - Postgres full-text (BM25-style ranking) alongside pgvector, fused with
      Reciprocal Rank Fusion, plus metadata filters.
