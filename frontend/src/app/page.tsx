@@ -8,6 +8,7 @@ import { ProductTour } from "@/components/landing/ProductTour";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { AUTHOR, GITHUB_URL } from "@/lib/site";
+import { loadStrip } from "@/lib/strip";
 
 // No figure on this page is a measurement. Measured results live on
 // /methodology, quoted from the benchmark records and checked by
@@ -78,7 +79,12 @@ const FAQ = [
   },
 ];
 
-export default function Landing() {
+// Served from Vercel's cache and regenerated at most every 15 minutes
+// (src/lib/strip.ts), so the page and its market strip load while the API sleeps.
+export const revalidate = 900;
+
+export default async function Landing() {
+  const strip = await loadStrip();
   return (
     <main>
       <section className="mx-auto grid max-w-6xl items-center gap-10 px-4 pb-12 pt-12 sm:px-6 sm:pt-20 lg:grid-cols-[1fr_1.15fr]">
@@ -108,7 +114,7 @@ export default function Landing() {
         />
       </section>
 
-      <MarketStrip />
+      <MarketStrip initial={strip} />
 
       <section aria-labelledby="features" className="mx-auto max-w-6xl px-4 pt-16 sm:px-6">
         <h2 id="features" className="text-2xl font-semibold tracking-tight text-fg">
