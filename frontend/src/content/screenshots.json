@@ -4,9 +4,9 @@
   "images": {
     "hero-dashboard": {
       "src": "/shots/hero-dashboard.webp",
-      "width": 1280,
-      "height": 800,
-      "alt": "The watchlist dashboard: the Nifty 50 and S&P 500, and a card per stock with its price, day change, 60-day sparkline and signal.",
+      "width": 1920,
+      "height": 1350,
+      "alt": "The watchlist dashboard: the Nifty 50 with five NSE stocks, and the S&P 500 with three US stocks, each with its price, day change, 60-day sparkline and signal.",
       "path": "/dashboard"
     },
     "tour-chart": {
@@ -20,14 +20,14 @@
       "src": "/shots/tour-signal.webp",
       "width": 1136,
       "height": 820,
-      "alt": "State Bank of India's Signal tab: the vote of each rule with its weight, and the market regime.",
+      "alt": "State Bank of India's Signal tab: the backtest verdict, the engine's output, the market regime and the vote of each rule.",
       "path": "/stock/SBIN.NS"
     },
     "feature-signal": {
       "src": "/shots/feature-signal.webp",
-      "width": 568,
-      "height": 410,
-      "alt": "State Bank of India's Signal tab: the vote of each rule with its weight, and the market regime.",
+      "width": 1352,
+      "height": 1344,
+      "alt": "The signal's verdict, no edge in the backtest, and the first two rule votes with their weights and reasons.",
       "path": "/stock/SBIN.NS"
     },
     "tour-backtest": {
@@ -39,9 +39,9 @@
     },
     "feature-backtest": {
       "src": "/shots/feature-backtest.webp",
-      "width": 568,
-      "height": 410,
-      "alt": "State Bank of India's Backtest tab: the walk-forward result after costs, against buy-and-hold and random timing.",
+      "width": 1352,
+      "height": 836,
+      "alt": "The signal's equity curve against buy-and-hold, over five years.",
       "path": "/stock/SBIN.NS"
     },
     "tour-options": {
@@ -53,9 +53,9 @@
     },
     "feature-options": {
       "src": "/shots/feature-options.webp",
-      "width": 568,
-      "height": 410,
-      "alt": "State Bank of India's Options tab: an option structure with estimated premium, payoff at expiry, breakevens and Greeks.",
+      "width": 1268,
+      "height": 744,
+      "alt": "The payoff at expiry of a bull call spread, with its maximum loss, maximum profit and breakeven.",
       "path": "/stock/SBIN.NS"
     },
     "tour-research": {
@@ -67,8 +67,8 @@
     },
     "feature-research": {
       "src": "/shots/feature-research.webp",
-      "width": 568,
-      "height": 217,
+      "width": 1368,
+      "height": 868,
       "alt": "NVIDIA's Research tab: its 10-K filings are indexed, and suggested questions open the research chat.",
       "path": "/stock/NVDA"
     }
