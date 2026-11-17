@@ -61,11 +61,11 @@ export function Sources({ steps }: { steps: TraceStep[] }) {
     toolCalls.length === 1 ? "1 source" : `${toolCalls.length} sources`;
 
   return (
-    <div className="mt-3 border-t border-neutral-800 pt-2">
+    <div className="mt-3 border-t border-border pt-2">
       <button
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        className="flex items-center gap-1.5 text-xs text-neutral-400 hover:text-neutral-200"
+        className="flex items-center gap-1.5 text-xs text-fg-muted hover:text-fg"
       >
         <span
           className={`transition-transform ${open ? "rotate-90" : ""}`}
@@ -75,7 +75,7 @@ export function Sources({ steps }: { steps: TraceStep[] }) {
         </span>
         Sources · {label}
         {control.length > 0 && (
-          <span className="text-amber-500/80">
+          <span className="text-warn">
             · {control.length} note{control.length > 1 ? "s" : ""}
           </span>
         )}
@@ -91,7 +91,7 @@ export function Sources({ steps }: { steps: TraceStep[] }) {
               return (
                 <li
                   key={index}
-                  className="rounded border border-neutral-800 bg-neutral-900/60"
+                  className="rounded border border-border bg-surface"
                 >
                   <button
                     onClick={() => setExpanded(isOpen ? null : index)}
@@ -100,25 +100,25 @@ export function Sources({ steps }: { steps: TraceStep[] }) {
                   >
                     <span
                       className={`mt-0.5 text-[10px] ${
-                        step.ok ? "text-emerald-500" : "text-amber-500"
+                        step.ok ? "text-fg-muted" : "text-warn"
                       }`}
                       aria-hidden
                     >
                       {step.ok ? "●" : "▲"}
                     </span>
                     <span className="min-w-0 flex-1">
-                      <code className="block break-all font-mono text-xs text-neutral-200">
+                      <code className="block break-all font-mono text-xs text-fg">
                         {isControl
                           ? CONTROL_STEPS[step.tool].label
                           : summarise(step)}
                       </code>
                       {isControl && (
-                        <span className="mt-0.5 block text-[11px] text-neutral-500">
+                        <span className="mt-0.5 block text-[11px] text-fg-subtle">
                           {CONTROL_STEPS[step.tool].blurb}
                         </span>
                       )}
                     </span>
-                    <span className="shrink-0 font-mono text-[10px] text-neutral-600">
+                    <span className="shrink-0 font-mono text-[10px] text-fg-subtle">
                       {step.latency_ms >= 1
                         ? `${(step.latency_ms / 1000).toFixed(1)}s`
                         : ""}
@@ -126,7 +126,7 @@ export function Sources({ steps }: { steps: TraceStep[] }) {
                   </button>
 
                   {isOpen && (
-                    <pre className="max-h-64 overflow-auto border-t border-neutral-800 px-2.5 py-2 font-mono text-[11px] leading-relaxed text-neutral-400">
+                    <pre className="max-h-64 overflow-auto border-t border-border px-2.5 py-2 font-mono text-[11px] leading-relaxed text-fg-muted">
                       {resultText(step.result)}
                     </pre>
                   )}

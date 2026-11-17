@@ -16,6 +16,7 @@ import {
   CandlestickSeries,
   ColorType,
   createChart,
+  createSeriesMarkers,
   HistogramSeries,
   LineSeries,
   type IChartApi,
@@ -54,33 +55,57 @@ const PRICE_OVERLAYS = ["sma20", "sma50", "sma200", "ema12", "ema26", "bb_upper"
 
 type Point = { time: Time; value: number };
 
+/** A day the signal switched: "in" (went long) or "out" (went flat). */
+export type SignalMarker = { day: string; action: "in" | "out" };
+
+// The design tokens (globals.css), repeated here because the chart draws on a
+// canvas and cannot read CSS variables. Green and red: up/down bars, and the
+// signal going in/out.
+const THEME = {
+  bg: "#11161d", text: "#a3afbf", grid: "#1b2230", border: "#253041",
+  up: "#3fd17f", down: "#f26b6b", upDim: "#1d4d33", downDim: "#5a2a2a",
+};
+
 function points(data: ChartData, key: string): Point[] {
   return (data.series[key] ?? []).map((p) => ({ time: p.time as Time, value: p.value }));
 }
 
-function draw(container: HTMLElement, data: ChartData, height: number): IChartApi {
+function draw(container: HTMLElement, data: ChartData, height: number,
+              markers: SignalMarker[] = []): IChartApi {
   const chart = createChart(container, {
     height,
     autoSize: true,
     layout: {
       // TradingView's licence: the logo links to tradingview.com. Left on.
       attributionLogo: true,
-      background: { type: ColorType.Solid, color: "#0a0a0a" },
-      textColor: "#a3a3a3",
-      panes: { separatorColor: "#262626" },
+      background: { type: ColorType.Solid, color: THEME.bg },
+      textColor: THEME.text,
+      panes: { separatorColor: THEME.border },
     },
-    grid: { vertLines: { color: "#171717" }, horzLines: { color: "#171717" } },
-    timeScale: { borderColor: "#262626" },
-    rightPriceScale: { borderColor: "#262626" },
+    grid: { vertLines: { color: THEME.grid }, horzLines: { color: THEME.grid } },
+    timeScale: { borderColor: THEME.border },
+    rightPriceScale: { borderColor: THEME.border },
   });
 
   const candles = chart.addSeries(CandlestickSeries, {
-    upColor: "#22c55e", downColor: "#ef4444", borderVisible: false,
-    wickUpColor: "#22c55e", wickDownColor: "#ef4444",
+    upColor: THEME.up, downColor: THEME.down, borderVisible: false,
+    wickUpColor: THEME.up, wickDownColor: THEME.down,
   });
   candles.setData(data.bars.map((b) => ({
     time: b.time as Time, open: b.open, high: b.high, low: b.low, close: b.close,
   })));
+  const shown = new Set(data.bars.map((b) => b.time));
+  if (markers.length) {
+    createSeriesMarkers(candles, markers
+      .filter((m) => shown.has(m.day))
+      .map((m) => ({
+        time: m.day as Time,
+        position: m.action === "in" ? ("belowBar" as const) : ("aboveBar" as const),
+        shape: m.action === "in" ? ("arrowUp" as const) : ("arrowDown" as const),
+        color: m.action === "in" ? THEME.up : THEME.down,
+        text: m.action === "in" ? "In" : "Out",
+      })));
+  }
 
   for (const key of PRICE_OVERLAYS) {
     if (!data.series[key]) continue;
@@ -100,12 +125,12 @@ function draw(container: HTMLElement, data: ChartData, height: number): IChartAp
         const up = new Map(data.bars.map((b) => [b.time, b.close >= b.open]));
         chart.addSeries(HistogramSeries, { priceFormat: { type: "volume" } }, pane).setData(
           points(data, key).map((p) => ({
-            ...p, color: up.get(p.time as string) ? "#14532d" : "#7f1d1d",
+            ...p, color: up.get(p.time as string) ? THEME.upDim : THEME.downDim,
           })),
         );
       } else if (key === "macd_hist") {
         chart.addSeries(HistogramSeries, {}, pane).setData(
-          points(data, key).map((p) => ({ ...p, color: p.value >= 0 ? "#166534" : "#991b1b" })),
+          points(data, key).map((p) => ({ ...p, color: p.value >= 0 ? THEME.upDim : THEME.downDim })),
         );
       } else {
         chart.addSeries(LineSeries, {
@@ -133,10 +158,14 @@ export function PriceChart({
   spec,
   token,
   height = 420,
+  markers,
+  onLoaded,
 }: {
   spec: ChartSpec;
   token: string;
   height?: number;
+  markers?: SignalMarker[];
+  onLoaded?: () => void;
 }) {
   const container = useRef<HTMLDivElement>(null);
   const indicatorKey = spec.indicators.join(",");
@@ -163,24 +192,26 @@ export function PriceChart({
     };
   }, [token, spec.ticker, spec.start, spec.end, indicatorKey, requestKey]);
 
+  const markerKey = JSON.stringify(markers ?? []);
   useEffect(() => {
     if (!data || !container.current) return;
-    const chart = draw(container.current, data, height);
+    const chart = draw(container.current, data, height, JSON.parse(markerKey));
+    onLoaded?.();
     return () => chart.remove();
-  }, [data, height]);
+  }, [data, height, markerKey, onLoaded]);
 
   const labels = data ? Object.values(data.indicators).map((i) => i.label) : [];
   return (
-    <figure className="my-3 rounded-md border border-neutral-800 bg-neutral-950 p-2">
-      <figcaption className="mb-2 flex flex-wrap items-baseline gap-x-3 text-xs text-neutral-400">
-        <span className="font-medium text-neutral-200">{spec.ticker}</span>
+    <figure className="my-3 rounded-[var(--radius-card)] border border-border bg-surface p-3">
+      <figcaption className="mb-2 flex flex-wrap items-baseline gap-x-3 text-xs text-fg-muted">
+        <span className="font-medium text-fg">{spec.ticker}</span>
         <span>{spec.start} to {spec.end}</span>
         {labels.length > 0 && <span>{labels.join(" · ")}</span>}
       </figcaption>
-      {error && <p className="text-xs text-red-300">{error}</p>}
-      {!data && !error && <p className="text-xs text-neutral-500">Loading prices…</p>}
+      {error && <p className="text-xs text-down">{error}</p>}
+      {!data && !error && <div aria-busy="true" className="animate-pulse rounded-md bg-surface-2" style={{ height }} />}
       <div ref={container} style={{ height }} className={data ? "" : "hidden"} />
-      <p className="mt-2 text-[10px] text-neutral-600">
+      <p className="mt-2 text-[10px] text-fg-subtle">
         Prices: Yahoo Finance via yfinance, split-adjusted; returns use the dividend-adjusted
         close. Charts: TradingView Lightweight Charts™, Copyright (c) 2025 TradingView, Inc.,{" "}
         <a href="https://www.tradingview.com/" className="underline" target="_blank" rel="noreferrer">

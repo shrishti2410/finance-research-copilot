@@ -217,6 +217,143 @@ export interface BacktestResult {
   execution: string;
 }
 
+export interface QuoteCard {
+  ticker: string;
+  exchange: string;
+  currency: string;
+  currency_symbol: string;
+  as_of: string;
+  price: number;
+  change_pct: number | null;
+  sparkline: number[];
+}
+
+export interface WatchlistCard extends QuoteCard {
+  signal?:
+    | {
+        signal: "BUY" | "SELL" | "HOLD";
+        score: number;
+        confidence: number;
+        coverage: string;
+        regime: string;
+        warnings: string[];
+      }
+    | { error: string };
+  error?: string;
+}
+
+export interface Watchlist {
+  index: QuoteCard | null;
+  stocks: WatchlistCard[];
+  provider: string;
+  disclaimer: string;
+}
+
+export interface SignalVote {
+  strategy: string;
+  name: string;
+  style: string;
+  position: "in" | "out" | "short";
+  vote: number;
+  train_sharpe: number;
+  weight: number;
+  regime_multiplier: number;
+  share_of_vote: number;
+  card: string;
+}
+
+export interface RiskFigures {
+  cagr: number | null;
+  max_drawdown: number | null;
+  sharpe: number | null;
+  sortino: number | null;
+  calmar: number | null;
+  time_in_market: number | null;
+}
+
+export interface SignalReport {
+  ticker: string;
+  currency_symbol: string;
+  evidence: {
+    ok: boolean;
+    error?: string;
+    as_of: string;
+    signal: "BUY" | "SELL" | "HOLD";
+    score: number;
+    confidence: number;
+    confidence_uncapped: number;
+    coverage: { rules_counted: number; rules_eligible: number; fraction: number; text: string };
+    thresholds: { buy_at: number; sell_at: number };
+    regime: {
+      label: string;
+      adx: number | null;
+      plus_di: number | null;
+      minus_di: number | null;
+      sma50_slope_20d: number | null;
+      volatility: number | null;
+      volatility_percentile: number | null;
+    };
+    votes: SignalVote[];
+    skipped_strategies: Record<string, string>;
+    history: { trading_days: number; limited: boolean; train_days: number };
+    warnings: string[];
+  };
+  verdict: { verdict: "edge" | "no_edge" | "untested"; statement: string; window?: string };
+  evaluation: {
+    ok: boolean;
+    start: string;
+    end: string;
+    years: number;
+    risk: { signal: RiskFigures; buy_and_hold: RiskFigures; nifty: RiskFigures | null };
+    random: { runs: number; signal_sharpe_percentile: number | null };
+    decisions: Record<string, number>;
+    curves: { days: string[]; signal: number[]; buy_and_hold: number[] } | null;
+  };
+  markers: { day: string; action: "in" | "out" }[];
+  cards: { strategy: string; source: string; summary: string | null; when_it_fails: string | null }[];
+  disclaimer: string;
+}
+
+export interface OptionStructure {
+  structure: string;
+  name: string;
+  view: string;
+  spot: number;
+  volatility: number;
+  days: number;
+  legs: { kind: "call" | "put" | "stock"; side: "buy" | "sell"; strike: number | null; premium_estimate: number }[];
+  net_premium_estimate: number;
+  max_profit: number | null;
+  max_loss: number | null;
+  max_profit_unbounded: boolean;
+  max_loss_unbounded: boolean;
+  breakevens: number[];
+  payoff: { price: number; profit: number }[];
+  card: string;
+  assumptions: string[];
+}
+
+export interface OptionIdeas {
+  ticker: string;
+  currency_symbol: string;
+  as_of: string;
+  spot: number;
+  volatility_30d: number;
+  signal: { signal: string; score: number; confidence: number; coverage: string; regime: string };
+  backtest: { verdict: string; statement: string };
+  structures: OptionStructure[];
+  note: string;
+  disclaimer: string;
+}
+
+export interface SignalExplanation {
+  ok: boolean;
+  answer: string;
+  added: string[];
+  model_said_no_edge: boolean;
+  cards_supplied: string[];
+}
+
 export interface MessageMeta {
   agent?: {
     model: string;
@@ -289,6 +426,20 @@ export const api = {
     ),
 
   me: (token: string) => request<User>("/auth/me", { token }),
+
+  watchlist: (token: string) => request<Watchlist>("/market/watchlist", { token }),
+
+  signalReport: (token: string, ticker: string) =>
+    request<SignalReport>(`/market/${encodeURIComponent(ticker)}/signal/report`, { token }),
+
+  optionIdeas: (token: string, ticker: string, structure?: string) =>
+    request<OptionIdeas>(
+      `/market/${encodeURIComponent(ticker)}/options${structure ? `?structure=${encodeURIComponent(structure)}` : ""}`,
+      { token },
+    ),
+
+  explainSignal: (token: string, ticker: string) =>
+    request<SignalExplanation>(`/market/${encodeURIComponent(ticker)}/signal/explain`, { token }),
 
   listConversations: (token: string) =>
     request<Conversation[]>("/conversations", { token }),

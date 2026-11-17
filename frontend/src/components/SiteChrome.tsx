@@ -1,0 +1,102 @@
+"use client";
+
+import { LineChart } from "lucide-react";
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
+
+import { Button } from "@/components/ui/button";
+import { useAuth } from "@/lib/auth";
+import { cn } from "@/lib/utils";
+
+export const GITHUB_URL = "https://github.com/shrishti2410/finance-research-copilot";
+
+function GitHubMark({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" className={className}>
+      <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
+    </svg>
+  );
+}
+
+export function SiteHeader() {
+  const { token, logout } = useAuth();
+  const path = usePathname();
+  const router = useRouter();
+  const nav = [
+    { href: "/dashboard", label: "Dashboard" },
+    { href: "/research", label: "Research" },
+  ];
+  return (
+    <header className="sticky top-0 z-30 border-b border-border bg-bg/85 backdrop-blur">
+      <div className="mx-auto flex h-14 max-w-6xl items-center gap-2 px-4 sm:gap-4 sm:px-6">
+        <Link href="/" className="flex items-center gap-2 font-semibold text-fg">
+          <span className="grid size-7 place-items-center rounded-md bg-accent-strong text-bg">
+            <LineChart className="size-4" aria-hidden="true" />
+          </span>
+          <span className="hidden sm:inline">Finance Research Copilot</span>
+          <span className="sm:hidden">FRC</span>
+        </Link>
+        {token ? (
+          <nav aria-label="Main" className="flex items-center gap-1">
+            {nav.map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                aria-current={path?.startsWith(item.href) ? "page" : undefined}
+                className={cn(
+                  "rounded-md px-2.5 py-1.5 text-sm text-fg-muted hover:text-fg",
+                  path?.startsWith(item.href) && "bg-surface-2 text-fg",
+                )}
+              >
+                {item.label}
+              </Link>
+            ))}
+          </nav>
+        ) : null}
+        <div className="ml-auto flex items-center gap-2">
+          <a
+            href={GITHUB_URL}
+            target="_blank"
+            rel="noreferrer noopener"
+            className={cn("rounded-md p-2 text-fg-muted hover:text-fg", token && "hidden sm:block")}
+            aria-label="Source code on GitHub"
+          >
+            <GitHubMark className="size-5" />
+          </a>
+          {token ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                logout();
+                router.replace("/");
+              }}
+            >
+              Sign out
+            </Button>
+          ) : (
+            <Button asChild variant="secondary" size="sm">
+              <Link href="/login">Sign in</Link>
+            </Button>
+          )}
+        </div>
+      </div>
+    </header>
+  );
+}
+
+export function SiteFooter() {
+  return (
+    <footer className="mt-16 border-t border-border">
+      <div className="mx-auto flex max-w-6xl flex-col gap-2 px-4 py-6 text-xs text-fg-subtle sm:flex-row sm:items-center sm:justify-between sm:px-6">
+        <p className="font-medium text-fg-muted">Educational project, not investment advice.</p>
+        <p>
+          Daily prices from Yahoo Finance. Filings from SEC EDGAR.{" "}
+          <a href={GITHUB_URL} className="text-accent underline" target="_blank" rel="noreferrer noopener">
+            Source on GitHub
+          </a>
+        </p>
+      </div>
+    </footer>
+  );
+}
