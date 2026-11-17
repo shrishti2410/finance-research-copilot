@@ -7,7 +7,7 @@ import { MarketStrip } from "@/components/landing/MarketStrip";
 import { ProductTour } from "@/components/landing/ProductTour";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { GITHUB_URL } from "@/lib/site";
+import { AUTHOR, GITHUB_URL } from "@/lib/site";
 
 // No figure on this page is a measurement. Measured results live on
 // /methodology, quoted from the benchmark records and checked by
@@ -193,6 +193,22 @@ export default function Landing() {
               <p className="mt-3 text-sm text-fg-muted">{a}</p>
             </details>
           ))}
+        </div>
+      </section>
+
+      <section aria-labelledby="built-by" className="mx-auto max-w-3xl px-4 pt-20 sm:px-6">
+        <div className="flex flex-col gap-3 rounded-[var(--radius-card)] border border-border bg-surface p-6 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 id="built-by" className="text-lg font-semibold text-fg">
+              Built by {AUTHOR.name}
+            </h2>
+            <p className="mt-1 text-sm text-fg-muted">
+              Designed and built end to end: the Python agent and signal engine, the data pipeline, and this site.
+            </p>
+          </div>
+          <Link href="/about" className="flex shrink-0 items-center gap-1 text-sm text-accent hover:underline">
+            About the author <ArrowRight className="size-4" aria-hidden="true" />
+          </Link>
         </div>
       </section>
 

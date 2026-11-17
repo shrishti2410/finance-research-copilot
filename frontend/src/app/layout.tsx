@@ -4,6 +4,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { SiteFooter, SiteHeader } from "@/components/SiteChrome";
 import { SessionWakingNotice } from "@/components/states";
 import { AuthProvider } from "@/lib/auth";
+import { AUTHOR, SITE_DESCRIPTION, SITE_NAME, SITE_URL } from "@/lib/site";
 import "./globals.css";
 
 // Self-hosted by next/font at build time: no request to Google from a visitor.
@@ -11,9 +12,14 @@ const sans = Geist({ subsets: ["latin"], variable: "--font-geist-sans" });
 const mono = Geist_Mono({ subsets: ["latin"], variable: "--font-geist-mono" });
 
 export const metadata: Metadata = {
-  title: "Finance Research Copilot",
-  description:
-    "Answers about public companies grounded in their SEC filings, and a trading-signal lab that reports honestly when it has no edge.",
+  metadataBase: new URL(SITE_URL),
+  title: { default: SITE_NAME, template: `%s · ${SITE_NAME}` },
+  description: SITE_DESCRIPTION,
+  applicationName: SITE_NAME,
+  authors: [{ name: AUTHOR.name, url: AUTHOR.github }],
+  // The images come from app/opengraph-image.png and app/twitter-image.png.
+  openGraph: { type: "website", siteName: SITE_NAME, title: SITE_NAME, description: SITE_DESCRIPTION, url: "/" },
+  twitter: { card: "summary_large_image", title: SITE_NAME, description: SITE_DESCRIPTION },
 };
 
 export const viewport: Viewport = { themeColor: "#0b0f14" };
