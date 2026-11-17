@@ -71,6 +71,7 @@ import numpy as np
 from market.backtest import adjusted_prices, run_backtest
 from market.costs import CostModel, cost_model_for
 from market.markets import Market
+from market import drift
 from market.regime import DEFAULT_RULE, classify, measure
 from market.strategies import STRATEGIES
 from market.universe import FULL_HISTORY_TRADING_DAYS
@@ -142,6 +143,7 @@ class WalkForward:
     fits: list[Fit]                  # per bar from `first`: the fit in force
     regime: list[str]
     measures: dict[str, np.ndarray]
+    drift_downweight: bool = False   # flagged rules' weight halved (market/drift.py)
 
 
 def _sharpe(r: np.ndarray) -> float:
@@ -174,7 +176,9 @@ def _refit(t: int, day: date, candidates: list[str], returns: dict[str, np.ndarr
             skipped[key] = f"warming up: needs {WARMUP[key] + train} bars, has {bars}"
         else:
             s = _sharpe(returns[key][t - train + 1:t + 1])
-            weights[key] = {"train_sharpe": round(s, 4), "weight": max(s, 0.0)}
+            weights[key] = {"train_sharpe": round(s, 4), "weight": max(s, 0.0),
+                            "drift": drift.assess(returns[key], t,
+                                                  history_days=train - drift.RECENT_DAYS)}
     return Fit(on=day, bars=bars, limited=limited, train_days=train,
                weights=weights, skipped=skipped)
 
@@ -204,8 +208,13 @@ def _day_in_month(bars) -> list[int]:
     return out
 
 
+def _drift_multiplier(f: dict, on: bool) -> float:
+    return drift.DOWNWEIGHT if on and f.get("drift", {}).get("flagged") else 1.0
+
+
 def walk_forward(bars, market: Market, model: CostModel | None = None,
-                 regime_rule: str = DEFAULT_RULE, refit_day: int = REFIT_DAY) -> WalkForward:
+                 regime_rule: str = DEFAULT_RULE, refit_day: int = REFIT_DAY,
+                 drift_downweight: bool = False) -> WalkForward:
     model = model or cost_model_for(market.cost_model)
     n = len(bars)
     candidates, excluded = _candidates(market)
@@ -246,7 +255,7 @@ def walk_forward(bars, market: Market, model: CostModel | None = None,
         mult = FIT.get(regime[t], {})
         num = den = 0.0
         for key, f in fit.weights.items():
-            w = f["weight"] * mult.get(STYLE[key], 1.0)
+            w = f["weight"] * mult.get(STYLE[key], 1.0) * _drift_multiplier(f, drift_downweight)
             num += w * _vote(targets[key][t], key, market)
             den += w
         score[t] = num / den if den > 0 else 0.0
@@ -256,7 +265,8 @@ def walk_forward(bars, market: Market, model: CostModel | None = None,
         fits.append(fit)
     return WalkForward(days=[b.day for b in bars], candidates=candidates, excluded=excluded,
                        first=first, score=score, decision=decision, position=position,
-                       targets=targets, fits=fits, regime=regime, measures=m)
+                       targets=targets, fits=fits, regime=regime, measures=m,
+                       drift_downweight=drift_downweight)
 
 
 def _num(x, digits=4):
@@ -273,7 +283,8 @@ def signal_evidence(wf: WalkForward, ticker: str, market: Market, t: int | None 
     fit = wf.fits[t - wf.first]
     regime = wf.regime[t]
     mult = FIT.get(regime, {})
-    effective = {k: f["weight"] * mult.get(STYLE[k], 1.0) for k, f in fit.weights.items()}
+    effective = {k: f["weight"] * mult.get(STYLE[k], 1.0) * _drift_multiplier(f, wf.drift_downweight)
+                 for k, f in fit.weights.items()}
     total = sum(effective.values())
     votes = []
     for key, f in fit.weights.items():
@@ -285,6 +296,8 @@ def signal_evidence(wf: WalkForward, ticker: str, market: Market, t: int | None 
             "train_sharpe": f["train_sharpe"],
             "weight": _num(f["weight"]),
             "regime_multiplier": mult.get(STYLE[key], 1.0),
+            "drift": f.get("drift"),
+            "drift_multiplier": _drift_multiplier(f, wf.drift_downweight),
             "share_of_vote": _num(effective[key] / total) if total > 0 else 0.0,
             "card": f"docs/strategies/{key}.md",
         })

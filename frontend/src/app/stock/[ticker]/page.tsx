@@ -157,7 +157,10 @@ function SignalTab({ report, token, ticker }: { report: SignalReport; token: str
               <li key={v.strategy}>
                 <Card className="p-4">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="font-medium">{v.name}</p>
+                    <p className="flex items-center gap-2 font-medium">
+                      {v.name}
+                      {v.drift?.flagged ? <Badge variant="warn">Drifting</Badge> : null}
+                    </p>
                     <span className="tabular text-xs text-fg-muted">
                       {(v.share_of_vote * 100).toFixed(0)}% of the vote · training Sharpe {v.train_sharpe.toFixed(2)}
                     </span>
@@ -168,6 +171,15 @@ function SignalTab({ report, token, ticker }: { report: SignalReport; token: str
                     </span>
                     <span className="text-fg-subtle"> · {v.style} rule</span>
                   </p>
+                  {v.drift?.flagged ? (
+                    <p className="mt-2 text-xs text-warn">
+                      Its last 60 days fell short of its own history: Sharpe {num(v.drift.recent_sharpe)} recently
+                      against {num(v.drift.history_sharpe)} before (CUSUM {num(v.drift.cusum, 1)}, flagged at 4).
+                      {v.drift_multiplier !== undefined && v.drift_multiplier < 1
+                        ? " Its weight is halved."
+                        : " Shown for information; its weight is not reduced."}
+                    </p>
+                  ) : null}
                   {card?.summary ? <p className="mt-2 text-sm text-fg-muted">{card.summary}</p> : null}
                   {card?.when_it_fails ? (
                     <p className="mt-2 text-sm text-fg-muted">
