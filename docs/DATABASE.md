@@ -20,6 +20,7 @@ users ─1:N─▶ conversations ─1:N─▶ messages
 | `password_hash` | `text` | bcrypt, cost 12 |
 | `display_name` | `varchar(100)` NULL | |
 | `is_active` | `boolean` | default `true` |
+| `is_demo` | `boolean` | default `false`; an account from `POST /auth/demo` (migration `0004_public_demo`) |
 | `created_at` | `timestamptz` | default `now()` |
 
 **UUID rather than `bigserial`.** This id goes into the JWT `sub` claim and into
@@ -157,6 +158,26 @@ agent's `get_financial_fact` tool. The design is in
 - **`NUMERIC`, not float:** these are reported figures and must come back
   exactly as filed.
 
+### `usage_counters`
+
+Questions and hosted-model tokens per UTC day, for the caps a public deployment
+puts on visitors. Migration `0004_public_demo`; written and read only by
+`api/quotas.py`. See [DEPLOY.md](DEPLOY.md).
+
+| column | type | notes |
+|---|---|---|
+| `day` | `DATE` | UTC |
+| `scope` | `VARCHAR(32)` | `demo_account`, `demo_all`, `user`, `hosted_tokens` |
+| `key` | `VARCHAR(64)` | a user id, or `all` |
+| `questions` | `INTEGER` | default 0 |
+| `tokens` | `BIGINT` | default 0; prompt plus completion tokens sent to a hosted provider |
+
+- **Primary key** (`day`, `scope`, `key`). Every write is one conditional
+  `INSERT ... ON CONFLICT DO UPDATE`, which is what makes taking the last
+  question of the day atomic.
+- **In Postgres, not Redis**: the free Redis tier counts every command against a
+  monthly allowance, and a lost counter would lift a cap.
+
 ### Deliberately absent
 
 - **`messages.user_id`** — derivable through the conversation. A second source
@@ -214,6 +235,8 @@ Other details worth knowing:
 | `POST` | `/auth/signup` | → 201 `{access_token, token_type, expires_in}` |
 | `POST` | `/auth/login` | → 200 same shape |
 | `GET` | `/auth/me` | → 200 `{id, email, display_name, created_at}` |
+| `GET` | `/auth/options` | → 200 `{signup, demo, demo_questions_per_account}` |
+| `POST` | `/auth/demo` | → 201 a fresh demo account's token; 404 unless `DEMO_ENABLED` |
 | `POST` | `/conversations` | → 201 `{id, title, created_at, updated_at}` |
 | `GET` | `/conversations` | → 200 list, most recently active first |
 | `POST` | `/conversations/{id}/messages` | → 201 `{id, role, content, meta, created_at}` |

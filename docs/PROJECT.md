@@ -318,6 +318,7 @@ CI runs on GitHub Actions; see [CI.md](CI.md):
 - [INFERENCE.md](INFERENCE.md): inference servers, Ollama settings and the per-call deadline
 - [INFERENCE_REPLICAS.md](INFERENCE_REPLICAS.md): the replica router and the `NUM_PARALLEL` measurements
 - [DEPLOYMENT.md](DEPLOYMENT.md): containers and cloud GPU hosts
+- [DEPLOY.md](DEPLOY.md): the public demo on free tiers (Render, Neon, Upstash, Vercel), with the daily caps that protect the Groq allowance
 - [CI.md](CI.md): the two gates and how to roll back
 - [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md): deliberate trade-offs
 - [../benchmarks/LOAD_TEST_RESULTS.md](../benchmarks/LOAD_TEST_RESULTS.md): the full-stack load test

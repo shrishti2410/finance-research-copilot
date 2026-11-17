@@ -60,6 +60,13 @@ def get_encoder(model_id: str = EMBEDDING_MODEL):
     import torch
     from transformers import AutoModel, AutoTokenizer
 
+    from core.config import settings
+
+    # See Settings.embedding_threads: on a fractional CPU, one thread is ~100x
+    # faster than torch's default of one per core.
+    if settings.embedding_threads:
+        torch.set_num_threads(settings.embedding_threads)
+
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     model = AutoModel.from_pretrained(model_id)
     model.eval()

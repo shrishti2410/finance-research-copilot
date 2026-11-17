@@ -62,6 +62,9 @@ class User(Base):
     # Disable rather than delete: deleting a user cascades their history away, so
     # that should be a deliberate, separate operation.
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    # A throwaway account handed out by POST /auth/demo. Its daily question cap
+    # is the demo's, not a regular account's. See api/quotas.py.
+    is_demo: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -159,6 +162,23 @@ class Message(Base):
 
     def __repr__(self) -> str:
         return f"<Message {self.id} {self.role}>"
+
+
+class UsageCounter(Base):
+    """Questions and hosted-model tokens per UTC day, for the caps in api/quotas.py.
+
+    `scope` says what is counted ("demo_account", "demo_all", "user",
+    "hosted_tokens") and `key` whose ("all", or a user id). Written only by
+    conditional UPSERTs, so the primary key is the whole identity of a row.
+    """
+
+    __tablename__ = "usage_counters"
+
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    scope: Mapped[str] = mapped_column(String(32), primary_key=True)
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    questions: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
 
 
 class XbrlFact(Base):
