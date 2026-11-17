@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-__all__ = ["RISK_FREE_RATE", "DEFAULT_DAYS", "VOL_WINDOW", "STRUCTURES", "Leg", "bs_price",
+__all__ = ["RISK_FREE_RATE", "DEFAULT_DAYS", "VOL_WINDOW", "STRUCTURES", "Leg", "bs_price", "greeks",
            "historical_volatility", "strike_step", "option_structure",
            "structures_for_signal", "ASSUMPTIONS", "DISCLAIMER"]
 
@@ -55,6 +55,7 @@ ASSUMPTIONS = (
     "No dividends; European exercise; strikes are hypothetical round numbers.",
     "Per share: multiply by the exchange's lot size for one contract.",
     "Brokerage, STT and exchange charges on options are not included.",
+    "Greeks are Black-Scholes values at today's price and volatility: theta per calendar day, vega per volatility point.",
 )
 
 
@@ -76,6 +77,43 @@ def bs_price(spot: float, strike: float, years: float, rate: float, sigma: float
     if kind == "call":
         return spot * _cdf(d1) - strike * disc * _cdf(d2)
     return strike * disc * _cdf(-d2) - spot * _cdf(-d1)
+
+
+def _pdf(x: float) -> float:
+    return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
+
+
+def greeks(spot: float, strike: float, years: float, rate: float, sigma: float,
+           kind: str) -> dict[str, float]:
+    """Black-Scholes Greeks of one European option, no dividends.
+
+    delta  change in value per 1 change in the stock price
+    gamma  change in delta per 1 change in the stock price
+    theta  change in value per year that passes (negative: time decay)
+    vega   change in value per 1.00 (100 points) of volatility
+
+    An expired option, or one with no volatility, has delta 1, 0 or -1 by
+    moneyness and no gamma, theta or vega.
+    """
+    if kind not in ("call", "put"):
+        raise ValueError(f"kind must be 'call' or 'put', not {kind!r}")
+    if years <= 0 or sigma <= 0:
+        itm = spot > strike if kind == "call" else spot < strike
+        return {"delta": (1.0 if kind == "call" else -1.0) if itm else 0.0,
+                "gamma": 0.0, "theta": 0.0, "vega": 0.0}
+    root = math.sqrt(years)
+    d1 = (math.log(spot / strike) + (rate + 0.5 * sigma ** 2) * years) / (sigma * root)
+    d2 = d1 - sigma * root
+    disc = math.exp(-rate * years)
+    decay = -spot * _pdf(d1) * sigma / (2.0 * root)
+    if kind == "call":
+        delta = _cdf(d1)
+        theta = decay - rate * strike * disc * _cdf(d2)
+    else:
+        delta = _cdf(d1) - 1.0
+        theta = decay + rate * strike * disc * _cdf(-d2)
+    return {"delta": delta, "gamma": _pdf(d1) / (spot * sigma * root),
+            "theta": theta, "vega": spot * _pdf(d1) * root}
 
 
 def historical_volatility(closes, window: int = VOL_WINDOW) -> float:
@@ -194,6 +232,17 @@ def option_structure(key: str, spot: float, sigma: float, days: int = DEFAULT_DA
         premium = spot if kind == "stock" else bs_price(spot, strike, years, rate, sigma, kind)
         legs.append(Leg(kind, side, strike, round(premium, 4)))
     ext = _extremes(legs)
+    # The structure's Greeks: the sum over its legs, signed by side; a stock
+    # leg has delta 1 and nothing else. Theta per calendar day, vega per one
+    # point of volatility, so both read in rupees (or dollars) per share.
+    total = {"delta": 0.0, "gamma": 0.0, "theta": 0.0, "vega": 0.0}
+    for leg in legs:
+        if leg.kind == "stock":
+            total["delta"] += leg.side
+            continue
+        g = greeks(spot, leg.strike, years, rate, sigma, leg.kind)
+        for greek in total:
+            total[greek] += leg.side * g[greek]
     net = sum(-leg.side * leg.premium for leg in legs if leg.kind != "stock")
     lo, hi = spot * 0.7, spot * 1.3
     # The strikes and breakevens are in the grid, so a chart drawn from it has
@@ -219,6 +268,10 @@ def option_structure(key: str, spot: float, sigma: float, days: int = DEFAULT_DA
         "max_profit_unbounded": ext["max_profit"] is None,
         "max_loss_unbounded": ext["max_loss"] is None,
         "breakevens": ext["breakevens"],
+        "greeks": {"delta": round(total["delta"] * lot_size, 4),
+                   "gamma": round(total["gamma"] * lot_size, 6),
+                   "theta_per_day": round(total["theta"] / 365 * lot_size, 4),
+                   "vega_per_vol_point": round(total["vega"] / 100 * lot_size, 4)},
         "payoff": [{"price": round(float(p), 2), "profit": round(float(v) * lot_size, 2)}
                    for p, v in zip(grid, pay)],
         "card": f"docs/strategies/{key}.md",

@@ -328,6 +328,7 @@ export interface OptionStructure {
   max_profit_unbounded: boolean;
   max_loss_unbounded: boolean;
   breakevens: number[];
+  greeks: { delta: number; gamma: number; theta_per_day: number; vega_per_vol_point: number };
   payoff: { price: number; profit: number }[];
   card: string;
   assumptions: string[];
