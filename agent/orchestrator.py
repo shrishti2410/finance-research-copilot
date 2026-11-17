@@ -53,10 +53,11 @@ from agent.advice import (
     REDIRECTION_WITH_FINDINGS,
     advisory_spans,
 )
-from agent.grounding import unsupported_figures
+from agent.grounding import ungrounded_operands, unsupported_figures
 from agent.untrusted import wrap_tool_result
 from agent.tools import build_registry, compact_for_model
 from core.config import settings
+from tools.calculator import TOOL_NAME as CALCULATOR, is_reference, parse_operand
 from tools.registry import Registry
 
 log = logging.getLogger(__name__)
@@ -138,8 +139,45 @@ UNGROUNDED_RETRY = (
     "turn: {figures}. They are from memory or from an assumption, not from "
     "data, so they cannot be used -- discard them. Either call a tool that "
     "produces them and answer from what it returns, or say plainly that you "
-    "could not establish them. Do not assume a value in order to compute one."
+    "could not establish them. Do not assume a value in order to compute one. "
+    "If one of them is a figure you worked out yourself, your own arithmetic is "
+    "not accepted either: get it from the calculate tool and state the value it "
+    "returns."
 )
+
+# Returned in place of running `calculate` when an operand is a number no tool
+# returned this turn. See agent/grounding.py: a result of the calculator is
+# evidence, so its operands have to be.
+UNGROUNDED_OPERAND = (
+    "calculate was not run. Operand {names} ({values}) {verb} not a figure any "
+    "tool has returned in this turn, so nothing can be computed from {pronoun}. "
+    "Pass a fact reference such as 'NVDA:revenue:2026', or first call the tool "
+    "that returns the figure and then pass the number exactly as it was returned."
+)
+
+
+def _refused_operands(arguments: dict, steps) -> dict | None:
+    """An error envelope if a `calculate` call names a number no tool returned."""
+    numeric = {}
+    for name in ("a", "b"):
+        raw = arguments.get(name)
+        if raw is None or is_reference(raw):
+            continue
+        value = parse_operand(raw)
+        if value is not None:
+            numeric[name] = (raw, value)
+    missing = ungrounded_operands(numeric, steps) if numeric else []
+    if not missing:
+        return None
+    return {
+        "ok": False, "error": "bad_input",
+        "message": UNGROUNDED_OPERAND.format(
+            names=" and ".join(missing),
+            values=", ".join(str(arguments[name]) for name in missing),
+            verb="is" if len(missing) == 1 else "are",
+            pronoun="it" if len(missing) == 1 else "them",
+        ),
+    }
 
 # Used when the retry is spent and figures are still unaccounted for. The
 # answer is prefixed with this rather than replaced: its prose is usually
@@ -1036,6 +1074,14 @@ async def run_agent(
                     outcome = {"ok": False, "error": "bad_input", "message": parse_error}
                     step = Step(
                         iteration=iteration, tool=name or "(unnamed)", arguments={},
+                        result=outcome, latency_ms=0.0, model_latency_ms=model_ms, ok=False,
+                    )
+                elif name == CALCULATOR and (refused := _refused_operands(arguments, steps)):
+                    # Before the tool, not inside it: only the loop knows what
+                    # this turn's tools have returned.
+                    outcome = refused
+                    step = Step(
+                        iteration=iteration, tool=name, arguments=arguments,
                         result=outcome, latency_ms=0.0, model_latency_ms=model_ms, ok=False,
                     )
                 else:

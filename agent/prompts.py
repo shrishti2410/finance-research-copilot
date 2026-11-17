@@ -74,9 +74,16 @@ than one after the other.
 2. Read each result. A result with "ok": false is a failure, not data: read its \
 "message" and either fix the call or work without it. Never invent a number a \
 tool did not return.
-3. When you have enough, answer in prose. Give the figures you used and say \
+3. Never do arithmetic yourself. Any figure a tool did not return as it \
+stands -- a growth rate, a share of revenue, a margin or tax rate from two line \
+items, a market value from shares and a price, a P/E from a price and EPS, a \
+difference between two figures -- comes from the calculate tool: give it the two \
+operands and the operation, and state the value it returns. An operand is a \
+fact reference such as "NVDA:revenue:2026" or a number exactly as a tool \
+returned it. A figure you computed yourself is discarded.
+4. When you have enough, answer in prose. Give the figures you used and say \
 which company and period each belongs to.
-4. End the answer with one line on its own, giving the single number that \
+5. End the answer with one line on its own, giving the single number that \
 answers the question with its unit, exactly as you stated it above: \
 "Final figure: $1.23 billion", "Final figure: 4.56%", "Final figure: 7.8x". \
 If there is no single figure, or you could not establish it, write \

@@ -90,6 +90,35 @@ rounded on its behalf: "$5,484.03 billion" with no rounded price in the text is
 still checked against 223.7097. A figure is never an operand in its own check,
 and a figure that rounds nothing in the evidence adds nothing -- which is what
 keeps 21.93% from 29% and Item 7 refused.
+
+Derived figures come from the calculator, and only from it
+----------------------------------------------------------
+Everything above about derivations describes what this guard did until
+2026-11-16: it reconstructed the model's arithmetic, one step over two
+operands, and accepted a figure it could reach. That made the guard a judge of
+arithmetic it had to guess at, and on the Qwen eval of 2026-11-15 the model's
+own arithmetic was the failure in seven of fourteen cases (26.27% for 26.23%,
+65.51% for 65.47%): the guard refused them correctly and the answer was lost.
+
+The agent now has a `calculate` tool (`tools/calculator.py`), and the rule is
+simpler and stricter:
+
+- **An answer's figure must be in a tool result.** `unsupported_figures` asks
+  for direct support only. A figure the model computed itself is unsupported,
+  however correct, and the retry tells it to use the calculator. A figure the
+  calculator returned is in a tool result like any other.
+- **A calculator operand must be in a tool result too.** Arguments are not
+  evidence, and a result of `calculate` is. Without a check, an invented
+  operand would go in as an argument and come out as evidence: "assume 1.8
+  billion shares", multiplied, would be a grounded market value.
+  `ungrounded_operands` is run by the agent loop before the tool: a numeric
+  operand has to be a figure some earlier successful result of the turn
+  contains, at the precision it is written to. A fact reference
+  ("NVDA:revenue:2026") is looked up by the tool itself and needs no check.
+
+The old rule is kept as `unsupported_figures_reconstructing`, unused by the
+agent loop, until this has been measured on a full eval: putting it back is
+then one line, and the tests that pin its behaviour still run against it.
 """
 
 from __future__ import annotations
@@ -102,7 +131,8 @@ from core.numerics import candidates
 
 __all__ = [
     "Figure", "evidence_values", "derivation_operands", "supported",
-    "unsupported_figures", "RESCALINGS", "MATCH_RELATIVE", "DERIVATION_LIMIT",
+    "unsupported_figures", "unsupported_figures_reconstructing", "ungrounded_operands",
+    "RESCALINGS", "MATCH_RELATIVE", "DERIVATION_LIMIT",
 ]
 
 # How close a value must be to count as the same number. Relative, because the
@@ -437,7 +467,28 @@ def _shown_rounding(figure: Figure, operands: set[float]) -> float | None:
 
 
 def unsupported_figures(answer: str, steps) -> list[Figure]:
-    """Figures in `answer` that no successful tool result accounts for."""
+    """Figures in `answer` that no successful tool result contains.
+
+    Direct support only: the figure, or a rescaling of it, is in a result. A
+    figure the model derived is not accepted on the strength of arithmetic
+    this guard can reconstruct; it has to have come back from the `calculate`
+    tool, whose result is then where it is found. See the module docstring.
+    """
+    evidence = evidence_values(steps)
+    if not evidence:
+        return answer_figures(answer)
+    return [figure for figure in answer_figures(answer)
+            if not _directly_supported(figure.value, evidence)]
+
+
+def unsupported_figures_reconstructing(answer: str, steps) -> list[Figure]:
+    """The rule the agent loop used until 2026-11-16, kept and not called by it.
+
+    Accepts a figure that is in a tool result, or one arithmetic step from two
+    operands. Here so the tests that pin that rule keep running, and so that
+    restoring it, if a full eval says the calculator rule costs more than it
+    buys, is a one-line change in the loop.
+    """
     evidence = evidence_values(steps)
     operands = derivation_operands(steps)
     figures = answer_figures(answer)
@@ -452,6 +503,71 @@ def unsupported_figures(answer: str, steps) -> list[Figure]:
         if not supported(figure.value, evidence, operands | own, figure.half_ulp):
             unsupported.append(figure)
     return unsupported
+
+
+def _written_half_ulp(raw, value: float) -> float:
+    """Half a unit in the last place of an operand as the model wrote it.
+
+    215938000000 claims every digit; "215.9 billion" claims a tenth of a
+    billion; 223.71 claims a cent.
+    """
+    text = raw if isinstance(raw, str) else repr(raw)
+    match = _DIGITS.search(text)
+    if not match:
+        return 0.0
+    try:
+        mantissa = abs(float(match.group(0).replace(",", "")))
+    except ValueError:
+        return 0.0
+    decimals = len(match.group(1)) if match.group(1) else 0
+    scale = abs(value) / mantissa if mantissa else 1.0
+    return (10.0 ** -decimals) * scale / 2
+
+
+_ROUNDED_OPERAND_DIGITS = 3
+
+
+def _significant_digits(raw) -> int:
+    """How many significant digits an operand is written to."""
+    match = _DIGITS.search(raw if isinstance(raw, str) else repr(raw))
+    if not match:
+        return 0
+    text = match.group(0).replace(",", "")
+    digits = text.replace(".", "").lstrip("0")
+    if "." not in text:
+        digits = digits.rstrip("0")       # 24514000000 is five digits, not eleven
+    return len(digits)
+
+
+def ungrounded_operands(operands: dict, steps) -> list[str]:
+    """The numeric operands of a `calculate` call that no tool result contains.
+
+    `operands` maps an operand's name to (what the model sent, the number it
+    parses to). Each must be a figure in an earlier successful result of this
+    turn, directly or rescaled (dollars passed in billions, a ratio passed as
+    a percentage), matched at the precision the operand is written to when
+    that is at least three significant digits, and exactly otherwise. Figures
+    only, by the rule derivations always used: a bare integer in prose
+    ("Item 7") and a tool's bookkeeping (`score`, `count`) are not operands.
+
+    Returns the names that fail, in order. An empty list means every operand
+    was returned by a tool.
+    """
+    figures = derivation_operands(steps)
+    missing = []
+    for name, (raw, value) in operands.items():
+        # A rounding has to say enough to be a rounding of something. "5"
+        # rounds everything from 4.5 to 5.5 in nine scales; an operand written
+        # to fewer than three significant digits must be a figure exactly.
+        half_ulp = (_written_half_ulp(raw, value)
+                    if _significant_digits(raw) >= _ROUNDED_OPERAND_DIGITS else 0.0)
+        grounded = any(
+            _matches_at_precision(value, known * factor, half_ulp)
+            for known in figures for factor in RESCALINGS
+        )
+        if not grounded:
+            missing.append(name)
+    return missing
 
 
 def _stated_derivation(figure: Figure, evidence: set[float], own: set[float]) -> bool:
