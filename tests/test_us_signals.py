@@ -16,6 +16,22 @@ from market.universe import (
 from tests.test_markets_costs import _Recorder
 
 
+def _run(coro):
+    """asyncio.run, then dispose the shared engine: the card excerpts read the
+    database, and pooled connections left on a closed event loop broke the
+    next test file's health check (test_user_isolation skipped as
+    "Postgres unreachable ... AttributeError")."""
+    from db.base import engine
+
+    async def go():
+        try:
+            return await coro
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(go())
+
+
 def test_the_signals_watchlist_is_the_indian_five_and_three_us_stocks():
     assert US_WATCHLIST == ("NVDA", "AAPL", "MSFT") and US_BENCHMARK == "SPY"
     assert SIGNALS_WATCHLIST == (*INDIA_WATCHLIST, *US_WATCHLIST)
@@ -23,7 +39,7 @@ def test_the_signals_watchlist_is_the_indian_five_and_three_us_stocks():
 
 
 def test_the_dashboard_has_both_indices_and_us_cards_in_dollars():
-    out = asyncio.run(service.compute_watchlist(data=_Recorder()))
+    out = _run(service.compute_watchlist(data=_Recorder()))
     assert [c["ticker"] for c in out["stocks"]] == list(SIGNALS_WATCHLIST)
     assert [i["ticker"] for i in out["indices"]] == ["^NSEI", "SPY"]
     assert out["index"]["ticker"] == "^NSEI"                # kept for older clients
@@ -33,7 +49,7 @@ def test_the_dashboard_has_both_indices_and_us_cards_in_dollars():
 
 
 def test_a_us_stock_page_is_benchmarked_on_spy_and_may_vote_short():
-    out = asyncio.run(service.compute_signal_report("NVDA", data=_Recorder()))
+    out = _run(service.compute_signal_report("NVDA", data=_Recorder()))
     assert out["benchmark"] == "SPY" and out["currency"] == "USD"
     assert out["evidence"]["ok"]
     voters = {v["strategy"] for v in out["evidence"]["votes"]}
