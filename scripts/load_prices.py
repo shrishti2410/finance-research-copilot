@@ -26,7 +26,7 @@ from db.base import engine  # noqa: E402
 from market.markets import market_for  # noqa: E402
 from market.service import BACKTEST_WARMUP_CALENDAR_DAYS  # noqa: E402
 from market.store import MarketData  # noqa: E402
-from market.universe import HISTORY_YEARS, INDIA_BENCHMARK, INDIA_WATCHLIST, history_of  # noqa: E402
+from market.universe import HISTORY_YEARS, INDICES, SIGNALS_WATCHLIST, history_of  # noqa: E402
 
 MAX_GAP_DAYS = 7
 
@@ -54,7 +54,7 @@ async def main(tickers: list[str], years: int) -> int:
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("tickers", nargs="*", default=[*INDIA_WATCHLIST, INDIA_BENCHMARK])
+    ap.add_argument("tickers", nargs="*", default=[*SIGNALS_WATCHLIST, *INDICES])
     ap.add_argument("--years", type=int, default=HISTORY_YEARS)
     args = ap.parse_args()
     sys.exit(asyncio.run(main(args.tickers, args.years)))

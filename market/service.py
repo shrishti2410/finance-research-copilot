@@ -260,19 +260,21 @@ SPARKLINE_DAYS = 60
 
 
 async def compute_watchlist(tickers=None, benchmark: str | None = None,
-                    data: MarketData | None = None, now: datetime | None = None) -> dict:
-    """One call for the dashboard: the index strip and a card per stock.
+                            data: MarketData | None = None, now: datetime | None = None) -> dict:
+    """One call for the dashboard: the index strips and a card per stock.
 
     Per ticker: the last close, the change on the previous close, the last
     SPARKLINE_DAYS closes, and for stocks the signal with its coverage and
     confidence. Prices are the traded (split-adjusted) close, as a quote
-    would show; the signal uses its own adjusted series."""
+    would show; the signal uses its own adjusted series. `indices` holds one
+    strip per market (Nifty 50, then SPY); `index` is the first of them, for
+    clients written before the US stocks were added."""
     from market.signals import signal_evidence, walk_forward
-    from market.universe import INDIA_BENCHMARK, INDIA_WATCHLIST
+    from market.universe import INDICES, SIGNALS_WATCHLIST
 
     data = data or MarketData()
-    tickers = [normalize_ticker(t) for t in (tickers or INDIA_WATCHLIST)]
-    benchmark = normalize_ticker(benchmark or INDIA_BENCHMARK)
+    tickers = [normalize_ticker(t) for t in (tickers or SIGNALS_WATCHLIST)]
+    indices = [normalize_ticker(benchmark)] if benchmark else list(INDICES)
 
     def card(symbol, bars):
         closes = [b.close for b in bars]
@@ -282,10 +284,11 @@ async def compute_watchlist(tickers=None, benchmark: str | None = None,
                 "change_pct": round((last / prev - 1.0) * 100, 2) if prev else None,
                 "sparkline": [round(c, 2) for c in closes[-SPARKLINE_DAYS:]]}
 
-    out_index = None
-    bars = await _signal_bars(benchmark, data, now)
-    if len(bars) >= 2:
-        out_index = card(benchmark, bars)
+    strips = []
+    for symbol in indices:
+        bars = await _signal_bars(symbol, data, now)
+        if len(bars) >= 2:
+            strips.append(card(symbol, bars))
     cards = []
     for symbol in tickers:
         bars = await _signal_bars(symbol, data, now)
@@ -301,7 +304,8 @@ async def compute_watchlist(tickers=None, benchmark: str | None = None,
                         "warnings": [w.split(":")[0] for w in ev["warnings"]]}
                        if ev.get("ok") else {"error": ev.get("error")})
         cards.append(c)
-    return {"index": out_index, "stocks": cards, "provider": data.provider.name,
+    return {"index": strips[0] if strips else None, "indices": strips, "stocks": cards,
+            "provider": data.provider.name,
             "disclaimer": "Educational project, not investment advice."}
 
 
@@ -343,6 +347,7 @@ async def compute_signal_report(ticker: str, data: MarketData | None = None,
     cards = await _card_excerpts([v["strategy"] for v in evidence.get("votes", [])[:REPORT_CARD_VOTES]])
     return {
         "ticker": symbol, **market_info(symbol), "provider": data.provider.name,
+        "benchmark": bench,
         "evidence": evidence,
         "verdict": backtest_verdict(symbol, ev),
         "evaluation": {k: ev.get(k) for k in ("ok", "start", "end", "years", "risk", "random",

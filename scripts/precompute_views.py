@@ -1,5 +1,8 @@
 """Compute the dashboard and the watchlist's stock pages, and store them.
 
+The watchlist is market.universe.SIGNALS_WATCHLIST: the five NSE stocks and
+NVDA, AAPL, MSFT (keys: market.precompute.job_keys()).
+
     python scripts/precompute_views.py            # DATABASE_URL from the environment
 
 Run daily after the NSE close by .github/workflows/precompute-signals.yml,
@@ -28,13 +31,13 @@ from market.service import (  # noqa: E402
     compute_watchlist,
 )
 from market.store import MarketData  # noqa: E402
-from market.universe import INDIA_WATCHLIST  # noqa: E402
+from market.universe import SIGNALS_WATCHLIST  # noqa: E402
 
 
 async def main() -> int:
     data = MarketData(write=False)
     jobs = [(precompute.KEY_WATCHLIST, lambda: compute_watchlist(data=data))]
-    for ticker in INDIA_WATCHLIST:
+    for ticker in SIGNALS_WATCHLIST:
         jobs.append((precompute.report_key(ticker), lambda t=ticker: compute_signal_report(t, data=data)))
         jobs.append((precompute.options_key(ticker), lambda t=ticker: compute_option_ideas(t, data=data)))
     print(f"code version {precompute.CODE_VERSION}; {len(jobs)} pages", flush=True)

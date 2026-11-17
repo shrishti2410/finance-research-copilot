@@ -41,7 +41,7 @@ from sqlalchemy import text
 
 from market.markets import NSE, Market
 
-__all__ = ["CODE_VERSION", "KEY_WATCHLIST", "report_key", "options_key", "last_close",
+__all__ = ["CODE_VERSION", "KEY_WATCHLIST", "report_key", "options_key", "job_keys", "last_close",
            "is_fresh", "load", "store", "cached"]
 
 log = logging.getLogger(__name__)
@@ -74,6 +74,17 @@ def report_key(ticker: str) -> str:
 
 def options_key(ticker: str) -> str:
     return f"options:{ticker}"
+
+
+def job_keys() -> list[str]:
+    """What the daily job stores: the dashboard, then each watchlist stock's
+    page and option set."""
+    from market.universe import SIGNALS_WATCHLIST
+
+    keys = [KEY_WATCHLIST]
+    for ticker in SIGNALS_WATCHLIST:
+        keys += [report_key(ticker), options_key(ticker)]
+    return keys
 
 
 def last_close(now: datetime, market: Market = NSE) -> datetime:
