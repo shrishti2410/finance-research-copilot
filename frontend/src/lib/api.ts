@@ -261,6 +261,14 @@ export interface SignalVote {
   regime_multiplier: number;
   share_of_vote: number;
   card: string;
+  drift?: {
+    flagged: boolean;
+    cusum: number;
+    recent_sharpe: number | null;
+    history_sharpe: number | null;
+    note: string | null;
+  };
+  drift_multiplier?: number;
 }
 
 export interface RiskFigures {
