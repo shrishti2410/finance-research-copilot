@@ -277,3 +277,61 @@ def test_one_provider_never_overwrites_anothers_row():
     except Exception as exc:  # noqa: BLE001
         pytest.skip(f"price tables not available ({type(exc).__name__})")
     assert provider == "yfinance" and float(close) == 700.0
+
+
+# --- a fetch made before the latest session close ------------------------------------
+# On 2026-11-17 the local cache held SBIN and the Nifty from a fetch at 18:43 UTC
+# the day before, with a range running to the 17th. That fetch was under 24 hours
+# old, so after the 17th's NSE close it still served every request, without the
+# 17th's bar, and the precompute stored pages built on the 16th's close as fresh.
+
+def _backdate_fetches(to):
+    from db.base import engine
+
+    async def go():
+        async with engine.begin() as conn:
+            await conn.execute(text("UPDATE price_fetches SET fetched_at = :t WHERE ticker = :k"),
+                               {"t": to, "k": TICKER})
+        await engine.dispose()
+    run(go())
+
+
+def _last_close():
+    from datetime import datetime, timezone
+
+    from market.markets import market_for
+    from market.precompute import last_close
+    return last_close(datetime.now(timezone.utc), market_for(TICKER))
+
+
+def test_a_fetch_from_before_the_latest_close_is_refetched_for_a_range_reaching_it(clean):
+    provider = FakeProvider()
+    data = MarketData(provider)
+    close = _last_close()
+    end = close.date()
+    history(data, end - timedelta(days=30), end)
+    _backdate_fetches(close - timedelta(hours=1))     # well inside the 24-hour TTL
+    history(data, end - timedelta(days=30), end)
+    assert len(provider.calls) == 2, "the cached fetch cannot hold the latest session"
+
+
+def test_a_fetch_from_after_the_latest_close_still_serves_the_range(clean):
+    provider = FakeProvider()
+    data = MarketData(provider)
+    close = _last_close()
+    end = close.date()
+    history(data, end - timedelta(days=30), end)
+    _backdate_fetches(close + timedelta(minutes=1))
+    history(data, end - timedelta(days=30), end)
+    assert len(provider.calls) == 1
+
+
+def test_a_range_ending_before_the_latest_session_keeps_the_plain_ttl(clean):
+    provider = FakeProvider()
+    data = MarketData(provider)
+    close = _last_close()
+    end = close.date() - timedelta(days=10)
+    history(data, end - timedelta(days=30), end)
+    _backdate_fetches(close - timedelta(hours=1))
+    history(data, end - timedelta(days=30), end)
+    assert len(provider.calls) == 1, "old history does not change at today's close"
