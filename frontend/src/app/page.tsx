@@ -1,143 +1,208 @@
-import { BadgeCheck, Database, FileSearch, Scale, ShieldCheck, Sigma } from "lucide-react";
+import { ArrowRight, Bot, Calculator, ChevronDown, Database, FileSearch, Layers, LineChart, ShieldCheck, Sigma } from "lucide-react";
+import Link from "next/link";
 
 import { DemoButton } from "@/components/DemoButton";
-import { GITHUB_URL } from "@/components/SiteChrome";
+import { BrowserFrame, Shot, type ShotName } from "@/components/landing/BrowserFrame";
+import { MarketStrip } from "@/components/landing/MarketStrip";
+import { ProductTour } from "@/components/landing/ProductTour";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import metrics from "@/content/site-metrics.json";
+import { GITHUB_URL } from "@/lib/site";
 
-const FEATURES = [
+// No figure on this page is a measurement. Measured results live on
+// /methodology, quoted from the benchmark records and checked by
+// tests/test_site_metrics.py. The counts here (8 stocks, 15 companies) are
+// what the deployment covers.
+
+const FEATURES: { icon: typeof FileSearch; title: string; body: string; shot: ShotName }[] = [
   {
-    icon: ShieldCheck,
-    title: "Every figure is checked",
-    body: "A number in an answer must match something a tool returned. If it does not, the agent tries again or marks the answer unverified.",
+    icon: FileSearch,
+    title: "Ask the filings",
+    body: "Questions about 15 US companies, answered from their 10-K reports and reported figures, with the passages cited.",
+    shot: "feature-research",
   },
   {
-    icon: Scale,
-    title: "Reports, never advises",
-    body: "A second check replaces any answer that tells you to buy, sell or hold with what the data shows.",
+    icon: Layers,
+    title: "Signals with reasons",
+    body: "Textbook rules vote on each stock. Every vote is shown with its weight and a handbook card explaining the rule.",
+    shot: "feature-signal",
   },
   {
     icon: Sigma,
-    title: "Backtests that can say no",
-    body: "Walk-forward weights, Indian trading costs, random-timing baselines and hold-out stocks. The signal is shown with its verdict: no edge.",
+    title: "Honest backtests",
+    body: "Walk-forward, after trading costs, against buy-and-hold and random timing. When there is no edge, it says so.",
+    shot: "feature-backtest",
+  },
+  {
+    icon: LineChart,
+    title: "Options analytics",
+    body: "Payoffs, breakevens and Greeks for common structures, with premiums estimated from historical volatility.",
+    shot: "feature-options",
   },
 ];
 
-function Box({ title, items, tone = "default" }: { title: string; items: string[]; tone?: "default" | "accent" }) {
-  return (
-    <div
-      className={
-        "flex-1 rounded-[var(--radius-card)] border p-4 " +
-        (tone === "accent" ? "border-accent/50 bg-surface-2" : "border-border bg-surface")
-      }
-    >
-      <p className="text-sm font-semibold text-fg">{title}</p>
-      <ul className="mt-2 space-y-1 text-xs text-fg-muted">
-        {items.map((i) => (
-          <li key={i}>{i}</li>
-        ))}
-      </ul>
-    </div>
-  );
-}
+const STEPS = [
+  {
+    icon: Database,
+    title: "Data",
+    body: "SEC 10-K filings and their reported figures, and daily prices for five NSE and three US stocks.",
+  },
+  {
+    icon: Calculator,
+    title: "Python computes",
+    body: "Indicators, signals, backtests, option payoffs, and every ratio or growth rate in an answer are computed in code, not by the model.",
+  },
+  {
+    icon: Bot,
+    title: "AI explains, a checker verifies",
+    body: "A language model explains what the tools returned. A checker flags any figure no tool produced, and replaces any advice to buy or sell.",
+  },
+];
 
-function Arrow() {
-  return (
-    <div aria-hidden="true" className="flex items-center justify-center text-fg-subtle">
-      <span className="hidden text-xl md:inline">→</span>
-      <span className="text-xl md:hidden">↓</span>
-    </div>
-  );
-}
+const FAQ = [
+  {
+    q: "Is this investment advice?",
+    a: "No. It is an educational project. It reports what filings and past prices show, and a guard replaces any answer that tells you to buy, sell or hold. Signals are a vote of textbook rules computed from past prices, not forecasts, and the published backtests found no edge over buy-and-hold.",
+  },
+  {
+    q: "Where does the data come from?",
+    a: "Annual 10-K reports and XBRL reported figures from SEC EDGAR, and daily split-adjusted prices from Yahoo Finance. Option premiums are estimates from historical volatility, not market prices.",
+  },
+  {
+    q: "Why is the first load sometimes slow?",
+    a: "The API runs on a free hosting tier that sleeps after 15 minutes without traffic. The first request after that has to wake it, and the page shows a notice while it waits. Once it is awake, stock pages come from a copy computed once a day after the market close, so they do not wait for the calculations.",
+  },
+  {
+    q: "Which stocks are covered?",
+    a: "Signals cover five NSE stocks (Coforge, Dixon Technologies, State Bank of India, Premier Energies, HDFC Bank) and three US stocks (NVIDIA, Apple, Microsoft). The filings search covers the 10-K reports of 15 US companies.",
+  },
+];
 
 export default function Landing() {
   return (
-    <main className="mx-auto max-w-6xl px-4 sm:px-6">
-      <section className="flex flex-col gap-6 pb-14 pt-16 sm:pt-24">
-        <p className="text-sm font-medium text-accent">Python · FastAPI · Next.js · pgvector · LLM agents</p>
-        <h1 className="max-w-3xl text-4xl font-semibold leading-tight tracking-tight text-fg sm:text-5xl">
-          Grounded answers about public companies. Trading signals that admit when they don&apos;t work.
-        </h1>
-        <p className="max-w-2xl text-lg text-fg-muted">
-          Ask about a company&apos;s annual report and get figures checked against the filing. Explore
-          rule-based signals for eight stocks (five NSE, three US), explained from a strategy knowledge base and shown with
-          their honest backtest results.
-        </p>
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
-          <DemoButton />
-          <Button asChild variant="secondary" size="lg">
-            <a href={GITHUB_URL} target="_blank" rel="noreferrer noopener">
-              View the code on GitHub
-            </a>
-          </Button>
+    <main>
+      <section className="mx-auto grid max-w-6xl items-center gap-10 px-4 pb-12 pt-12 sm:px-6 sm:pt-20 lg:grid-cols-[1fr_1.15fr]">
+        <div className="fade-up flex flex-col gap-6">
+          <h1 className="text-4xl font-semibold leading-[1.1] tracking-tight text-fg sm:text-5xl">
+            Research companies and test trading strategies, with every number checked
+          </h1>
+          <p className="max-w-xl text-lg text-fg-muted">
+            Ask questions answered from SEC filings, explore rule-based signals for Indian and US stocks, and
+            backtest them honestly. Python does the maths, the AI explains it, and a checker verifies each
+            figure.
+          </p>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
+            <DemoButton />
+            <Button asChild variant="secondary" size="lg">
+              <a href="#how-it-works">
+                See how it works <ChevronDown className="size-4" aria-hidden="true" />
+              </a>
+            </Button>
+          </div>
         </div>
+        <BrowserFrame
+          shot="hero-dashboard"
+          priority
+          sizes="(min-width: 1024px) 600px, 100vw"
+          className="fade-up [animation-delay:120ms]"
+        />
       </section>
 
-      <section aria-labelledby="measured" className="pb-14">
-        <h2 id="measured" className="mb-4 text-sm font-semibold uppercase tracking-wider text-fg-subtle">
-          Measured, not claimed
+      <MarketStrip />
+
+      <section aria-labelledby="features" className="mx-auto max-w-6xl px-4 pt-16 sm:px-6">
+        <h2 id="features" className="text-2xl font-semibold tracking-tight text-fg">
+          Filings, signals and backtests in one place
         </h2>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {metrics.metrics.map((m) => (
-            <Card key={m.label} className="flex flex-col gap-2 p-5">
-              <p className="tabular text-3xl font-semibold tracking-tight text-fg">{m.value}</p>
-              <p className="text-sm font-medium text-fg">{m.label}</p>
-              {"secondary" in m && m.secondary ? (
-                <p className="text-sm text-fg">
-                  <span className="tabular text-lg font-semibold">{m.secondary.value}</span>{" "}
-                  <span className="text-fg-muted">{m.secondary.label}</span>
-                </p>
-              ) : null}
-              <p className="text-xs text-fg-muted">{m.detail}</p>
-              <p className="mt-auto pt-2 text-[11px] text-fg-subtle">Source: {m.source}</p>
+        <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {FEATURES.map(({ icon: Icon, title, body, shot }) => (
+            <Card key={title} className="flex flex-col gap-3 p-5 transition-colors hover:border-fg-subtle">
+              <Icon className="size-5 text-accent" aria-hidden="true" />
+              <p className="font-medium text-fg">{title}</p>
+              <p className="text-sm text-fg-muted">{body}</p>
+              <Shot shot={shot} sizes="(min-width: 1024px) 260px, (min-width: 640px) 45vw, 90vw" className="mt-auto" />
             </Card>
           ))}
         </div>
       </section>
 
-      <section aria-labelledby="how" className="pb-14">
-        <h2 id="how" className="mb-4 text-sm font-semibold uppercase tracking-wider text-fg-subtle">
+      <section aria-labelledby="tour" className="mx-auto max-w-6xl px-4 pt-20 sm:px-6">
+        <h2 id="tour" className="text-2xl font-semibold tracking-tight text-fg">
+          A stock page, tab by tab
+        </h2>
+        <p className="mb-6 mt-2 text-fg-muted">Screenshots of the live pages for State Bank of India and NVIDIA.</p>
+        <ProductTour />
+      </section>
+
+      <section aria-labelledby="how-it-works" className="mx-auto max-w-6xl scroll-mt-20 px-4 pt-20 sm:px-6">
+        <h2 id="how-it-works" className="text-2xl font-semibold tracking-tight text-fg">
           How it works
         </h2>
-        <div className="flex flex-col gap-3 md:flex-row md:items-stretch">
-          <Box title="Browser" items={["Next.js app", "Dashboard, charts, research chat"]} />
-          <Arrow />
-          <Box
-            title="API and agent"
-            tone="accent"
-            items={["FastAPI", "Agent loop with tool calls", "Grounding check on every figure", "Advice check on every answer"]}
-          />
-          <Arrow />
-          <Box
-            title="Tools and data"
-            items={[
-              "10-K search (pgvector)",
-              "Reported figures (SEC XBRL)",
-              "Daily prices, cached in Postgres",
-              "Signal engine and backtester (Python)",
-              "Strategy cards (pgvector)",
-            ]}
-          />
-          <Arrow />
-          <Box title="Language model" items={["Hosted: gpt-oss-120b", "Local: Qwen 2.5 on Ollama", "Explains what the tools return"]} />
+        <ol className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-3">
+          {STEPS.map(({ icon: Icon, title, body }, i) => (
+            <li key={title}>
+              <Card className="h-full p-5">
+                <div className="flex items-center gap-3">
+                  <span className="tabular grid size-7 place-items-center rounded-full border border-border text-xs text-fg-muted">
+                    {i + 1}
+                  </span>
+                  <Icon className="size-5 text-accent" aria-hidden="true" />
+                </div>
+                <p className="mt-3 font-medium text-fg">{title}</p>
+                <p className="mt-1 text-sm text-fg-muted">{body}</p>
+              </Card>
+            </li>
+          ))}
+        </ol>
+      </section>
+
+      <section aria-label="Methodology" className="mx-auto max-w-6xl px-4 pt-12 sm:px-6">
+        <Link
+          href="/methodology"
+          className="flex flex-col gap-3 rounded-[var(--radius-card)] border border-border bg-surface px-5 py-4 text-sm text-fg-muted hover:border-fg-subtle hover:text-fg sm:flex-row sm:items-center sm:justify-between"
+        >
+          <span className="flex items-start gap-3 sm:items-center">
+            <ShieldCheck className="size-5 shrink-0 text-accent" aria-hidden="true" />
+            Accuracy, speed and backtest results are measured and published with their sources, including where
+            the signal has no edge.
+          </span>
+          <span className="flex shrink-0 items-center gap-1 pl-8 text-accent sm:pl-0">
+            Methodology <ArrowRight className="size-4" aria-hidden="true" />
+          </span>
+        </Link>
+      </section>
+
+      <section aria-labelledby="faq" className="mx-auto max-w-3xl px-4 pt-20 sm:px-6">
+        <h2 id="faq" className="text-2xl font-semibold tracking-tight text-fg">
+          Questions
+        </h2>
+        <div className="mt-6 divide-y divide-border rounded-[var(--radius-card)] border border-border bg-surface">
+          {FAQ.map(({ q, a }) => (
+            <details key={q} className="group px-5 py-4">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-4 font-medium text-fg">
+                {q}
+                <ChevronDown
+                  className="size-4 shrink-0 text-fg-subtle transition-transform group-open:rotate-180"
+                  aria-hidden="true"
+                />
+              </summary>
+              <p className="mt-3 text-sm text-fg-muted">{a}</p>
+            </details>
+          ))}
         </div>
       </section>
 
-      <section aria-label="Principles" className="grid grid-cols-1 gap-4 pb-6 md:grid-cols-3">
-        {FEATURES.map(({ icon: Icon, title, body }) => (
-          <Card key={title} className="p-5">
-            <Icon className="size-5 text-accent" aria-hidden="true" />
-            <p className="mt-3 font-medium text-fg">{title}</p>
-            <p className="mt-1 text-sm text-fg-muted">{body}</p>
-          </Card>
-        ))}
-      </section>
-
-      <section className="flex flex-wrap gap-x-6 gap-y-2 pb-4 text-xs text-fg-subtle" aria-label="Stack">
-        <span className="inline-flex items-center gap-1.5"><FileSearch className="size-3.5" aria-hidden="true" />RAG over SEC 10-K filings</span>
-        <span className="inline-flex items-center gap-1.5"><Database className="size-3.5" aria-hidden="true" />Postgres with pgvector</span>
-        <span className="inline-flex items-center gap-1.5"><BadgeCheck className="size-3.5" aria-hidden="true" />Tests and evals behind every claim</span>
+      <section className="mx-auto flex max-w-6xl flex-col items-center gap-4 px-4 pt-20 text-center sm:px-6">
+        <h2 className="text-2xl font-semibold tracking-tight text-fg">See it on real data</h2>
+        <p className="max-w-xl text-fg-muted">The demo needs no sign-up. It opens the watchlist with today&apos;s signals.</p>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
+          <DemoButton />
+          <Button asChild variant="secondary" size="lg">
+            <a href={GITHUB_URL} target="_blank" rel="noreferrer noopener">
+              View the code
+            </a>
+          </Button>
+        </div>
       </section>
     </main>
   );
