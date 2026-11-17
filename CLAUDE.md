@@ -51,6 +51,11 @@ back the hybrid search and the larger question set dropped above.
    - Report accuracy with 95% Wilson intervals, and abstention accuracy on the
      unanswerable ones.
    - Run the held-out set only once per change set, within the Groq budget.
+   - Include cross-company questions ("compare NVIDIA and Apple"). Retrieval's
+     company filter (`RETRIEVAL_INFER_COMPANY`) applies only when a question
+     names exactly one company, and these questions check it never hurts the
+     ones that name two. Hybrid retrieval and that filter stay off until this
+     set decides (2026-11-17).
    - New eval questions need approval (see "When to stop for approval").
 3. **Claim-level verification.**
    - For each figure in an answer, store the claim, value, unit, type
