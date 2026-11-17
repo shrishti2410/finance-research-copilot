@@ -127,6 +127,7 @@ import re
 import warnings
 from dataclasses import dataclass
 
+from agent.field_units import unit_of
 from core.numerics import candidates
 
 __all__ = [
@@ -299,39 +300,66 @@ def _walk_figures(value, key: str | None = None) -> list[float]:
 _PERCENT_KEY = re.compile(r"pct|percent", re.I)
 
 
-def _walk_percent(value, key: str | None = None, unit: str | None = None) -> list[float]:
+def _walk_percent(value, tool: str | None = None, path: str = "",
+                  unit: str | None = None) -> list[float]:
     """The values in a tool result that a figure written as a percentage may
     match: percentages as they are, and ratios times 100.
 
     - text: only numbers written with a percent sign ("29%", "71.07 percent");
-    - a numeric field whose key says pct/percent, or whose sibling "unit" is
-      "percent": its value as it is;
-    - any other numeric field (not bookkeeping): its value x 100, a ratio
-      shown as a percentage (gross_margin 0.7107 is 71.07%).
+    - a numeric field: by its declared unit (agent/field_units.py). A field
+      named pct/percent, or whose sibling "unit" is "percent", is a percentage
+      as it is; a ratio counts x 100; a level, count, amount or date is never a
+      percentage (an RSI of 72.3 does not support "72.3%"). An undeclared field
+      counts as a possible ratio, x 100, as before the declarations existed.
     A bare number in text ("5 of 16 rules", "Item 7") is never a percentage.
+    Each value is also offered as its magnitude: "a drawdown of 31.9%" and
+    "fell 12.6%" state a negative fraction without its sign.
     """
     if isinstance(value, bool):
         return []
     if isinstance(value, (int, float)):
-        if key in _BOOKKEEPING_KEYS:
+        key = path.rsplit(".", 1)[-1].replace("[]", "")
+        declared = unit_of(tool, path)
+        if key in _BOOKKEEPING_KEYS and declared is None:
             return []
-        if (key and _PERCENT_KEY.search(key)) or (unit or "").lower() == "percent":
-            return [float(value)]
-        return [float(value) * 100.0]
+        if _PERCENT_KEY.search(key) or (unit or "").lower() == "percent" or declared == "percent":
+            v = float(value)
+        elif declared == "unit_field":
+            v = float(value) if (unit or "").lower() == "percent" else float(value) * 100.0
+        elif declared == "fact":
+            if (unit or "").lower() != "pure":
+                return []
+            v = float(value) * 100.0
+        elif declared in (None, "ratio"):
+            v = float(value) * 100.0
+        else:
+            return []                       # level, count, money, date
+        return [v, abs(v)] if v < 0 else [v]
     if isinstance(value, str):
-        return [c.value for c in candidates(value) if c.is_percent]
+        return [x for c in candidates(value) if c.is_percent
+                for x in ([c.value, abs(c.value)] if c.value < 0 else [c.value])]
     if isinstance(value, dict):
         sibling_unit = value.get("unit") if isinstance(value.get("unit"), str) else None
         out: list[float] = []
         for item_key, item in value.items():
-            out.extend(_walk_percent(item, item_key, sibling_unit))
+            out.extend(_walk_percent(item, tool, f"{path}.{item_key}" if path else item_key,
+                                     sibling_unit))
         return out
     if isinstance(value, (list, tuple)):
         out = []
         for item in value:
-            out.extend(_walk_percent(item, key, unit))
+            out.extend(_walk_percent(item, tool, path + "[]", unit))
         return out
     return []
+
+
+def _successful_tool_results(steps):
+    """(tool name, result) for each successful call, as _successful_results."""
+    for step in steps:
+        tool = getattr(step, "tool", None) or (
+            step.get("tool") if isinstance(step, dict) else None)
+        for result in _successful_results([step]):
+            yield tool, result
 
 
 def _successful_results(steps):
@@ -368,8 +396,8 @@ def percent_evidence(steps) -> set[float]:
     """What a figure written as a percentage may match directly: the
     percentages in this turn's successful results, and their ratios x 100."""
     values: set[float] = set()
-    for result in _successful_results(steps):
-        values.update(_walk_percent(result))
+    for tool, result in _successful_tool_results(steps):
+        values.update(_walk_percent(result, tool))
     return values
 
 
