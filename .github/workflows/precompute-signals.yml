@@ -1,0 +1,43 @@
+name: precompute-signals
+
+# Computes the dashboard and the five watchlist stock pages once a day and
+# stores them in Neon, so the free-tier API serves them in a database read
+# instead of 25-40 s of computing (docs/DEPLOY_V2.md, market/precompute.py).
+#
+# Secret: NEON_PRECOMPUTE_DATABASE_URL, the connection string of the
+# least-privilege role in deploy/neon-precompute-role.sql (not the owner's).
+# Scheduled workflows run from the default branch only, so this takes effect
+# once it is on master.
+
+on:
+  schedule:
+    - cron: "0 11 * * 1-5"   # 11:00 UTC = 16:30 IST, an hour after the NSE close, Mon-Fri
+  workflow_dispatch: {}      # a manual run from the Actions tab
+
+permissions:
+  contents: read             # checkout only; the job never writes to the repository
+
+concurrency:
+  group: precompute-signals
+  cancel-in-progress: false
+
+jobs:
+  precompute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-precompute.txt
+
+      # Only what the signal code needs: no torch, no model weights.
+      - run: pip install -r requirements-precompute.txt
+
+      - name: Compute and store the pages
+        env:
+          DATABASE_URL: ${{ secrets.NEON_PRECOMPUTE_DATABASE_URL }}
+        run: python scripts/precompute_views.py
