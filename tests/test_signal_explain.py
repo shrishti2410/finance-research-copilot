@@ -132,6 +132,10 @@ def test_the_tool_returns_the_evidence_the_verdict_and_the_cards():
             async with engine.begin() as conn:
                 for table in ("price_bars", "price_fetches"):
                     await conn.execute(text(f"DELETE FROM {table} WHERE ticker = 'ZZCHART'"))
+                    # The fake feed also served the default benchmark (SPY for a
+                    # US ticker): remove only its rows, never real ones.
+                    await conn.execute(text(f"DELETE FROM {table} WHERE ticker IN ('SPY', '^NSEI') "
+                                            f"AND provider = 'fake'"))
             await engine.dispose()
 
     original = service.MarketData
