@@ -8,8 +8,9 @@ When a request is served from the cache
 A missing bar is ambiguous: a holiday, or a day nobody fetched. So the cache
 records each range it asked the provider for (`price_fetches`), and a request
 is served from Postgres only when one recorded fetch covers all of it and is
-younger than `MARKET_CACHE_TTL_HOURS` (24 by default). Otherwise the whole
-requested range is fetched again and upserted.
+younger than `MARKET_CACHE_TTL_HOURS` (24 by default) and, when the range
+reaches the market's latest completed session, was made after that session's
+close. Otherwise the whole requested range is fetched again and upserted.
 
 Why a time limit even for old history: `adj_close` is recomputed back through
 history each time a company pays a dividend, so a cached adjusted series goes
@@ -67,7 +68,18 @@ class MarketData:
         self.ttl = ttl if ttl is not None else timedelta(hours=settings.market_cache_ttl_hours)
 
     async def _covered(self, conn, ticker: str, start: date, end: date) -> bool:
-        cutoff = datetime.now(timezone.utc) - self.ttl
+        now = datetime.now(timezone.utc)
+        cutoff = now - self.ttl
+        # A range that reaches the latest completed session needs a fetch made
+        # after that session closed: an earlier one, however young, cannot hold
+        # its bar. (2026-11-17: a fetch from 18:43 UTC the evening before kept
+        # serving NSE data without the 17th's session until 18:43.)
+        from market.markets import market_for
+        from market.precompute import last_close
+
+        close = last_close(now, market_for(ticker))
+        if end >= close.date():
+            cutoff = max(cutoff, close)
         found = (await conn.execute(text(
             "SELECT 1 FROM price_fetches WHERE ticker = :t AND provider = :p "
             "AND start_day <= :s AND end_day >= :e AND fetched_at >= :cutoff LIMIT 1"),
