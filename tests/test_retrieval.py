@@ -50,13 +50,6 @@ def close_loop():
 # SQL construction -- no database needed
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_array_backend_binds_a_list_not_a_string():
-    """asyncpg types a parameter from the SQL, not the value: a `real[]` cast
-    with a string bound to it is a DataError, not a coercion."""
-    bound = vs._bind([0.5, -0.25], vs.BACKEND_ARRAY)
-    assert isinstance(bound, list) and bound == [0.5, -0.25]
-
-
 def test_pgvector_backend_binds_its_text_form():
     """asyncpg has no codec for pgvector's binary format, so the value goes in
     as text and Postgres converts -- which is why _expr casts through text."""
@@ -64,9 +57,9 @@ def test_pgvector_backend_binds_its_text_form():
     assert "AS text" in vs._expr("qvec", vs.BACKEND_PGVECTOR)
 
 
-def test_expr_casts_to_the_column_type_for_each_backend():
-    assert vs._expr("qvec", vs.BACKEND_PGVECTOR).endswith("AS vector)")
-    assert vs._expr("qvec", vs.BACKEND_ARRAY) == "CAST(:qvec AS real[])"
+def test_expr_casts_to_pgvectors_type():
+    assert vs._expr("qvec").endswith("AS vector)")
+    assert not hasattr(vs, "BACKEND_ARRAY"), "the real[] fallback is gone from the main path"
 
 
 @pytest.mark.parametrize(
@@ -159,11 +152,11 @@ def search(query: str, **kwargs):
     return run(search_filings(query, **kwargs))
 
 
-def test_backend_is_one_of_the_two_supported(indexed):
+def test_the_backend_is_pgvector(indexed):
     async def go():
         async with vs.connection() as conn:
             return await vs.detect_backend(conn)
-    assert run(go()) in (vs.BACKEND_PGVECTOR, vs.BACKEND_ARRAY)
+    assert run(go()) == vs.BACKEND_PGVECTOR
 
 
 def test_a_chunk_retrieves_itself_first(indexed):
@@ -282,7 +275,7 @@ def test_stats_reports_the_backend_and_the_corpus(indexed):
             return await vs.stats(conn)
 
     info = run(go())
-    assert info["backend"] in (vs.BACKEND_PGVECTOR, vs.BACKEND_ARRAY)
+    assert info["backend"] == vs.BACKEND_PGVECTOR
     assert info["total_chunks"] >= len(FIXTURE_CHUNKS)
     assert any(doc["ticker"] == "ZZTEST" for doc in info["documents"])
 

@@ -20,6 +20,22 @@ Once the markers are known, a section is the run of body-level blocks between
 its heading and the next item's heading -- so the boundaries come from the
 document's own ordering rather than from guessing where prose stops.
 
+Other filers' markup (found indexing 15 companies on 2026-11-16)
+---------------------------------------------------------------
+Two variations stopped the rule above from finding any section in 18 of 45
+10-Ks, and both are handled without changing what it finds in NVDA's or
+AAPL's (their extracted text is byte-identical before and after):
+
+- **No space after the item number.** Alphabet, Amazon, Meta, Netflix and
+  Walmart set "ITEM 1A." and "RISK FACTORS" in separate spans, so the block's
+  text reads "ITEM 1A.RISK FACTORS". A delimiter after the number now counts
+  on its own; whitespace is still required when there is none, so "Item 1"
+  never matches "Item 1A".
+- **Headings below a wrapper.** Microsoft and JPMorgan put the whole document
+  inside one or two container `<div>`s, so no body-level block is a heading.
+  When the body-level blocks hold neither Item 1A nor Item 7, the containers
+  are opened, a level at a time, and the search runs again.
+
 Nothing here chunks or embeds; that is `chunker.py` and `rag/embeddings.py`.
 """
 
@@ -276,20 +292,66 @@ def _body_blocks(root) -> list:
     return list(body) if body is not None else list(root)
 
 
+# Elements that can hold a section's paragraphs. A body-level block that is a
+# wrapper around many of these is opened by `_unwrap`.
+_CONTAINER_TAGS = {"div", "section", "article", "main"}
+# How many wrapper levels `_unwrap` will open. JPMorgan's headings are two
+# levels down; past three, a "heading" is more likely a cell of something.
+MAX_UNWRAP_LEVELS = 3
+
+
+def _unwrap(blocks: list) -> list:
+    """`blocks` with every container that holds other blocks replaced by its
+    children, one level. Leaves and tables are kept as they are."""
+    out = []
+    for block in blocks:
+        children = [c for c in block if isinstance(c.tag, str)]
+        if block.tag in _CONTAINER_TAGS and len(children) > 1:
+            out.extend(children)
+        else:
+            out.append(block)
+    return out
+
+
+def _blocks_with_sections(root) -> tuple[list, dict[str, int]]:
+    """The block list and its item markers, opening wrappers only when the
+    body-level blocks hold neither Item 1A nor Item 7."""
+    blocks = _body_blocks(root)
+    markers = find_item_markers(blocks)
+    for _ in range(MAX_UNWRAP_LEVELS):
+        if "1A" in markers or "7" in markers:
+            break
+        deeper = _unwrap(blocks)
+        if len(deeper) == len(blocks):
+            break
+        blocks, markers = deeper, find_item_markers(deeper)
+    return blocks, markers
+
+
 def find_item_markers(blocks: list) -> dict[str, int]:
     """Map item id -> index into `blocks` of its real heading.
 
     Skips any candidate with a `<table>` ancestor, which is what removes the
     table-of-contents copy. Where several candidates survive, the last wins:
     a cross-reference to an item always precedes the item itself.
+
+    A bare label ("Item 1A" and nothing else) loses to a titled heading
+    ("ITEM 1A. RISK FACTORS") for the same item. Microsoft prints the bare
+    label as a running header on every page of the section, so "last wins"
+    alone put the marker on the section's last page.
     """
     markers: dict[str, int] = {}
 
     for item in ITEM_ORDER:
         # Require a delimiter after the number so "Item 1" does not swallow
         # "Item 1A", and "Item 9A" is not matched by the pattern for "Item 9".
-        pattern = re.compile(rf"^item\s*{re.escape(item)}\s*[\.\:\)\-–—]?\s", re.I)
+        # A delimiter may be followed directly by the title ("ITEM 1A.RISK
+        # FACTORS", from two spans); with no delimiter, whitespace or the end.
+        pattern = re.compile(
+            rf"^item\s*{re.escape(item)}(?:\s*[\.\:\)\-–—]|\s|$)", re.I)
 
+        bare = re.compile(rf"^item\s*{re.escape(item)}\s*[\.\:\)\-–—]?$", re.I)
+        titled_at = bare_at = None
         for index, block in enumerate(blocks):
             text = _norm(block.text_content())
             if len(text) > MAX_HEADING_CHARS:
@@ -298,7 +360,13 @@ def find_item_markers(blocks: list) -> dict[str, int]:
                 continue
             if block.xpath("ancestor::table"):
                 continue  # table of contents
-            markers[item] = index
+            if bare.match(text):
+                bare_at = index
+            else:
+                titled_at = index
+        found = titled_at if titled_at is not None else bare_at
+        if found is not None:
+            markers[item] = found
 
     return markers
 
@@ -662,8 +730,7 @@ def _to_document(html: str | bytes):
 def parse_10k(html: str | bytes) -> ParsedFiling:
     """Parse a 10-K's primary HTML document into structured sections."""
     root = _to_document(html)
-    blocks = _body_blocks(root)
-    markers = find_item_markers(blocks)
+    blocks, markers = _blocks_with_sections(root)
     repeated = find_boilerplate(blocks)
 
     return ParsedFiling(

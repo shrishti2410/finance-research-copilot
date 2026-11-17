@@ -126,6 +126,45 @@ pins all three, including that finished runs are released from the registry.
 
 ---
 
+## With several years of a company indexed, retrieval returns the wrong year
+
+**What happens.** The step-4 corpus holds three 10-Ks per company. The retrieval
+eval's hit@5 fell from 100.0% on the two eval filings to 75.9% on the 45-filing
+corpus (`benchmarks/STEP4_CORPUS.md`). "NVIDIA's R&D in fiscal 2026" comes back
+with the FY2024 and FY2025 statements: the three years are written in nearly the
+same words, and neither the vector search nor the re-rank knows which year a
+question asks about.
+
+**Why.** Nothing reads the fiscal year out of the question. `search_filings` has
+a `fiscal_period` filter, but the agent is not told to use it, and the retrieval
+eval applies no filter at all.
+
+**What it would take to fix properly.** Read the year a question names and pass
+it as `fiscal_period`, or boost chunks whose `fiscal_period` matches in the
+re-rank. Measure with `python -m eval.retrieval_eval` on the corpus.
+
+**When to revisit.** Before the step-4 corpus replaces the eval's two filings.
+
+**Where the code is.** `rag/retriever.py` (`search_filings`, `rerank`).
+
+---
+
+## Some 10-Ks keep the MD&A or the statements outside the Item headings
+
+**What happens.** JPMorgan's 10-K says its MD&A "appears on pages 46–160" of
+the annual report, a separate exhibit. Exxon Mobil's Item 7 refers to "the
+Financial Section of this report", a part of the document with no Item heading.
+Both MD&As index as 3 chunks. JNJ, JPM, PG and XOM have no income-statement
+table chunk. Their figures are still available from the facts tool.
+
+**What it would take.** Follow the cross-reference: ingest Exhibit 13 for
+JPMorgan, and parse Exxon's Financial Section as a section of its own.
+
+**Where the code is.** `ingestion/parser.py`; the coverage table is in
+`benchmarks/STEP4_CORPUS.md`.
+
+---
+
 ## A round invented figure equal to the difference of two unrelated percentages passes the grounding guard
 
 **What happens.** The grounding guard accepts a figure that is one arithmetic
