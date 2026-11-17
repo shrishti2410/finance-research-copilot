@@ -46,6 +46,14 @@ back the hybrid search and the larger question set dropped above.
      `[Unverified]` banner on a correct answer. This happened to 4 passing
      cases in the 2026-11-17 calculator run
      (`benchmarks/HOSTED_RUN_2026-11-17_CALCULATOR.md`).
+   - **A per-request token budget.** No request to the model may exceed about
+     7,000 tokens, under Groq's 8,000 tokens-a-minute limit.
+     - Two 413s in the calculator run were estimated at 8,100 and 8,250
+       tokens.
+     - Trim large tool results rather than removing tools: keep the relevant
+       table rows and sections, and say in the result what was trimmed.
+     - Log the request size for every model call, so the risk of a 413 is
+       measured, not reconstructed.
    - **Unit-aware grounding.** A percentage must match a percentage, or a ratio
      times 100 (the SBIN "5%" case).
    - **Price-prediction language.** The advice guard flags it.
