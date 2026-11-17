@@ -146,7 +146,16 @@ it.
      retries, caching and TTLs, staleness.
    - A light load test (10 to 25 concurrent users) on the non-LLM endpoints
      only: p50/p95/p99, error rate, memory.
-   - A backup LLM provider.
+   - A backup LLM provider, with failover. On a provider's 5xx or a timeout,
+     the turn moves to the second provider rather than ending.
+   - Release the database connection during model calls. A chat run must not
+     hold a pooled connection while it waits on the model; today
+     `DB_POOL_SIZE + DB_MAX_OVERFLOW` (15) caps the questions in flight
+     (`db/base.py`).
+   - An alert when the daily precompute job fails, which today shows only as a
+     red run in GitHub Actions.
+   - External uptime monitoring of `/health/ready`, on a free plan.
+   (Open questions from the 2026-11-17 draft of `docs/SYSTEM_DESIGN.md`.)
 5. **Product.**
    - A Strategy Lab comparison, extending `/backtest`: strategies side by side
      on the same stock, period and costs.
