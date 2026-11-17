@@ -105,6 +105,49 @@ Environment variables:
 | everything else | unchanged (`DATABASE_URL`, `REDIS_URL`, `JWT_SECRET`, `INTERNAL_TOKEN`, `GROQ_API_KEY`, `SEC_EDGAR_USER_AGENT`, `CORS_ORIGINS`, `ENVIRONMENT`, provider settings) |
 
 After deploy, `/health/ready` should report `"migration": "0009_filing_chunks_fts"`.
+
+**Let Render's start run the migrations; do not migrate Neon ahead of the switch.**
+Checked on 2026-11-17 against the version 1 code (`feat/step4-corpus`,
+`ea83580`, migration head `0005_pgvector_required`):
+- Its alembic does not know `0009_filing_chunks_fts`: `Can't locate revision
+  identified by '0009_filing_chunks_fts'` (`CommandError`).
+- Its `scripts/start.sh` runs `alembic upgrade head` under `set -eu`. Once Neon
+  is at 0009, the next start of version 1 therefore exits before serving. The
+  free instance restarts after every 15-minute idle sleep.
+- The schema changes themselves are additive. A version 1 process that is
+  already running would keep answering, but it would not survive its next
+  sleep.
+- Migrating ahead would also remove the way back: version 1 could not be
+  redeployed against Neon without a downgrade.
+
+On Render's first start of the merged code, 0006 to 0009 run in one transaction
+(`migrations/env.py` opens one transaction for the whole upgrade, and Postgres
+DDL is transactional). A failure rolls all four back and leaves Neon at 0005.
+Whether Render then keeps the version 1 instance serving was **not verified**.
+
+**What to watch in Render's logs, in order:**
+1. `start: migrating the database to head`
+2. `Will assume transactional DDL.`
+3. Four `Running upgrade` lines, in order:
+   - `0005_pgvector_required -> 0006_price_bars`
+   - `0006_price_bars -> 0007_strategy_cards`
+   - `0007_strategy_cards -> 0008_precomputed_views`
+   - `0008_precomputed_views -> 0009_filing_chunks_fts`
+4. `start: serving on port ...`, then uvicorn's `Application startup complete`.
+   The bge-small preload comes before the service is healthy; it took 157 s at
+   `--cpus=0.1` locally (`docs/DEPLOY.md`).
+
+**Trouble signs:**
+- `Can't locate revision`: Render built a branch that does not hold 0009. Check
+  that the branch is `master`.
+- `permission denied`: the `DATABASE_URL` role cannot run DDL.
+- A long pause after the 0009 line: the table rewrite. Neon holds 2,914 chunks,
+  so this should take seconds. That figure is inferred from the row count, not
+  timed.
+- No `serving` line before Render gives up: read the last line printed.
+
+Load the strategy cards (section 2, step 3) only after the `serving` line,
+when the tables exist.
 The container became healthy 79 s after start at `--cpus=0.1` locally; the
 first request after Render's idle spin-down pays that, and the frontend shows
 its "Waking the API" notice.
