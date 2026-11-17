@@ -61,7 +61,7 @@ export default function Landing() {
         </h1>
         <p className="max-w-2xl text-lg text-fg-muted">
           Ask about a company&apos;s annual report and get figures checked against the filing. Explore
-          rule-based signals for five NSE stocks, explained from a strategy knowledge base and shown with
+          rule-based signals for eight stocks (five NSE, three US), explained from a strategy knowledge base and shown with
           their honest backtest results.
         </p>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
