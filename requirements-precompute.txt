@@ -1,0 +1,11 @@
+# What scripts/precompute_views.py imports, and nothing else: the daily job
+# (.github/workflows/precompute-signals.yml) installs this instead of
+# requirements.txt, which pulls in torch and the embedding model.
+# Same packages and constraints as requirements.txt.
+pydantic
+pydantic-settings
+sqlalchemy>=2.0
+greenlet
+asyncpg
+numpy
+yfinance

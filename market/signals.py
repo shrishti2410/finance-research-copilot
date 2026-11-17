@@ -179,8 +179,20 @@ def _refit(t: int, day: date, candidates: list[str], returns: dict[str, np.ndarr
                weights=weights, skipped=skipped)
 
 
-def _vote(position: float, allows_short: bool) -> float:
-    return float(position) if allows_short else 2.0 * float(position) - 1.0
+def _vote(position: float, key: str, market: Market) -> float:
+    """A rule's vote: +1 in the stock, -1 out of it (or short).
+
+    By the rule, not the market. A long-or-flat rule that is flat votes -1
+    in every market; only a rule that can go short, on a market that allows
+    it, votes its position (+1 long, -1 short, 0 flat). Until 2026-11-17 the
+    vote followed the market, so on a US stock a flat long-only rule voted 0,
+    the score almost never reached SELL, and the signal held NVDA for five
+    years without a break (equal to buy-and-hold). NSE stocks never allowed
+    shorts and are unchanged.
+    """
+    if STRATEGIES[key].allows_short and market.allows_overnight_short:
+        return float(position)
+    return 2.0 * float(position) - 1.0
 
 
 def _day_in_month(bars) -> list[int]:
@@ -235,7 +247,7 @@ def walk_forward(bars, market: Market, model: CostModel | None = None,
         num = den = 0.0
         for key, f in fit.weights.items():
             w = f["weight"] * mult.get(STYLE[key], 1.0)
-            num += w * _vote(targets[key][t], shorting)
+            num += w * _vote(targets[key][t], key, market)
             den += w
         score[t] = num / den if den > 0 else 0.0
         decision[t] = "BUY" if score[t] >= BUY_AT else "SELL" if score[t] <= SELL_AT else "HOLD"
@@ -263,14 +275,13 @@ def signal_evidence(wf: WalkForward, ticker: str, market: Market, t: int | None 
     mult = FIT.get(regime, {})
     effective = {k: f["weight"] * mult.get(STYLE[k], 1.0) for k, f in fit.weights.items()}
     total = sum(effective.values())
-    shorting = market.allows_overnight_short
     votes = []
     for key, f in fit.weights.items():
         pos = float(wf.targets[key][t])
         votes.append({
             "strategy": key, "name": STRATEGIES[key].name, "style": STYLE[key],
             "position": "in" if pos > 0 else ("short" if pos < 0 else "out"),
-            "vote": _vote(pos, shorting),
+            "vote": _vote(pos, key, market),
             "train_sharpe": f["train_sharpe"],
             "weight": _num(f["weight"]),
             "regime_multiplier": mult.get(STYLE[key], 1.0),

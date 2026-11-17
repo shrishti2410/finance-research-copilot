@@ -11,8 +11,8 @@ Prepared on 2026-11-17. Nothing here has been deployed.
 
 | item | state | why it matters |
 |---|---|---|
-| Precompute the signal pages | **proposed, not built** (section 6) | On the free tier's 0.1 CPU the dashboard took 25-36 s and a stock page 30-40 s per visit (measured, section 5). |
-| "Ask the agent to explain" | wired to local Ollama only | On Render it returns an error until it is wired to the hosted model (planned after the 2026-11-17 eval, behind the token caps). Hide the button until then, or leave it with its error state. |
+| Precompute the signal pages | **built** (`5f55ed9`, `149b5eb`); needs the role and secret, section 6 | Without it the dashboard took 25-36 s and a stock page 30-40 s on the free tier; with it 0.04-0.34 s (measured, section 6). |
+| "Ask the agent to explain" | hidden unless the build sets `NEXT_PUBLIC_ENABLE_AGENT_EXPLAIN=1` (`fe00bd2`) | The endpoint runs on local Ollama only; it is wired to the hosted model after the 2026-11-17 eval, behind the token caps. Leave the variable unset on Vercel until then. |
 | Calculator branch | merges after the 2026-11-17 eval and your approval | It is part of the merge order below; deploying without it is also possible. |
 | Docker image | fixed (`5206c28`) | Before the fix the image had no `market/` package and the API exited at start-up. |
 
@@ -55,6 +55,7 @@ rows, 1 user; no `price_bars`, `price_fetches` or `strategy_cards`; 55 MB.
 |---|---|---|
 | `0006_price_bars` | `price_bars`, `price_fetches`: the daily price cache | none required: filled on first request per ticker and refreshed after `MARKET_CACHE_TTL_HOURS` (24). Preloading avoids the first visitor paying the fetch. |
 | `0007_strategy_cards` | `strategy_cards`: one row per card section, `vector(384)`, no index | **required** for the card text on the Signal tab and in explanations: 26 cards, 182 sections |
+| `0008_precomputed_views` | `precomputed_views`: the daily stock pages | none: written by the daily job (section 6) and by the first visitor when a page is missing or stale |
 
 `scripts/start.sh` runs `alembic upgrade head` on every Render start, so
 deploying the merged code applies both migrations by itself. The data is loaded
@@ -68,7 +69,7 @@ needed except the bge-small weights for the cards):
 $env:DATABASE_URL = ((Get-Content .env.neon) -match '^DATABASE_URL=')[0].Substring(13)
 
 # 2. Schema (skip if Render has already started on the merged code)
-alembic upgrade head                    # 0006, 0007
+alembic upgrade head                    # 0006, 0007, 0008
 python scripts/check_migration.py       # models and migrations agree
 
 # 3. Strategy cards: validate, then embed and write 182 sections
@@ -82,7 +83,7 @@ python scripts/load_prices.py --years 8
 Remove-Item Env:DATABASE_URL
 ```
 
-**Check afterwards** (read only): `alembic_version` = `0007_strategy_cards`;
+**Check afterwards** (read only): `alembic_version` = `0008_precomputed_views`;
 `strategy_cards` = 182 rows; `price_bars` about 13,500 rows if step 4 ran
 (5 x 2,246 + 2,241 locally). Size grows by a few MB.
 
@@ -102,7 +103,7 @@ Environment variables:
 | `MARKET_CACHE_TTL_HOURS` | new, optional; default 24 |
 | everything else | unchanged (`DATABASE_URL`, `REDIS_URL`, `JWT_SECRET`, `INTERNAL_TOKEN`, `GROQ_API_KEY`, `SEC_EDGAR_USER_AGENT`, `CORS_ORIGINS`, `ENVIRONMENT`, provider settings) |
 
-After deploy, `/health/ready` should report `"migration": "0007_strategy_cards"`.
+After deploy, `/health/ready` should report `"migration": "0008_precomputed_views"`.
 The container became healthy 79 s after start at `--cpus=0.1` locally; the
 first request after Render's idle spin-down pays that, and the frontend shows
 its "Waking the API" notice.
@@ -145,36 +146,66 @@ evaluation, including 200 random re-timings, in Python loops; the dashboard
 runs the walk-forward engine for five stocks. All of it depends only on daily
 closes.
 
-## 6. Proposal: compute the signal pages once a day
+## 6. The daily precompute (built)
 
-**Measured cost at full speed:** on one uncapped core, the whole day's set
-(dashboard, five stock reports, five option sets) took 34.8 s (4.1 + 16.0 +
-14.7 s).
+**What it does** (`market/precompute.py`, `scripts/precompute_views.py`):
 
-**Design**
+- After the NSE close, the job computes the dashboard and the five watchlist
+  stock pages and option sets and stores them in `precomputed_views`.
+- A stored page is served when it was computed after the latest weekday
+  session close and by the same signal code (a hash of the `market/` sources).
+  Otherwise the API computes the page for that visitor and stores it.
+- The job reads prices without writing the price cache, so its role needs no
+  write access there.
 
-- A table `precomputed_views (key, as_of, payload jsonb, computed_at,
-  code_version)`, migration 0008. Keys: `watchlist`, `report:<ticker>`,
-  `options:<ticker>`. About 60 KB per stock page, 5 KB for the dashboard.
-- `scripts/precompute_views.py` computes the set for the watchlist and upserts
-  it.
-- A GitHub Actions workflow on a weekday cron an hour after the NSE close
-  (15:30 IST, 10:00 UTC; so 11:00 UTC) runs it against Neon. It needs the Neon URL as a
-  repository secret. It does not wake Render and uses no model.
-- The endpoints serve the stored payload when its `as_of` is the latest
-  completed session and its `code_version` matches. Otherwise they compute as
-  now and store the result, so a missed job costs one slow visit, not all of
-  them.
-- Separately, the options call should reuse the stored report's verdict instead
-  of rerunning the evaluation.
+**Measured at Render's limits** (`--memory=512m --cpus=0.1`, the trial-merged
+image, local pgvector database, 2026-11-17 05:47 UTC):
 
-**Expected effect (inferred, not measured):** the dashboard and stock pages
-become a database read of tens of kilobytes. A ticker outside the watchlist
-still takes the live path, about 35-40 s.
+| call | before (section 5) | precomputed |
+|---|---|---|
+| dashboard | 24.8-36.4 s | 0.29 s, then 0.04 s |
+| stock page (SBIN) | 29.6-33.3 s | 0.07 s, then 0.05 s |
+| options (SBIN) | 30.2-31.4 s | 0.34 s, then 0.04 s |
+| stock page with no stored page (LT.NS) | | 24.3 s (computed and stored), then 0.04 s |
 
-**Not decided:** adding a GitHub secret and a scheduled workflow is your call.
-The alternative without a secret is the lazy store alone: the first visitor of
-the day per stock waits, everyone after that does not.
+Peak memory 156 MiB. The job itself, in a fresh venv with only
+`requirements-precompute.txt` and connected as the restricted role: 11 pages,
+0 failed, 45.4 s.
+
+**The job's database role** (`deploy/neon-precompute-role.sql`):
+`signals_precompute` can SELECT `price_bars`, `price_fetches` and
+`strategy_cards`, and SELECT/INSERT/UPDATE `precomputed_views`. It has nothing
+else, at most two connections, and a 120 s statement timeout. It is created
+with SQL, because roles created in the Neon Console become members of
+`neon_superuser`.
+
+**Your steps, after the merge** (the workflow runs from `master` only):
+
+1. Neon at `0008_precomputed_views`: after Render has started on the merged
+   code, or with step 2 of section 2.
+2. `gh auth status`: the GitHub CLI logged in to this repository's account.
+3. From the repository root: `python scripts/create_precompute_role.py`.
+   - It reads the owner URL from `.env.neon` and generates a password in
+     memory.
+   - It creates the role (or rotates its password) and applies the grants.
+   - It checks, as the new role, that the grants work and the refusals hold.
+   - Only then it passes the role's URL to
+     `gh secret set NEON_PRECOMPUTE_DATABASE_URL`.
+   - Neither the URL nor the password is printed. Running it again rotates
+     both.
+4. GitHub > Actions > precompute-signals > **Run workflow**. The log should
+   end with `11 stored, 0 failed`.
+5. Open the dashboard: the response carries `"served": {"from": "precomputed"}`.
+
+**Without the script:** in the Neon SQL editor, as the owner, run
+`CREATE ROLE signals_precompute WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD '<a long random password>'`
+and then `deploy/neon-precompute-role.sql`. Then add the role's connection
+string under GitHub > Settings > Secrets and variables > Actions as
+`NEON_PRECOMPUTE_DATABASE_URL`.
+
+**Not built:** the options call still reruns the evaluation on the live path
+(only the stored copy is fast). Reusing the stored report's verdict there
+would cut the fallback for options.
 
 ## 7. After deploying
 

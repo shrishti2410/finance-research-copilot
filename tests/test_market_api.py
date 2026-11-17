@@ -19,6 +19,9 @@ from market.providers import Bar
 from market.store import MarketData
 
 TICKERS = ("ZZCHART", "ZZBENCH")
+# Analytics compare a US ticker with SPY by default, so the fake feed writes
+# SPY rows too; only those (provider 'fake') are removed, never real ones.
+FAKE_ALSO = ("SPY", "^NSEI")
 
 
 class Fake:
@@ -50,6 +53,11 @@ def fake_market(monkeypatch):
             for t in TICKERS:
                 await conn.execute(text("DELETE FROM price_bars WHERE ticker = :t"), {"t": t})
                 await conn.execute(text("DELETE FROM price_fetches WHERE ticker = :t"), {"t": t})
+            for t in FAKE_ALSO:
+                await conn.execute(text("DELETE FROM price_bars WHERE ticker = :t AND provider = 'fake'"),
+                                   {"t": t})
+                await conn.execute(text("DELETE FROM price_fetches WHERE ticker = :t AND provider = 'fake'"),
+                                   {"t": t})
         await engine.dispose()
 
     try:

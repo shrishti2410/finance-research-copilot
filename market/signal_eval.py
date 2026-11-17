@@ -191,6 +191,14 @@ def evaluate(bars, nifty_bars, market: Market, years: int = 5, n_random: int = N
     }
 
 
+def _share(p: float) -> str:
+    """A share of the random runs as a percentage, exactly: 89 of 200 is
+    "44.5", not "44" (Python) or "45" (the browser), which disagreed on the
+    page. One decimal is enough: the runs are 200."""
+    text = f"{p * 100:.1f}"
+    return text[:-2] if text.endswith(".0") else text
+
+
 def _pct_text(x: float) -> str:
     return f"{x * 100:.1f}%"
 
@@ -217,7 +225,7 @@ def backtest_verdict(ticker: str, ev: dict) -> dict:
     figures = (f"the signal returned {_pct_text(s['cagr'])} a year against "
                f"{_pct_text(b['cagr'])} for buy-and-hold, with a Sharpe ratio of "
                f"{s['sharpe']:.2f} against {b['sharpe']:.2f}, and beat "
-               f"{pct * 100:.0f}% of {ev['random']['runs']} random re-timings of its own trades "
+               f"{_share(pct)}% of {ev['random']['runs']} random re-timings of its own trades "
                f"({EDGE_PERCENTILE * 100:.0f}% would be needed to rule out luck)")
     span = f"{years:g}-year" if years >= 1 else f"{ev['trading_days']}-day"
     if edge:

@@ -187,3 +187,93 @@ def test_a_refetch_that_omits_a_cached_bar_does_not_lose_it(monkeypatch):
         pytest.skip(f"price tables not available ({type(exc).__name__}); migrate to 0006")
     assert [b.day for b in first] == days
     assert [b.day for b in second] == days and second[-1].close == 4.0
+
+
+def test_another_providers_rows_are_never_read_into_this_series():
+    """A test's fake feed wrote SPY rows into a shared cache; on days the real
+    provider has no bar they were merged into the real series."""
+    import asyncio as _asyncio
+    from datetime import timedelta as _td
+
+    from db.base import engine as _engine
+    from market.providers import Bar as _Bar
+    from market.store import MarketData as _MarketData
+
+    class Named:
+        def __init__(self, name, price, days):
+            self.name, self.price, self.days = name, price, days
+
+        def daily_bars(self, ticker, start, end):
+            return [_Bar(day=d, open=self.price, high=self.price, low=self.price,
+                         close=self.price, adj_close=self.price, volume=1) for d in self.days]
+
+    real_days = [date(2026, 9, 4), date(2026, 9, 8)]
+    fake_days = [date(2026, 9, 4), date(2026, 9, 7), date(2026, 9, 8)]   # 9-7: a US holiday
+
+    async def go():
+        from sqlalchemy import text as _text
+        try:
+            async with _engine.begin() as conn:
+                for table in ("price_bars", "price_fetches"):
+                    await conn.execute(_text(f"DELETE FROM {table} WHERE ticker = 'ZZMIX'"))
+            await _MarketData(Named("fake", 200.0, fake_days), ttl=_td(0)).history(
+                "ZZMIX", date(2026, 9, 1), date(2026, 9, 9))
+            real = await _MarketData(Named("yfinance", 700.0, real_days), ttl=_td(0)).history(
+                "ZZMIX", date(2026, 9, 1), date(2026, 9, 9))
+            async with _engine.begin() as conn:
+                for table in ("price_bars", "price_fetches"):
+                    await conn.execute(_text(f"DELETE FROM {table} WHERE ticker = 'ZZMIX'"))
+            return real
+        finally:
+            await _engine.dispose()
+
+    try:
+        real = _asyncio.run(go())
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"price tables not available ({type(exc).__name__})")
+    assert [b.day for b in real] == real_days and {b.close for b in real} == {700.0}
+
+
+def test_one_provider_never_overwrites_anothers_row():
+    """A test's fake feed replaced eight years of real SPY rows through the
+    upsert. Now the real row stays, and the fake one is not stored over it."""
+    import asyncio as _asyncio
+    from datetime import timedelta as _td
+
+    from db.base import engine as _engine
+    from market.providers import Bar as _Bar
+    from market.store import MarketData as _MarketData
+
+    day = date(2026, 9, 8)
+
+    class Named:
+        def __init__(self, name, price):
+            self.name, self.price = name, price
+
+        def daily_bars(self, ticker, start, end):
+            return [_Bar(day=day, open=self.price, high=self.price, low=self.price,
+                         close=self.price, adj_close=self.price, volume=1)]
+
+    async def go():
+        from sqlalchemy import text as _text
+        try:
+            async with _engine.begin() as conn:
+                for table in ("price_bars", "price_fetches"):
+                    await conn.execute(_text(f"DELETE FROM {table} WHERE ticker = 'ZZKEEP'"))
+            await _MarketData(Named("yfinance", 700.0), ttl=_td(0)).history("ZZKEEP", day, day)
+            await _MarketData(Named("fake", 200.0), ttl=_td(0)).history("ZZKEEP", day, day)
+            async with _engine.connect() as conn:
+                row = (await conn.execute(_text(
+                    "SELECT provider, close FROM price_bars WHERE ticker = 'ZZKEEP'"))).one()
+            async with _engine.begin() as conn:
+                for table in ("price_bars", "price_fetches"):
+                    await conn.execute(_text(f"DELETE FROM {table} WHERE ticker = 'ZZKEEP'"))
+            return row
+        finally:
+            await _engine.dispose()
+
+    try:
+        provider, close = _asyncio.run(go())
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"price tables not available ({type(exc).__name__})")
+    assert provider == "yfinance" and float(close) == 700.0

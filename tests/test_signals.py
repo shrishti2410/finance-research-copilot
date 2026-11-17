@@ -324,3 +324,20 @@ def test_the_refit_day_can_be_moved_to_measure_its_effect():
     assert all(sum(1 for d in b.days[:b.days.index(x)] if (d.year, d.month) == (x.year, x.month))
                == 10 for x in days_b)
     assert sorted({f.on for f in a.fits}) != sorted({f.on for f in b.fits})
+
+
+def test_a_flat_long_only_rule_votes_out_on_every_market():
+    """On a US stock a flat long-only rule used to vote 0, so the score
+    hardly ever reached SELL and NVDA was held for five years straight."""
+    assert sg._vote(0.0, "sma_cross", US) == -1.0 and sg._vote(1.0, "sma_cross", US) == 1.0
+    assert sg._vote(0.0, "sma_cross", NSE) == -1.0
+    assert sg._vote(-1.0, "sma_cross_long_short", US) == -1.0
+    assert sg._vote(0.0, "sma_cross_long_short", US) == 0.0
+
+
+def test_a_us_stock_gets_sell_signals_when_its_rules_are_out():
+    falling = _walk(1100, seed=21, drift=-0.0015, vol=0.012)
+    wf = sg.walk_forward(falling, US)
+    decided = [d for d in wf.decision[wf.first:] if d]
+    assert decided.count("SELL") > 0
+    assert wf.position[wf.first:].min() == 0.0                   # it does get out

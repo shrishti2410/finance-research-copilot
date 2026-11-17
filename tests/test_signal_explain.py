@@ -132,6 +132,10 @@ def test_the_tool_returns_the_evidence_the_verdict_and_the_cards():
             async with engine.begin() as conn:
                 for table in ("price_bars", "price_fetches"):
                     await conn.execute(text(f"DELETE FROM {table} WHERE ticker = 'ZZCHART'"))
+                    # The fake feed also served the default benchmark (SPY for a
+                    # US ticker): remove only its rows, never real ones.
+                    await conn.execute(text(f"DELETE FROM {table} WHERE ticker IN ('SPY', '^NSEI') "
+                                            f"AND provider = 'fake'"))
             await engine.dispose()
 
     original = service.MarketData
@@ -151,3 +155,9 @@ def test_the_tool_returns_the_evidence_the_verdict_and_the_cards():
         assert all(c["source"].startswith("docs/strategies/") for c in out["cards"])
     else:
         assert out["cards_note"] == "strategy cards are not indexed"
+
+
+def test_the_random_share_is_stated_exactly_not_rounded_two_ways():
+    assert "beat 44.5% of 200" in backtest_verdict("X", _ev(0.1, 0.2, 0.5, 0.9, 0.445))["statement"]
+    assert "beat 0% of 200" in backtest_verdict("X", _ev(0.1, 0.2, 0.5, 0.9, 0.0))["statement"]
+    assert "beat 89% of 200" in backtest_verdict("X", _ev(0.1, 0.2, 0.5, 0.9, 0.89))["statement"]
