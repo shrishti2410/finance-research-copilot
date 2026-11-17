@@ -12,6 +12,8 @@ name: precompute-signals
 on:
   schedule:
     - cron: "0 11 * * 1-5"   # 11:00 UTC = 16:30 IST, an hour after the NSE close, Mon-Fri
+    - cron: "0 22 * * 1-5"   # 22:00 UTC, after the US close (21:00 UTC in winter, 20:00 in
+                             # summer), so the US pages carry that day's bar
   workflow_dispatch: {}      # a manual run from the Actions tab
 
 permissions:

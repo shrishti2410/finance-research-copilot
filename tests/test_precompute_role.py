@@ -35,7 +35,8 @@ def test_the_job_role_is_granted_exactly_what_the_job_needs():
 
 def test_the_workflow_runs_after_the_close_with_the_role_secret_and_read_only_permissions():
     wf = (ROOT / ".github/workflows/precompute-signals.yml").read_text(encoding="utf-8")
-    assert 'cron: "0 11 * * 1-5"' in wf
+    assert 'cron: "0 11 * * 1-5"' in wf          # after the NSE close
+    assert 'cron: "0 22 * * 1-5"' in wf          # after the US close
     assert re.search(r"^permissions:\n\s+contents: read\b", wf, re.M)
     assert not re.search(r":\s*write\b", wf)             # no write permission anywhere
     assert "secrets.NEON_PRECOMPUTE_DATABASE_URL" in wf
