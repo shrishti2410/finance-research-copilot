@@ -24,7 +24,7 @@ export function Change({ pct, className }: { pct: number | null | undefined; cla
 
 export type SignalValue = "BUY" | "SELL" | "HOLD";
 
-/** The engine's output with its coverage: "BUY · 12 of 16 rules". */
+/** The engine's output with its coverage: "BUY · 12 of 15 rules". */
 export function SignalBadge({
   signal,
   coverage,

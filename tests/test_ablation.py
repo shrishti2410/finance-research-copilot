@@ -119,7 +119,7 @@ def test_full_metrics_has_every_preregistered_field_and_cost_drag_is_never_negat
 def test_rule_correlation_is_symmetric_with_ones_on_the_diagonal(setup):
     bars, model, wf = setup
     keys, c = correlation(rule_returns(bars, wf, wf.first, model))
-    assert keys == sorted(wf.candidates) and len(keys) == 16
+    assert keys == sorted(wf.candidates) and len(keys) == 15
     ok = ~np.isnan(np.diag(c))
     assert np.allclose(np.diag(c)[ok], 1.0) and np.allclose(c, c.T, equal_nan=True)
 

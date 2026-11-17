@@ -7,6 +7,13 @@ code: market/strategies.py#zscore_reversion
 ---
 # Z-score mean reversion
 
+> **Not one of the signal's voters.** It is the same rule as
+> [Bollinger mean reversion](bollinger_reversion.md): a 20-day z-score below −2 is a
+> close below the lower two-standard-deviation band, and both sell back at the mean.
+> The two held the same position on 100% of days, so since 2026-11-18 only
+> Bollinger reversion votes (`benchmarks/RULE_DEDUP.md`). This card stays for the
+> backtester, where the strategy can still be run on its own.
+
 ## Summary
 The z-score is how many standard deviations today's close sits from its
 20-day average. The strategy buys a close two standard deviations below the

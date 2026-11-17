@@ -151,11 +151,24 @@ def _sharpe(r: np.ndarray) -> float:
     return 0.0 if sd == 0 or math.isnan(sd) else float(np.mean(r) / sd * math.sqrt(252))
 
 
+# Strategies that are another rule under a different name. They stay in the
+# backtester; they do not vote, or that view would be counted twice.
+DUPLICATES = {
+    "zscore_reversion": (
+        "the same rule as bollinger_reversion: a 20-day z-score below -2 is a close "
+        "below the lower 2-standard-deviation band, and both exit at the mean; they "
+        "held the same position on 100% of days (benchmarks/RULE_DEDUP.md)"),
+}
+
+
 def _candidates(market: Market) -> tuple[list[str], dict[str, str]]:
     keys, excluded = [], {}
     for key in STRATEGIES:
         if key == "buy_and_hold":
             continue                                     # the benchmark, not a view
+        if key in DUPLICATES:
+            excluded[key] = DUPLICATES[key]
+            continue
         if key == "sma_cross_long_short" and not market.allows_overnight_short:
             excluded[key] = "no overnight shorts on this market: identical to sma_cross"
             continue
