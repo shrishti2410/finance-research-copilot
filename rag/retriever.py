@@ -34,11 +34,11 @@ import re
 from dataclasses import dataclass, replace
 
 from rag.embeddings import EMBEDDING_MODEL, embed_query
-from rag.vector_store import SearchHit, connection, search
+from rag.vector_store import SearchHit, connection, search, text_search
 
 __all__ = [
     "SearchHit", "search_filings", "search_filings_sync", "resolve_section",
-    "query_intent", "QueryIntent",
+    "query_intent", "QueryIntent", "reciprocal_rank_fusion", "RRF_K",
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -128,6 +128,57 @@ TABLE_BOOST = 0.09
 # rank 13 before captions, so a shallow over-fetch would never have seen it.
 OVERFETCH = 6
 MIN_CANDIDATES = 30
+
+# Hybrid retrieval (settings.retrieval_hybrid). Two rankings over the same
+# filters: the vector search with the re-rank above, and Postgres full-text
+# search (BM25-style, rag.vector_store.text_search). They are fused by
+# Reciprocal Rank Fusion: score = sum over rankings of 1 / (RRF_K + rank).
+# RRF_K = 60 is the constant from Cormack, Clarke and Buettcher (2009); both
+# values were fixed before the retrieval check was run, not tuned on it.
+RRF_K = 60
+TEXT_CANDIDATES = 30
+
+# The company a question names, as a metadata filter (settings.
+# retrieval_infer_company). Names as people write them, for the indexed corpus
+# (ingestion.corpus.CORPUS_TICKERS; a test keeps the two in step). Tickers are
+# matched as upper-case words of two letters or more, so "V" and "KO" in a
+# sentence do not trigger. Exactly one company named sets the filter; none or
+# several set none; a caller's `company` always wins.
+COMPANY_ALIASES: dict[str, tuple[str, ...]] = {
+    "AAPL": ("apple",), "AMZN": ("amazon",), "GOOGL": ("alphabet", "google"),
+    "JNJ": ("johnson & johnson", "johnson and johnson", "j&j"),
+    "JPM": ("jpmorgan", "jp morgan", "j.p. morgan"), "KO": ("coca-cola", "coca cola"),
+    "META": ("meta platforms", "facebook"), "MSFT": ("microsoft",), "NFLX": ("netflix",),
+    "NVDA": ("nvidia",), "PG": ("procter & gamble", "procter and gamble", "p&g"),
+    "TSLA": ("tesla",), "V": ("visa",), "WMT": ("walmart",), "XOM": ("exxon",),
+}
+
+
+def companies_named(query: str) -> list[str]:
+    """Tickers of the indexed companies a question names, in ticker order."""
+    lowered = query.lower()
+    found = set()
+    for ticker, names in COMPANY_ALIASES.items():
+        if any(re.search(r"(?<![a-z])" + re.escape(n) + r"(?![a-z])", lowered) for n in names):
+            found.add(ticker)
+        elif len(ticker) >= 2 and re.search(r"(?<![A-Za-z])" + ticker + r"(?![A-Za-z])", query):
+            found.add(ticker)
+    return sorted(found)
+
+
+def reciprocal_rank_fusion(rankings: list[list[SearchHit]], k: int,
+                           rrf_k: int = RRF_K) -> list[SearchHit]:
+    """Fuse ranked lists of hits by chunk id. A chunk in several lists keeps
+    the first list's hit object (with its score breakdown) and gets the summed
+    RRF score; ties go to the order of first appearance."""
+    fused: dict[str, float] = {}
+    first: dict[str, SearchHit] = {}
+    for ranking in rankings:
+        for rank, hit in enumerate(ranking, start=1):
+            fused[hit.chunk_id] = fused.get(hit.chunk_id, 0.0) + 1.0 / (rrf_k + rank)
+            first.setdefault(hit.chunk_id, hit)
+    order = sorted(fused, key=lambda cid: -fused[cid])
+    return [replace(first[cid], score=fused[cid]) for cid in order[:k]]
 
 # Shorthand -> the substring matched against the stored `section` value.
 # Stored values are "Item 1A - Risk Factors", "Item 7 - Management's
@@ -241,6 +292,8 @@ async def search_filings(
     rerank_results: bool = True,
     conn=None,
     model: str = EMBEDDING_MODEL,
+    hybrid: bool | None = None,
+    infer_company: bool | None = None,
 ) -> list[SearchHit]:
     """Cosine-similarity search over indexed filings, newest ranking first.
 
@@ -275,30 +328,57 @@ async def search_filings(
     # A period the caller passes wins; otherwise the one the question names.
     # See "The fiscal year a question names" above.
     named = None if fiscal_period else fiscal_periods_named(query)
+    if infer_company is None:
+        from core.config import settings as _settings
+        infer_company = _settings.retrieval_infer_company
+    inferred = None
+    if infer_company and not company:
+        tickers = companies_named(query)
+        inferred = tickers[0] if len(tickers) == 1 else None
     # Over-fetch, then re-rank. min_score is applied after re-ranking, so a
     # threshold means what the caller thinks it means -- the final score.
     kwargs = dict(
         k=max(k * OVERFETCH, MIN_CANDIDATES) if rerank_results else k,
-        company=company,
+        company=company or inferred,
         section=resolve_section(section),
         content_type=content_type,
         fiscal_period=fiscal_period or named,
     )
+
+    if hybrid is None:
+        from core.config import settings
+        hybrid = settings.retrieval_hybrid
 
     async def run(conn):
         found = await search(conn, vector, **kwargs)
         if not found and named:
             # The named year is not indexed for this company: search all years.
             found = await search(conn, vector, **{**kwargs, "fiscal_period": None})
-        return found
+        if not found and inferred:
+            # The named company is not indexed: search everything.
+            found = await search(conn, vector, **{**kwargs, "company": company,
+                                                  "fiscal_period": None})
+        lexical: list[SearchHit] = []
+        if hybrid:
+            text_kwargs = {key: kwargs[key] for key in ("company", "section", "content_type",
+                                                        "fiscal_period")}
+            lexical = await text_search(conn, query, TEXT_CANDIDATES, **text_kwargs)
+            if not lexical and named:
+                lexical = await text_search(conn, query, TEXT_CANDIDATES,
+                                            **{**text_kwargs, "fiscal_period": None})
+        return found, lexical
 
     if conn is not None:
-        candidates = await run(conn)
+        candidates, lexical = await run(conn)
     else:
         async with connection() as own_conn:
-            candidates = await run(own_conn)
+            candidates, lexical = await run(own_conn)
 
-    hits = rerank(candidates, intent, k) if rerank_results else candidates[:k]
+    if hybrid:
+        semantic = rerank(candidates, intent, len(candidates)) if rerank_results else candidates
+        hits = reciprocal_rank_fusion([semantic, lexical], k)
+    else:
+        hits = rerank(candidates, intent, k) if rerank_results else candidates[:k]
     if min_score is not None:
         hits = [hit for hit in hits if hit.score >= min_score]
     return hits
