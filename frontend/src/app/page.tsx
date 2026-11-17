@@ -114,13 +114,17 @@ export default function Landing() {
         <h2 id="features" className="text-2xl font-semibold tracking-tight text-fg">
           Filings, signals and backtests in one place
         </h2>
-        <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
           {FEATURES.map(({ icon: Icon, title, body, shot }) => (
             <Card key={title} className="flex flex-col gap-3 p-5 transition-colors hover:border-fg-subtle">
-              <Icon className="size-5 text-accent" aria-hidden="true" />
-              <p className="font-medium text-fg">{title}</p>
+              <div className="flex items-center gap-2">
+                <Icon className="size-5 text-accent" aria-hidden="true" />
+                <p className="font-medium text-fg">{title}</p>
+              </div>
               <p className="text-sm text-fg-muted">{body}</p>
-              <Shot shot={shot} sizes="(min-width: 1024px) 260px, (min-width: 640px) 45vw, 90vw" className="mt-auto" />
+              <div className="mt-auto max-h-80 overflow-hidden rounded-md border border-border">
+                <Shot shot={shot} sizes="(min-width: 1152px) 520px, (min-width: 768px) 45vw, 92vw" className="rounded-none border-0" />
+              </div>
             </Card>
           ))}
         </div>
