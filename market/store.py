@@ -48,6 +48,9 @@ _UPSERT = text("""
         open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low,
         close = EXCLUDED.close, adj_close = EXCLUDED.adj_close,
         volume = EXCLUDED.volume, provider = EXCLUDED.provider
+    -- One provider never overwrites another's row. A test's fake feed once
+    -- replaced eight years of real SPY rows this way (2026-11-17).
+    WHERE price_bars.provider = EXCLUDED.provider
 """)
 
 
