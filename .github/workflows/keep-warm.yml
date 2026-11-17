@@ -1,0 +1,40 @@
+# Keep the free Render API awake, so a visitor does not wait for a cold start.
+#
+# NOT SCHEDULED YET. The schedule below stays commented out until the user has
+# confirmed two things (checked 2026-11-18, https://render.com/docs/free):
+#   - Render grants 750 free instance hours per WORKSPACE per calendar month, and
+#     suspends every free service in the workspace when they run out. One service
+#     kept up all month uses 744 hours in a 31-day month, so this fits only if
+#     the API is the workspace's only free web service.
+#   - The docs say nothing for or against keep-alive pings. The acceptable use
+#     policy and terms (render.com/acceptable-use, render.com/terms) could not be
+#     read when this was written; the user is to read them before enabling.
+# A free service spins down after 15 minutes without inbound traffic, so a ping
+# every 14 minutes keeps it up. GitHub may start scheduled runs late under load,
+# and disables schedules in a repository with no activity for 60 days.
+#
+# Free for this public repository: GitHub Actions minutes are not billed for
+# public repositories. Each run is one small curl.
+
+name: keep-warm
+
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: "*/14 * * * *"
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping /health
+        env:
+          API: https://finance-research-copilot.onrender.com
+        run: |
+          # /health touches nothing but the process: no database, no model.
+          # A cold start takes about a minute, so allow two.
+          curl --fail --silent --show-error --max-time 120 --retry 2 --retry-delay 10 \
+            -o /dev/null -w "HTTP %{http_code} in %{time_total}s\n" "$API/health"
