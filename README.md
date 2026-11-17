@@ -16,6 +16,20 @@ FastAPI and an agent loop in Python, Postgres with pgvector, Redis, a Next.js
 client. The model is pluggable: Qwen 2.5 on a laptop through Ollama, or
 `openai/gpt-oss-120b` hosted on Groq.
 
+**Version 2** adds a [trading-signal research engine](#version-2-trading-signals):
+- rule-based signals for five NSE stocks and three US stocks, each with a
+  backtest against buy-and-hold and against random timing;
+- a strategy card for every rule;
+- option strategy payoffs with the Greeks.
+
+The numbers come from deterministic code; the language model only explains them.
+The headline result is negative and is reported as such: **no return edge**.
+
+**Live:** https://finance-research-copilot-swart.vercel.app (version 1, deployed
+2026-11-16 per [docs/DEPLOY.md](docs/DEPLOY.md); version 2 goes to the same address
+per [docs/DEPLOY_V2.md](docs/DEPLOY_V2.md)). The free API sleeps after 15 minutes
+idle, so the first request can take a while.
+
 ## Results so far
 
 Every number below links to the file that records how it was measured: the command,
@@ -61,7 +75,7 @@ Every failure is classified by hand from its trace, by the rule in
 | retrieval hit@5, 2 filings against 45 | 100.0% against 75.9%: more years of each company confuse the year asked about | same |
 | concurrent users, local model | 5 with no failures; the model is the ceiling between 5 and 10 (2026-09-13) | [LOAD_TEST_RESULTS.md](benchmarks/LOAD_TEST_RESULTS.md) |
 | API memory under a 512 MB cap, answering a real question | 414.6 MiB peak, no out-of-memory kill | [CONTAINER_MEMORY.md](benchmarks/CONTAINER_MEMORY.md) |
-| public demo on free tiers (Vercel, Render, Neon, Upstash) | **pending**: prepared ([DEPLOY.md](docs/DEPLOY.md)), not deployed | |
+| public demo on free tiers (Vercel, Render, Neon, Upstash) | deployed 2026-11-16 (version 1), with what was and was not checked live | [DEPLOY.md](docs/DEPLOY.md) |
 | fix for the wrong-year retrieval | **pending** | [KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) |
 
 ## Architecture
@@ -109,6 +123,107 @@ flowchart LR
 | **Structured facts** (`tools/facts.py`) | SEC XBRL figures by company, concept and fiscal year, each with the accession number of its filing as the citation. |
 | **Model proxy** (`api/inference_proxy.py`) | One OpenAI-compatible endpoint in front of Ollama, Groq or Cerebras. The provider key never leaves the server. |
 | **Eval** (`eval/`) | 40 questions with tolerances; a retrieval-only eval; a fast 15-question subset; a CI gate. |
+
+## Version 2: trading signals
+
+A research engine for daily signals on a watchlist:
+- **NSE:** COFORGE, DIXON, SBIN, PREMIERENE and HDFCBANK, benchmarked on the Nifty 50.
+- **US:** NVDA, AAPL and MSFT, benchmarked on SPY.
+
+It is built to show what a signal is worth, not to recommend trades.
+
+**What is in it.**
+- **Signals.** 16 technical rules (trend, breakout, mean reversion, momentum).
+  - Weights are refitted walk-forward on the first trading day of each month,
+    from each rule's trailing Sharpe ratio.
+  - The market regime (ADX, the slope of the 50-day average, volatility
+    percentile) halves the weight of rules whose style does not fit it.
+  - BUY at a score of +0.25 or more, SELL at −0.25 or less.
+  - Each signal states its coverage ("12 of 16 rules"), and its confidence is
+    capped at that fraction.
+  - Design: [docs/SIGNALS.md](docs/SIGNALS.md).
+- **Backtests that can say "no".** Every signal is tested against:
+  - buy-and-hold;
+  - the index;
+  - 200 random re-timings of its own positions.
+
+  Indian delivery costs (STT, stamp duty, exchange and SEBI fees, GST, the
+  depository charge) and slippage are included. "Edge" requires beating buy-and-hold on CAGR and Sharpe
+  *and* beating 95% of the random re-timings.
+  - Method: [docs/BACKTESTING.md](docs/BACKTESTING.md).
+- **Strategy cards.** One page per rule and per option strategy: what it
+  assumes, when it fails, and how it is computed.
+  - [docs/strategies/](docs/strategies/).
+- **Options.** Payoff grids for eight option strategies (long call, long put,
+  bull call and bear put spreads, straddle, iron condor, covered call,
+  protective put), with Black-Scholes delta, gamma, theta and vega.
+- **Drift flag.** A CUSUM test marks a rule whose recent returns have fallen
+  well below its own history.
+  - It is shown on the page only. Acting on it (halving the rule's weight) is
+    off until a pre-registered evaluation decides.
+- **Precomputed pages.** A GitHub Actions job computes every stock page after
+  the NSE close (11:00 UTC) and after the US close (22:00 UTC), and stores it.
+  - A page is served stored only if it is newer than the latest session close
+    and was made by the same signal code.
+  - Otherwise the first visitor's request computes it.
+  - The job connects as a database role that can read prices and write only
+    the stored pages.
+
+### Results (measured)
+
+Five NSE stocks, 2021-11-16 to 2026-11-16, commit `eac9d0c`:
+[benchmarks/SIGNALS_7C.md](benchmarks/SIGNALS_7C.md).
+
+| | finding | source |
+|---|---|---|
+| **Return** | **No edge.** None of the five stocks reached the 95th percentile against random re-timing; the closest was DIXON at 0.89. CAGR was below buy-and-hold on 3 of 5. On SBIN the signal returned −5.3% a year while the stock compounded at 19.7%. | [SIGNALS_7C.md](benchmarks/SIGNALS_7C.md) |
+| **Hold-out** | On ten NSE stocks never used to build anything, CAGR and daily Sharpe were below buy-and-hold on **10 of 10**. | same |
+| **Drawdown** | Smaller than buy-and-hold on 4 of 5 watchlist stocks and 7 of 10 hold-out stocks. Most of that comes from being out of the market (in it 21–64% of the time on the hold-out stocks); any rule that is often flat has smaller drawdowns. | same |
+| **Noise** | Moving the monthly refit day (1st to 20th trading day) alone moves a five-year CAGR by up to 11 points (DIXON: 17.4% to 28.1%). A difference between two single runs smaller than that is not a finding. On 13 of 15 stocks, no refit day beats buy-and-hold on both CAGR and Sharpe. DIXON beats it on 18 of 20 refit days, about what chance gives in 15 tries. | same |
+| **A proposed fix, tested and rejected** | A faster regime-direction rule raised Sharpe on 3 of 10 hold-out stocks, with a median change of 0.000. The bar, written down before the run, was 6 of 10 and a positive median, so it was not adopted. | [REGIME_RULE_CHECK.md](benchmarks/REGIME_RULE_CHECK.md) |
+| **LLM explanations, local Qwen** | 3.3 to 6.4 minutes per stock on a laptop CPU; 1 in 5 timed out in each of the last two runs. Every finished explanation said "no edge", but in the last run 3 of 4 also said something wrong that the guards cannot catch. Since then the engine's verdict sentence is placed first, verbatim (`96b329b`; not yet run live), and the "explain" button is hidden on the public site. | [SIGNALS_EXPLAIN_7C.md](benchmarks/SIGNALS_EXPLAIN_7C.md) |
+| **Page load at Render's free-tier limits** (512 MB, 0.1 CPU) | Computed on the visitor's request: dashboard 24.8–36.4 s. Stored: 0.29 s on the first request, then 0.04 s. A stock page with no stored copy: 24.3 s once, then 0.04 s. Peak memory 156 MiB. | [DEPLOY_V2.md](docs/DEPLOY_V2.md), section 6 |
+
+**Not measured yet:**
+- the US stocks' backtests (no committed record);
+- whether the drift flag's down-weighting helps;
+- version 2 on the live site.
+
+The precompute timings above are from the five NSE pages, before the three US
+stocks were added.
+
+### Architecture: numbers from the engine, words from the model
+
+```mermaid
+flowchart LR
+    gha[GitHub Actions<br/>11:00 and 22:00 UTC] --> job[precompute job<br/>restricted DB role]
+    yahoo[Yahoo Finance<br/>daily bars] --> cache[(price cache)]
+
+    subgraph quant [Quant engine: deterministic, no language model]
+        cache --> rules[16 rules] --> wf[walk-forward weights<br/>+ regime + drift flag]
+        wf --> sig[signal, coverage,<br/>confidence]
+        sig --> bt[backtest vs buy-and-hold,<br/>index, 200 random timings]
+        bt --> verdict[verdict: edge / no edge]
+        cache --> opt[option payoffs<br/>+ Greeks]
+    end
+
+    job --> quant
+    quant --> views[(precomputed_views)]
+    views --> api[FastAPI] --> web[Next.js<br/>dashboard and stock pages]
+
+    subgraph llm [LLM explanation layer: words only]
+        tool[get_trading_signal tool] --> agent[agent loop<br/>+ grounding guard]
+        agent --> text[explanation, verdict<br/>sentence first, verbatim]
+    end
+
+    sig -. read-only .-> tool
+    verdict -. read-only .-> tool
+    text -. hidden on the public site .-> web
+```
+
+The model never computes a signal, a weight or a backtest figure. It reads the
+engine's output through one tool, and the grounding guard holds it to the
+numbers in that output.
 
 ## How it was built
 
