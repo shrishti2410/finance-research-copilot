@@ -122,10 +122,12 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .marquee-track {
     animation: none !important;
-    width: auto;
+    width: 100%;
   }
   .marquee-list {
+    flex-shrink: 1;
     flex-wrap: wrap;
+    min-width: 0;
     row-gap: 0.5rem;
   }
   .marquee-copy,
