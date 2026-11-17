@@ -59,6 +59,64 @@ the items below in order.
      Tests first, prove the 40 dev cases rescore identically, and show the diff.
    - **Freeze the held-out set:** commit it, and put the hash in the record,
      before any tuning.
+
+**Site quality phase (set 2026-11-18).** It starts once the redesigned
+landing page is live, and comes before items 1–6. Item 0 may run alongside
+it.
+- Each change on its own branch, with screenshots and the diff shown before
+  merging.
+- **Nothing that costs money:** free tiers only. Check a service's terms and
+  limits before relying on it, and record what was checked.
+
+*Tier 1, now:*
+1. **Cold start.**
+   - A GitHub Actions cron pings the API's `/health` every 14 minutes.
+     Before adding it, confirm in Render's published terms and free-tier
+     limits (750 instance-hours a month) that this is allowed and fits.
+     Record the source and the date.
+   - The landing page and the dashboard render from Vercel's cache/ISR even
+     when the API is asleep: stale data, clearly dated, never an error.
+2. **Sharing and discovery.** Open Graph and Twitter meta tags; a 1200x630
+   preview image; a favicon; a title and description for every page; a
+   sitemap and `robots.txt`.
+3. **Research chat streams.**
+   - Answers come over `/ask/stream`.
+   - Each tool step shows live, in plain words.
+   - Source cards preview the cited passage, with its accession and section.
+4. **About the author.**
+   - A "Built by Shrishti Chandak" section, and an `/about` page with
+     LinkedIn, GitHub and a resume link.
+   - The user supplies the URLs: use placeholders until then, and never
+     invent them.
+5. **Demo recording.** A script that records a 60–90 s video or GIF of the
+   main flow, for the landing page and the README. Like the screenshot
+   script, it uses a production build and closes its browser on every exit
+   path.
+6. **Quality bars, measured before and after:**
+   - Lighthouse ≥ 95 in all four categories for `/` and `/dashboard`;
+   - zero axe violations;
+   - full keyboard navigation;
+   - a text or table alternative for every chart.
+
+   Both the "before" and the "after" figures come from commands run on the
+   code they describe (rule 4).
+
+*Tier 2, after item 3 (evaluation rigor):*
+- term tooltips linked to a glossary;
+- an "as of" timestamp on every figure;
+- the tab and the range in the URL;
+- a friendly daily-limit message with a reset countdown;
+- follow-up suggestions, and copy and share on answers.
+
+*Tier 3, after Tier 2:*
+- Playwright end-to-end tests in CI, desktop and phone, with the model
+  mocked;
+- free uptime monitoring;
+- Sentry's free tier;
+- Vercel Analytics.
+
+  Each within its free plan, checked first.
+
 1. **Claim-level verification with independent recomputation.**
    - Recompute every derived figure (growth, margin, ratio) from its cited
      operands, and reject on a mismatch.
