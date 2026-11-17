@@ -73,10 +73,14 @@ class MarketData:
         return found is not None
 
     async def _read(self, conn, ticker: str, start: date, end: date) -> list[Bar]:
+        # Only this provider's rows. Rows from another provider are a different
+        # series: a test's fake feed once wrote SPY rows into a shared cache,
+        # and those on days Yahoo has no bar (holidays) were merged into the
+        # real series as prices around a third of the true level.
         rows = (await conn.execute(text(
             "SELECT day, open, high, low, close, adj_close, volume FROM price_bars "
-            "WHERE ticker = :t AND day BETWEEN :s AND :e ORDER BY day"),
-            {"t": ticker, "s": start, "e": end})).all()
+            "WHERE ticker = :t AND provider = :p AND day BETWEEN :s AND :e ORDER BY day"),
+            {"t": ticker, "p": self.provider.name, "s": start, "e": end})).all()
         return [Bar(day=r[0], open=float(r[1]), high=float(r[2]), low=float(r[3]),
                     close=float(r[4]), adj_close=float(r[5]), volume=int(r[6])) for r in rows]
 
