@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
-import { COMPANY_NAMES, Change, SignalBadge, Sparkline, shortTicker } from "@/components/market";
+import { COMPANY_NAMES, Change, SignalBadge, Sparkline, exchangeLabel, isUS } from "@/components/market";
 import { ColdStartNotice, EmptyState, ErrorState, useSlow } from "@/components/states";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -15,11 +15,16 @@ import { formatPrice } from "@/lib/utils";
 
 function IndexStrip({ data }: { data: Watchlist["index"] }) {
   if (!data) return null;
+  const isIndex = data.ticker.startsWith("^");
   return (
     <Card className="flex flex-wrap items-center gap-x-6 gap-y-2 px-5 py-4">
       <div>
-        <p className="text-xs font-medium uppercase tracking-wider text-fg-subtle">Nifty 50</p>
-        <p className="tabular text-2xl font-semibold tracking-tight">{formatPrice(data.price, "", true)}</p>
+        <p className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
+          {COMPANY_NAMES[data.ticker] ?? data.ticker}
+        </p>
+        <p className="tabular text-2xl font-semibold tracking-tight">
+          {formatPrice(data.price, data.currency_symbol, isIndex)}
+        </p>
       </div>
       <Change pct={data.change_pct} className="text-base" />
       <Sparkline values={data.sparkline} width={220} height={44} className="ml-auto hidden sm:block" />
@@ -49,7 +54,7 @@ function StockCard({ card }: { card: WatchlistCard }) {
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="truncate font-medium text-fg">{name}</p>
-            <p className="text-xs text-fg-subtle">NSE: {shortTicker(card.ticker)}</p>
+            <p className="text-xs text-fg-subtle">{exchangeLabel(card.ticker)}</p>
           </div>
           <ChevronRight className="size-4 text-fg-subtle transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
         </div>
@@ -136,8 +141,10 @@ export default function Dashboard() {
       <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold tracking-tight">Watchlist</h1>
         <p className="text-sm text-fg-muted">
-          Five NSE stocks against the Nifty 50. Each badge is the signal engine&apos;s output and how many of
-          its rules carry weight; the backtest behind it is on each stock&apos;s page.
+          Five NSE stocks against the Nifty 50, and three US stocks against the S&amp;P 500. Each badge is the
+          signal engine&apos;s output and how many of its rules carry weight; the backtest behind it is on each
+          stock&apos;s page. The US companies&apos; 10-K filings are indexed too, so their pages also answer
+          questions about the filings.
         </p>
       </div>
       {slow && loading ? <ColdStartNotice /> : null}
@@ -145,13 +152,25 @@ export default function Dashboard() {
       {error ? <ErrorState message={error} onRetry={retry} /> : null}
       {data ? (
         <>
-          <IndexStrip data={data.index} />
           {data.stocks.length ? (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {data.stocks.map((c) => (
-                <StockCard key={c.ticker} card={c} />
-              ))}
-            </div>
+            [
+              { title: "India (NSE)", index: (data.indices ?? [data.index]).find((i) => i && !isUS(i.ticker)) ?? null,
+                stocks: data.stocks.filter((c) => !isUS(c.ticker)) },
+              { title: "United States", index: (data.indices ?? []).find((i) => isUS(i.ticker)) ?? null,
+                stocks: data.stocks.filter((c) => isUS(c.ticker)) },
+            ]
+              .filter((g) => g.stocks.length)
+              .map((g) => (
+                <section key={g.title} aria-label={g.title} className="flex flex-col gap-4">
+                  <h2 className="text-sm font-semibold uppercase tracking-wider text-fg-subtle">{g.title}</h2>
+                  <IndexStrip data={g.index} />
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    {g.stocks.map((c) => (
+                      <StockCard key={c.ticker} card={c} />
+                    ))}
+                  </div>
+                </section>
+              ))
           ) : (
             <EmptyState title="No stocks in the watchlist" />
           )}

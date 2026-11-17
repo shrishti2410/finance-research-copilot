@@ -107,7 +107,7 @@ export function EquityChart({
             {s.label}
           </span>
         ))}
-        <span className="text-fg-subtle">Growth of 100, after Indian trading costs.</span>
+        <span className="text-fg-subtle">Growth of 100, after trading costs (Indian delivery charges on NSE, 5 bps a side in the US).</span>
       </figcaption>
     </figure>
   );

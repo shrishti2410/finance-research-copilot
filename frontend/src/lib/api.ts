@@ -244,6 +244,7 @@ export interface WatchlistCard extends QuoteCard {
 
 export interface Watchlist {
   index: QuoteCard | null;
+  indices?: QuoteCard[];
   stocks: WatchlistCard[];
   provider: string;
   disclaimer: string;
@@ -274,6 +275,8 @@ export interface RiskFigures {
 export interface SignalReport {
   ticker: string;
   currency_symbol: string;
+  exchange?: string;
+  benchmark?: string;
   evidence: {
     ok: boolean;
     error?: string;

@@ -87,9 +87,23 @@ export const COMPANY_NAMES: Record<string, string> = {
   "SBIN.NS": "State Bank of India",
   "PREMIERENE.NS": "Premier Energies",
   "HDFCBANK.NS": "HDFC Bank",
+  SPY: "S&P 500 (SPY)",
+  NVDA: "NVIDIA",
+  AAPL: "Apple",
+  MSFT: "Microsoft",
 };
 
 /** "SBIN.NS" -> "SBIN" for display; the full symbol stays in URLs. */
+/** True for a US ticker: no exchange suffix and not an index. */
+export function isUS(ticker: string): boolean {
+  return !/\.(NS|BO)$/.test(ticker) && !ticker.startsWith("^");
+}
+
+/** "NSE: SBIN" or "US: NVDA", for a card or a page header. */
+export function exchangeLabel(ticker: string): string {
+  return `${isUS(ticker) ? "US" : "NSE"}: ${shortTicker(ticker)}`;
+}
+
 export function shortTicker(ticker: string): string {
   return ticker.replace(/\.(NS|BO)$/, "").replace(/^\^NSEI$/, "NIFTY 50");
 }

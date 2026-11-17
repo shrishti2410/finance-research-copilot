@@ -7,7 +7,7 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 
 import { EquityChart, PayoffChart } from "@/components/charts";
 import { Markdown } from "@/components/Markdown";
-import { COMPANY_NAMES, SignalBadge, shortTicker } from "@/components/market";
+import { COMPANY_NAMES, SignalBadge, exchangeLabel, isUS, shortTicker } from "@/components/market";
 import { PriceChart } from "@/components/PriceChart";
 import { GITHUB_URL } from "@/components/SiteChrome";
 import { ColdStartNotice, EmptyState, ErrorState, useSlow } from "@/components/states";
@@ -232,11 +232,12 @@ function SignalTab({ report, token, ticker }: { report: SignalReport; token: str
   );
 }
 
-function RiskTable({ risk }: { risk: SignalReport["evaluation"]["risk"] }) {
+function RiskTable({ risk, benchmark }: { risk: SignalReport["evaluation"]["risk"]; benchmark?: string }) {
   const rows: [string, RiskFigures | null][] = [
     ["Signal", risk.signal],
     ["Buy and hold", risk.buy_and_hold],
-    ["Nifty 50", risk.nifty],
+    // The market's index: the field is named after the first one supported.
+    [COMPANY_NAMES[benchmark ?? "^NSEI"] ?? benchmark ?? "Index", risk.nifty],
   ];
   return (
     <div className="overflow-x-auto">
@@ -287,10 +288,10 @@ function BacktestTab({ report }: { report: SignalReport }) {
       </Card>
       <Card className="p-5">
         <h2 className="mb-3 font-semibold">Risk-adjusted</h2>
-        <RiskTable risk={e.risk} />
+        <RiskTable risk={e.risk} benchmark={report.benchmark} />
         <p className="mt-3 text-xs text-fg-subtle">
           Daily Sharpe and Sortino, no risk-free rate; Calmar is CAGR over the largest drawdown. The signal&apos;s Sharpe beat{" "}
-          {e.random.signal_sharpe_percentile === null ? "–" : `${Math.round(e.random.signal_sharpe_percentile * 100)}%`} of{" "}
+          {e.random.signal_sharpe_percentile === null ? "–" : `${(e.random.signal_sharpe_percentile * 100).toFixed(1).replace(/\.0$/, "")}%`} of{" "}
           {e.random.runs} random re-timings of its own trades; 95% would be needed to rule out luck.
         </p>
       </Card>
@@ -435,20 +436,41 @@ function OptionsTab({ token, ticker }: { token: string; ticker: string }) {
 
 function ResearchTab({ ticker }: { ticker: string }) {
   const name = COMPANY_NAMES[ticker] ?? ticker;
-  const questions = [
-    `How has ${ticker} performed over the last year, and what was its largest drawdown?`,
-    `What is the current trading signal for ${ticker}, and why?`,
-    `What is the latest news about ${name}?`,
-  ];
+  const us = isUS(ticker);
+  const questions = us
+    ? [
+        `What was ${name}'s gross margin in its latest fiscal year?`,
+        `What are ${name}'s main risk factors, according to its 10-K?`,
+        `What is the current trading signal for ${ticker}, and why?`,
+        `How has ${ticker} performed over the last year, and what was its largest drawdown?`,
+      ]
+    : [
+        `How has ${ticker} performed over the last year, and what was its largest drawdown?`,
+        `What is the current trading signal for ${ticker}, and why?`,
+        `What is the latest news about ${name}?`,
+      ];
   return (
     <div className="flex flex-col gap-4" data-loaded="research">
       <div className="max-w-2xl rounded-[var(--radius-card)] border border-border bg-surface-2 p-4 text-sm">
-        <p className="font-medium text-fg">No filings for {name}</p>
-        <p className="mt-1 text-fg-muted">
-          The filings search covers only the annual 10-K reports of 15 US companies, such as NVIDIA and Apple.
-          Indian companies do not file 10-Ks, so for {name} the research chat works from NSE prices and returns,
-          the signal engine and news. Every figure in an answer is checked against what a tool returned.
-        </p>
+        {us ? (
+          <>
+            <p className="font-medium text-fg">{name}&apos;s 10-K filings are indexed</p>
+            <p className="mt-1 text-fg-muted">
+              The research chat answers from {name}&apos;s last three annual 10-K reports and its reported figures
+              (SEC XBRL), as well as prices, the signal engine and news. Every figure in an answer is checked
+              against what a tool returned.
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="font-medium text-fg">No filings for {name}</p>
+            <p className="mt-1 text-fg-muted">
+              The filings search covers only the annual 10-K reports of 15 US companies, such as NVIDIA and Apple.
+              Indian companies do not file 10-Ks, so for {name} the research chat works from NSE prices and returns,
+              the signal engine and news. Every figure in an answer is checked against what a tool returned.
+            </p>
+          </>
+        )}
       </div>
       <p className="text-sm text-fg-muted">Questions the chat can answer from those tools:</p>
       <ul className="flex flex-col gap-2">
@@ -506,7 +528,7 @@ function StockPage() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">{name}</h1>
-          <p className="text-sm text-fg-subtle">NSE: {shortTicker(ticker)}</p>
+          <p className="text-sm text-fg-subtle">{exchangeLabel(ticker)}</p>
         </div>
         {ev?.ok ? <SignalBadge signal={ev.signal} coverage={ev.coverage.text} /> : null}
       </div>
