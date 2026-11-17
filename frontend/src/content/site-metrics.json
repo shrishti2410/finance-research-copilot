@@ -25,13 +25,13 @@
       "also": [{ "text": "62,387", "quote": "62,387 facts rows" }]
     },
     {
-      "value": "0 of 10",
-      "label": "unseen stocks where the signal beat buy-and-hold",
-      "detail": "Five years out of sample. The project reports that it found no edge.",
-      "secondary": { "value": "7 of 10", "label": "had a smaller max drawdown, mostly from time out of the market" },
-      "source": "benchmarks/SIGNALS_7C.md",
-      "quote": "CAGR below buy-and-hold on **10 of 10**",
-      "also": [{ "text": "7 of 10", "quote": "Max drawdown smaller on 7 of 10." }]
+      "value": "1 of 15",
+      "label": "NSE stocks where the signal beat buy-and-hold on risk-adjusted return",
+      "detail": "Five years out of sample. The project reports that it found no edge, and presents the signal as a strategy-audit tool.",
+      "secondary": { "value": "2 of 15", "label": "had a smaller drawdown than buy-and-hold held at the same exposure" },
+      "source": "benchmarks/QUANT_HONESTY.md",
+      "quote": "**no edge**: higher on 1 of 15",
+      "also": [{ "text": "2 of 15", "quote": "**claim withdrawn**: smaller on 2 of 15" }]
     }
   ]
 }

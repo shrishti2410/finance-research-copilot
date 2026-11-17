@@ -23,7 +23,11 @@ client. The model is pluggable: Qwen 2.5 on a laptop through Ollama, or
 - option strategy payoffs with the Greeks.
 
 The numbers come from deterministic code; the language model only explains them.
-The headline result is negative and is reported as such: **no return edge**.
+The headline result is negative and is reported as such: **no return edge**,
+and no risk-adjusted edge either
+([QUANT_HONESTY.md](benchmarks/QUANT_HONESTY.md)). So the signal is a
+**strategy-audit tool**: it shows what textbook rules say about a stock, and how
+they would have done, not where the price will go.
 
 **Live:** https://finance-research-copilot-swart.vercel.app (version 1, deployed
 2026-11-16 per [docs/DEPLOY.md](docs/DEPLOY.md); version 2 goes to the same address
@@ -178,7 +182,8 @@ Five NSE stocks, 2021-11-16 to 2026-11-16, commit `eac9d0c`:
 |---|---|---|
 | **Return** | **No edge.** None of the five stocks reached the 95th percentile against random re-timing; the closest was DIXON at 0.89. CAGR was below buy-and-hold on 3 of 5. On SBIN the signal returned −5.3% a year while the stock compounded at 19.7%. | [SIGNALS_7C.md](benchmarks/SIGNALS_7C.md) |
 | **Hold-out** | On ten NSE stocks never used to build anything, CAGR and daily Sharpe were below buy-and-hold on **10 of 10**. | same |
-| **Drawdown** | Smaller than buy-and-hold on 4 of 5 watchlist stocks and 7 of 10 hold-out stocks. Most of that comes from being out of the market (in it 21–64% of the time on the hold-out stocks); any rule that is often flat has smaller drawdowns. | same |
+| **Drawdown** | Smaller than plain buy-and-hold on 11 of 15 NSE stocks. Against buy-and-hold held at the signal's own exposure, smaller on only **2 of 15**. The shallower drawdowns come from being out of the market about half the time, not from the timing, so they are not claimed as a benefit. | [QUANT_HONESTY.md](benchmarks/QUANT_HONESTY.md) |
+| **Risk-adjusted, all 15 stocks** | The signal's Sharpe beat buy-and-hold's on 1 of 15 (median 0.44 against 0.65). Four simpler ensembles (equal-weight, majority, performance-weighted, best rule) did no better than the signal. Rules and thresholds written down before the run. | same |
 | **Noise** | Moving the monthly refit day (1st to 20th trading day) alone moves a five-year CAGR by up to 11 points (DIXON: 17.4% to 28.1%). A difference between two single runs smaller than that is not a finding. On 13 of 15 stocks, no refit day beats buy-and-hold on both CAGR and Sharpe. DIXON beats it on 18 of 20 refit days, about what chance gives in 15 tries. | same |
 | **A proposed fix, tested and rejected** | A faster regime-direction rule raised Sharpe on 3 of 10 hold-out stocks, with a median change of 0.000. The bar, written down before the run, was 6 of 10 and a positive median, so it was not adopted. | [REGIME_RULE_CHECK.md](benchmarks/REGIME_RULE_CHECK.md) |
 | **LLM explanations, local Qwen** | 3.3 to 6.4 minutes per stock on a laptop CPU; 1 in 5 timed out in each of the last two runs. Every finished explanation said "no edge", but in the last run 3 of 4 also said something wrong that the guards cannot catch. Since then the engine's verdict sentence is placed first, verbatim (`96b329b`; not yet run live), and the "explain" button is hidden on the public site. | [SIGNALS_EXPLAIN_7C.md](benchmarks/SIGNALS_EXPLAIN_7C.md) |

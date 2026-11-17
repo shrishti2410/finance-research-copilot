@@ -136,10 +136,13 @@ put-call parity and each card's own max-loss and breakeven formulas.
 See `benchmarks/SIGNALS_7C.md`.
 - Over 2021-11-16 to 2026-11-16, on four NSE stocks, the signal returned less
   than buy-and-hold on all four.
-- It had smaller drawdowns on three, mostly by being out of the market about
-  half the time.
+- Its drawdowns were shallower on three. That is what being out of the market
+  about half the time gives: against buy-and-hold held at the same exposure,
+  its drawdown was smaller on only 2 of 15 NSE stocks
+  (`benchmarks/QUANT_HONESTY.md`). So no drawdown benefit is claimed.
 - Against its own randomly re-timed copies it did not stand out (39th, 76th,
   0th and 72nd percentiles).
 
-Treat the signal as a structured summary of what 16 textbook rules currently
-say, not as a forecast.
+Treat the signal as a strategy-audit tool: a structured summary of what 16
+textbook rules currently say and how they would have done. It is not a
+forecast, and not a source of edge.
