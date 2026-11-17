@@ -285,6 +285,12 @@ class Settings(BaseSettings):
     # `docker run --cpus=0.1`: one query embedding took 55 s with the default
     # and 0.4 to 0.6 s with one thread. docs/DEPLOY.md sets 1.
     embedding_threads: int = Field(default=0, ge=0)
+    # Hybrid retrieval: fuse the vector ranking with Postgres full-text search
+    # by Reciprocal Rank Fusion (rag/retriever.py). Needs migration 0009.
+    retrieval_hybrid: bool = False
+    # Filter retrieval to the one indexed company a question names
+    # (rag/retriever.py companies_named), when the caller gives none.
+    retrieval_infer_company: bool = False
     # Load the encoder in the background as the app starts, rather than in the
     # first request that searches the filings. The same measurement: 180 s to
     # import and load at 0.1 CPU, which a visitor would otherwise wait out.

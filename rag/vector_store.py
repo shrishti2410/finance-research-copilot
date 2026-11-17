@@ -33,8 +33,9 @@ exact scan.
 from __future__ import annotations
 
 import json
+import re
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Iterable, Sequence
 
 import numpy as np
@@ -384,3 +385,76 @@ async def stats(conn) -> dict:
         "total_chunks": total,
         "documents": [dict(row._mapping) for row in rows],
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Full-text search: the lexical half of hybrid retrieval
+# ─────────────────────────────────────────────────────────────────────────────
+
+_WORD = re.compile(r"[a-z0-9]+")
+
+
+def _or_query(query: str) -> str:
+    """The question's words joined by OR, for to_tsquery('english', ...).
+
+    OR rather than AND (plainto_tsquery): a passage rarely contains every word
+    of a question ("What did Apple raise its quarterly dividend to"), and the
+    ranking, not the match, should separate good from bad. Stop words are
+    dropped by the 'english' configuration; words are stemmed the same way as
+    the indexed text. Only [a-z0-9] survives, so the string is always a valid
+    tsquery.
+    """
+    words = [w for w in _WORD.findall(query.lower()) if len(w) > 1]
+    return " | ".join(dict.fromkeys(words))
+
+
+async def text_search(
+    conn,
+    query: str,
+    k: int = 30,
+    *,
+    company: str | None = None,
+    section: str | None = None,
+    content_type: str | None = None,
+    fiscal_period: str | Sequence[str] | None = None,
+) -> list[SearchHit]:
+    """Full-text search over `content_tsv` (migration 0009), the same metadata
+    filters as `search`, ranked by ts_rank_cd with length normalisation
+    (normalisation 1: rank / (1 + log(document length))), the closest
+    built-in to BM25's length penalty. Each hit's `lexical_score` and `score`
+    are that rank; `vector_score` is 0 (not computed here)."""
+    tsq = _or_query(query)
+    if not tsq:
+        return []
+    params: dict[str, Any] = {"q": tsq, "k": k}
+    where = ["content_tsv @@ to_tsquery('english', :q)"]
+    if company:
+        where.append("(ticker = :company_exact OR company ILIKE :company_like)")
+        params["company_exact"] = company.strip().upper()
+        params["company_like"] = f"%{company.strip()}%"
+    if section:
+        where.append("section ILIKE :section")
+        params["section"] = f"%{section}%"
+    if content_type:
+        where.append("content_type = :content_type")
+        params["content_type"] = content_type
+    if fiscal_period:
+        periods = [fiscal_period] if isinstance(fiscal_period, str) else list(fiscal_period)
+        where.append("fiscal_period = ANY(:fiscal_periods)")
+        params["fiscal_periods"] = periods
+    columns = ", ".join(_COLUMNS)
+    sql = f"""
+        SELECT {columns}, structured::text AS structured,
+               ts_rank_cd(content_tsv, to_tsquery('english', :q), 1) AS score
+        FROM {TABLE}
+        WHERE {' AND '.join(where)}
+        ORDER BY score DESC, chunk_id
+        LIMIT :k
+    """
+    rows = (await conn.execute(text(sql), params)).fetchall()
+    out = []
+    for row in rows:
+        hit = _row_to_hit(row)
+        out.append(replace(hit, vector_score=0.0, lexical_score=hit.score))
+    return out
+
