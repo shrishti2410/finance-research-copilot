@@ -226,6 +226,9 @@ class Figure:
     # Half a unit in the last place the answer wrote, in `value`'s units. The
     # tolerance a derivation has to meet; see the module docstring.
     half_ulp: float = 0.0
+    # Written with a percent sign or "percent": supported only by a percentage
+    # or a ratio x 100 (`percent_evidence`).
+    is_percent: bool = False
 
     def __str__(self) -> str:
         return self.text
@@ -293,6 +296,44 @@ def _walk_figures(value, key: str | None = None) -> list[float]:
     return []
 
 
+_PERCENT_KEY = re.compile(r"pct|percent", re.I)
+
+
+def _walk_percent(value, key: str | None = None, unit: str | None = None) -> list[float]:
+    """The values in a tool result that a figure written as a percentage may
+    match: percentages as they are, and ratios times 100.
+
+    - text: only numbers written with a percent sign ("29%", "71.07 percent");
+    - a numeric field whose key says pct/percent, or whose sibling "unit" is
+      "percent": its value as it is;
+    - any other numeric field (not bookkeeping): its value x 100, a ratio
+      shown as a percentage (gross_margin 0.7107 is 71.07%).
+    A bare number in text ("5 of 16 rules", "Item 7") is never a percentage.
+    """
+    if isinstance(value, bool):
+        return []
+    if isinstance(value, (int, float)):
+        if key in _BOOKKEEPING_KEYS:
+            return []
+        if (key and _PERCENT_KEY.search(key)) or (unit or "").lower() == "percent":
+            return [float(value)]
+        return [float(value) * 100.0]
+    if isinstance(value, str):
+        return [c.value for c in candidates(value) if c.is_percent]
+    if isinstance(value, dict):
+        sibling_unit = value.get("unit") if isinstance(value.get("unit"), str) else None
+        out: list[float] = []
+        for item_key, item in value.items():
+            out.extend(_walk_percent(item, item_key, sibling_unit))
+        return out
+    if isinstance(value, (list, tuple)):
+        out = []
+        for item in value:
+            out.extend(_walk_percent(item, key, unit))
+        return out
+    return []
+
+
 def _successful_results(steps):
     for step in steps:
         tool = getattr(step, "tool", None) or (
@@ -320,6 +361,15 @@ def evidence_values(steps) -> set[float]:
     values: set[float] = set()
     for result in _successful_results(steps):
         values.update(_walk(result))
+    return values
+
+
+def percent_evidence(steps) -> set[float]:
+    """What a figure written as a percentage may match directly: the
+    percentages in this turn's successful results, and their ratios x 100."""
+    values: set[float] = set()
+    for result in _successful_results(steps):
+        values.update(_walk_percent(result))
     return values
 
 
@@ -449,6 +499,7 @@ def answer_figures(answer: str) -> list[Figure]:
             start=candidate.start,
             context=" ".join(answer[start:end].split()),
             half_ulp=_half_ulp(candidate),
+            is_percent=candidate.is_percent,
         ))
     return figures
 
@@ -473,12 +524,19 @@ def unsupported_figures(answer: str, steps) -> list[Figure]:
     figure the model derived is not accepted on the strength of arithmetic
     this guard can reconstruct; it has to have come back from the `calculate`
     tool, whose result is then where it is found. See the module docstring.
+
+    A figure written as a percentage is matched only against percentages and
+    ratios x 100 (`percent_evidence`), not against any number: "5%" is not
+    supported by the 5 in "5 of 16 rules" (benchmarks/SIGNALS_EXPLAIN_7C.md,
+    SBIN.NS).
     """
     evidence = evidence_values(steps)
     if not evidence:
         return answer_figures(answer)
+    percents = percent_evidence(steps)
     return [figure for figure in answer_figures(answer)
-            if not _directly_supported(figure.value, evidence)]
+            if not (_directly_supported(figure.value, percents, (1.0,)) if figure.is_percent
+                    else _directly_supported(figure.value, evidence))]
 
 
 def unsupported_figures_reconstructing(answer: str, steps) -> list[Figure]:
