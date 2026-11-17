@@ -33,6 +33,18 @@ const DOCS_REF = "feat/v2-market";
 // at build time to show it (read at build, like NEXT_PUBLIC_API_BASE).
 const AGENT_EXPLAIN = process.env.NEXT_PUBLIC_ENABLE_AGENT_EXPLAIN === "1";
 const TABS = ["chart", "signal", "backtest", "options", "research"] as const;
+
+// The Chart tab's indicators: the same keys as /chart. Overlays draw on the
+// price; the others get a pane each below it.
+const CHART_INDICATORS: { key: string; label: string; pane: boolean }[] = [
+  { key: "sma50", label: "SMA 50", pane: false },
+  { key: "sma200", label: "SMA 200", pane: false },
+  { key: "bollinger", label: "Bollinger", pane: false },
+  { key: "volume", label: "Volume", pane: true },
+  { key: "rsi14", label: "RSI 14", pane: true },
+  { key: "macd", label: "MACD", pane: true },
+];
+const DEFAULT_CHART_INDICATORS = ["sma50", "sma200", "volume", "rsi14", "macd"];
 type Tab = (typeof TABS)[number];
 
 function isoDaysAgo(days: number) {
@@ -512,6 +524,8 @@ function StockPage() {
   const [report, setReport] = useState<{ data?: SignalReport; error?: string } | null>(null);
   const slow = useSlow(report === null);
   const [chartReady, setChartReady] = useState(false);
+  const [indicators, setIndicators] = useState<string[]>(DEFAULT_CHART_INDICATORS);
+  const lowerPanes = CHART_INDICATORS.filter((i) => i.pane && indicators.includes(i.key)).length;
   const onChartLoaded = useCallback(() => setChartReady(true), []);
 
   useEffect(() => {
@@ -554,16 +568,43 @@ function StockPage() {
           </TabsList>
           <TabsContent value="chart">
             <div data-loaded={chartReady ? "chart" : undefined}>
+              <fieldset className="mt-3 flex flex-wrap gap-2 text-xs">
+                <legend className="sr-only">Indicators</legend>
+                {CHART_INDICATORS.map((ind) => {
+                  const on = indicators.includes(ind.key);
+                  return (
+                    <label
+                      key={ind.key}
+                      className={`flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1 ${on ? "border-accent text-fg" : "border-border text-fg-muted"}`}
+                    >
+                      <input
+                        type="checkbox"
+                        className="accent-[var(--color-accent)]"
+                        checked={on}
+                        onChange={(e) =>
+                          setIndicators((cur) =>
+                            e.target.checked
+                              ? CHART_INDICATORS.map((i) => i.key).filter((k) => k === ind.key || cur.includes(k))
+                              : cur.filter((k) => k !== ind.key),
+                          )
+                        }
+                      />
+                      {ind.label}
+                    </label>
+                  );
+                })}
+              </fieldset>
               <PriceChart
-                spec={{ kind: "price_chart", ticker, start: isoDaysAgo(730), end: isoDaysAgo(0), indicators: ["volume", "sma50", "sma200"] }}
+                spec={{ kind: "price_chart", ticker, start: isoDaysAgo(730), end: isoDaysAgo(0), indicators }}
                 token={token}
-                height={460}
+                height={340 + 110 * lowerPanes}
                 markers={report?.data?.markers ?? []}
                 onLoaded={onChartLoaded}
+                visibleMonths={9}
               />
               <p className="text-xs text-fg-subtle">
                 Arrows mark the days the signal went into the stock (green, below the bar) or out of it (red, above).
-                Lines: 50-day and 200-day averages.
+                The chart opens on the last 9 months; drag or scroll it to see two years.
               </p>
             </div>
           </TabsContent>
