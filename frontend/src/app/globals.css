@@ -99,3 +99,37 @@ body {
 .fade-up {
   animation: fade-up 0.5s ease-out both;
 }
+
+/* The landing page's market strip: a slow loop of two copies of the list,
+   paused on hover, on focus and by its button. With reduced motion it does
+   not move at all: one wrapped, static list, and no pause button. */
+@keyframes marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+.marquee-track {
+  animation: marquee 70s linear infinite;
+}
+.marquee:hover .marquee-track,
+.marquee:focus-within .marquee-track,
+.marquee[data-paused] .marquee-track {
+  animation-play-state: paused;
+}
+@media (prefers-reduced-motion: reduce) {
+  .marquee-track {
+    animation: none !important;
+    width: auto;
+  }
+  .marquee-list {
+    flex-wrap: wrap;
+    row-gap: 0.5rem;
+  }
+  .marquee-copy,
+  .marquee-toggle {
+    display: none;
+  }
+}
