@@ -293,7 +293,7 @@ async def search(
     company: str | None = None,
     section: str | None = None,
     content_type: str | None = None,
-    fiscal_period: str | None = None,
+    fiscal_period: str | Sequence[str] | None = None,
     min_score: float | None = None,
     backend: str | None = None,
     exact: bool = False,
@@ -335,8 +335,11 @@ async def search(
         where.append("content_type = :content_type")
         params["content_type"] = content_type
     if fiscal_period:
-        where.append("fiscal_period = :fiscal_period")
-        params["fiscal_period"] = fiscal_period
+        # One label ("FY2026") or several: a 10-K reports its own year and the
+        # two before it, so the filings that report a year are more than one.
+        periods = [fiscal_period] if isinstance(fiscal_period, str) else list(fiscal_period)
+        where.append("fiscal_period = ANY(:fiscal_periods)")
+        params["fiscal_periods"] = periods
 
     if not exact:
         # For this transaction only. See the module docstring: without the
