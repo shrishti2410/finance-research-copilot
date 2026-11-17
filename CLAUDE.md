@@ -33,6 +33,50 @@ the hosted noise repeat, and the final Qwen run. Do not start them.
 is available for a step that needs them, or when the Groq daily allowance is
 there for a hosted run. Work on version 2 the rest of the time.
 
+## Backlog after version 2 is deployed (set 2026-11-17)
+
+A hardening phase, in this order. Each item is tests-first and ends with a
+short report. Do not start it before version 2 is live. Items 1 and 2 bring
+back the hybrid search and the larger question set dropped above.
+
+1. **Hybrid retrieval.**
+   - Postgres full-text (BM25-style ranking) alongside pgvector, fused with
+     Reciprocal Rank Fusion, plus metadata filters.
+   - No cross-encoder: the free tier's CPU cannot afford it.
+   - Measure on the retrieval check and on the dev eval.
+2. **Held-out eval.**
+   - Keep the 40 questions as the dev set.
+   - Write about 60 new held-out questions: unanswerable, multi-hop,
+     cross-company, multi-year and unit traps. Freeze them before any tuning.
+   - Report accuracy with 95% Wilson intervals, and abstention accuracy on the
+     unanswerable ones.
+   - Run the held-out set only once per change set, within the Groq budget.
+   - New eval questions need approval (see "When to stop for approval").
+3. **Claim-level verification.**
+   - For each figure in an answer, store the claim, value, unit, type
+     (extracted, derived or interpretation), source id (accession, section),
+     and the formula for derived ones.
+   - Builds on the unit-aware grounding fix. It is a grounding-guard change, so
+     show the diff and wait.
+   - Frontend: clicking a figure opens its source passage.
+4. **Ensemble robustness.**
+   - A minimum trade count, shrinkage toward equal weights, and a weight cap.
+   - Compare against an equal-weight ensemble, and add the Deflated Sharpe
+     Ratio.
+   - Evaluate on the 10 hold-out stocks, with the adoption rule written down
+     and committed before running.
+5. **Strategy drift detection.**
+   - Rolling Sharpe against each strategy's own history, with CUSUM.
+   - Flag and down-weight drifting strategies, and show it on the signal page.
+6. **NVDA, AAPL and MSFT in the signals watchlist**, so one stock page has both
+   10-K research and signals.
+7. **Light observability and Greeks.**
+   - Per-stage timings, tokens, p50 and p95, on a small System page.
+   - Greeks (delta, gamma, theta, vega) on the options tab.
+
+**Out of scope for now:** Celery, a full Grafana stack, a portfolio engine,
+paper trading, live option chains.
+
 These five rules are not optional.
 
 ## When to stop for approval
