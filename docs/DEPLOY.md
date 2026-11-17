@@ -59,7 +59,7 @@ asked, to keep the Groq allowance for an eval the next morning.**
 
 **Settings the night it went live.** `HOSTED_TOKENS_PER_DAY=20000` and
 `DEMO_QUESTIONS_PER_DAY=2`, kept low until the next morning's eval had its Groq
-allowance. Raise them to 60,000 and 10 afterwards (sections 5 and 6).
+allowance. Raise them to 110,000 and 10 with the version 2 deploy (60,000 was the earlier plan; see `docs/DEPLOY_V2.md` section 3 for why).
 
 ## Contents
 

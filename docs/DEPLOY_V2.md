@@ -56,9 +56,10 @@ rows, 1 user; no `price_bars`, `price_fetches` or `strategy_cards`; 55 MB.
 | `0006_price_bars` | `price_bars`, `price_fetches`: the daily price cache | none required: filled on first request per ticker and refreshed after `MARKET_CACHE_TTL_HOURS` (24). Preloading avoids the first visitor paying the fetch. |
 | `0007_strategy_cards` | `strategy_cards`: one row per card section, `vector(384)`, no index | **required** for the card text on the Signal tab and in explanations: 26 cards, 182 sections |
 | `0008_precomputed_views` | `precomputed_views`: the daily stock pages | none: written by the daily job (section 6) and by the first visitor when a page is missing or stale |
+| `0009_filing_chunks_fts` | a generated `tsvector` column and a GIN index on `filing_chunks`, for hybrid retrieval (off by default) | none: Postgres fills the generated column for every existing row during the migration. That rewrites the table once, so the first start on the merged code can take longer than usual. How long on Neon was **not measured**. |
 
 `scripts/start.sh` runs `alembic upgrade head` on every Render start, so
-deploying the merged code applies both migrations by itself. The data is loaded
+deploying the merged code applies all four migrations by itself. The data is loaded
 from the laptop, after the migrations exist.
 
 **Load steps** (PowerShell, from a checkout of the merged code, local stack not
@@ -69,7 +70,7 @@ needed except the bge-small weights for the cards):
 $env:DATABASE_URL = ((Get-Content .env.neon) -match '^DATABASE_URL=')[0].Substring(13)
 
 # 2. Schema (skip if Render has already started on the merged code)
-alembic upgrade head                    # 0006, 0007, 0008
+alembic upgrade head                    # 0006, 0007, 0008, 0009
 python scripts/check_migration.py       # models and migrations agree
 
 # 3. Strategy cards: validate, then embed and write 182 sections
@@ -83,7 +84,7 @@ python scripts/load_prices.py --years 8
 Remove-Item Env:DATABASE_URL
 ```
 
-**Check afterwards** (read only): `alembic_version` = `0008_precomputed_views`;
+**Check afterwards** (read only): `alembic_version` = `0009_filing_chunks_fts`;
 `strategy_cards` = 182 rows; `price_bars` about 13,500 rows if step 4 ran
 (5 x 2,246 + 2,241 locally). Size grows by a few MB.
 
@@ -98,12 +99,12 @@ Environment variables:
 
 | name | change |
 |---|---|
-| `HOSTED_TOKENS_PER_DAY` | raise to 60000 as planned |
-| `DEMO_QUESTIONS_PER_DAY` | raise to 10 as planned |
+| `HOSTED_TOKENS_PER_DAY` | raise to **110000** (not the 60000 planned earlier). The 2026-11-17 calculator run measured 10,223 prompt tokens and 387 completion tokens per question on average ([HOSTED_RUN_2026-11-17_CALCULATOR.md](../benchmarks/HOSTED_RUN_2026-11-17_CALCULATOR.md)), so 60000 allows only about 5 questions. 110000 allows about 10. That leaves about 90,000 of the Groq key's 200,000 daily tokens for development. |
+| `DEMO_QUESTIONS_PER_DAY` | raise to 10, matching the token cap above |
 | `MARKET_CACHE_TTL_HOURS` | new, optional; default 24 |
 | everything else | unchanged (`DATABASE_URL`, `REDIS_URL`, `JWT_SECRET`, `INTERNAL_TOKEN`, `GROQ_API_KEY`, `SEC_EDGAR_USER_AGENT`, `CORS_ORIGINS`, `ENVIRONMENT`, provider settings) |
 
-After deploy, `/health/ready` should report `"migration": "0008_precomputed_views"`.
+After deploy, `/health/ready` should report `"migration": "0009_filing_chunks_fts"`.
 The container became healthy 79 s after start at `--cpus=0.1` locally; the
 first request after Render's idle spin-down pays that, and the frontend shows
 its "Waking the API" notice.
@@ -181,7 +182,7 @@ with SQL, because roles created in the Neon Console become members of
 
 **Your steps, after the merge** (the workflow runs from `master` only):
 
-1. Neon at `0008_precomputed_views`: after Render has started on the merged
+1. Neon at `0009_filing_chunks_fts`: after Render has started on the merged
    code, or with step 2 of section 2.
 2. `gh auth status`: the GitHub CLI logged in to this repository's account.
 3. From the repository root: `python scripts/create_precompute_role.py`.
