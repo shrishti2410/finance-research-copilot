@@ -28,6 +28,10 @@ import { cn, formatPct } from "@/lib/utils";
 
 // Strategy cards are linked on GitHub at the branch that has them.
 const DOCS_REF = "feat/v2-market";
+// The agent's explanation runs on local Ollama only, so a deployed build hides
+// it until it is wired to the hosted model. Set NEXT_PUBLIC_ENABLE_AGENT_EXPLAIN=1
+// at build time to show it (read at build, like NEXT_PUBLIC_API_BASE).
+const AGENT_EXPLAIN = process.env.NEXT_PUBLIC_ENABLE_AGENT_EXPLAIN === "1";
 const TABS = ["chart", "signal", "backtest", "options", "research"] as const;
 type Tab = (typeof TABS)[number];
 
@@ -191,6 +195,7 @@ function SignalTab({ report, token, ticker }: { report: SignalReport; token: str
           </p>
         ) : null}
       </section>
+      {AGENT_EXPLAIN ? (
       <section aria-labelledby="agent" className="flex flex-col gap-3">
         <h2 id="agent" className="font-semibold">In words</h2>
         {!explain.data ? (
@@ -222,6 +227,7 @@ function SignalTab({ report, token, ticker }: { report: SignalReport; token: str
           </Card>
         )}
       </section>
+      ) : null}
     </div>
   );
 }

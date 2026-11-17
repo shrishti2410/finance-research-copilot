@@ -207,6 +207,24 @@ class PriceFetch(Base):
     )
 
 
+class PrecomputedView(Base):
+    """A stock page or the dashboard, computed once a day (market/precompute.py).
+
+    `payload` is the endpoint's JSON; `code_version` is the hash of the signal
+    code that produced it, so a page from older code is never served.
+    """
+
+    __tablename__ = "precomputed_views"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    as_of: Mapped[date | None] = mapped_column(Date, nullable=True)
+    code_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class UsageCounter(Base):
     """Questions and hosted-model tokens per UTC day, for the caps in api/quotas.py.
 
