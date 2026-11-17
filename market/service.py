@@ -26,6 +26,7 @@ __all__ = ["chart_data", "price_analytics", "backtest", "strategy_catalogue",
            "WARMUP_CALENDAR_DAYS", "BACKTEST_WARMUP_CALENDAR_DAYS", "DEFAULT_BENCHMARK",
            "parse_indicators", "default_benchmark", "market_info", "trading_signal",
            "signal_evaluation", "option_ideas", "watchlist", "signal_report",
+           "compute_watchlist", "compute_signal_report", "compute_option_ideas",
            "SIGNAL_HISTORY_CALENDAR_DAYS"]
 
 # Enough trading days for the slowest indicator offered (SMA 200) plus the
@@ -203,7 +204,7 @@ async def signal_evaluation(ticker: str, years: int = 5, data: MarketData | None
             "provider": data.provider.name, **out}
 
 
-async def option_ideas(ticker: str, structure: str | None = None, days: int = 30,
+async def compute_option_ideas(ticker: str, structure: str | None = None, days: int = 30,
                        lot_size: int = 1, data: MarketData | None = None,
                        now: datetime | None = None) -> dict:
     """Option structures for `ticker`, priced with Black-Scholes from its own
@@ -258,7 +259,7 @@ async def option_ideas(ticker: str, structure: str | None = None, days: int = 30
 SPARKLINE_DAYS = 60
 
 
-async def watchlist(tickers=None, benchmark: str | None = None,
+async def compute_watchlist(tickers=None, benchmark: str | None = None,
                     data: MarketData | None = None, now: datetime | None = None) -> dict:
     """One call for the dashboard: the index strip and a card per stock.
 
@@ -318,7 +319,7 @@ def _changes(days, position, since) -> list[dict]:
     return out
 
 
-async def signal_report(ticker: str, data: MarketData | None = None,
+async def compute_signal_report(ticker: str, data: MarketData | None = None,
                         now: datetime | None = None) -> dict:
     """Everything the stock page shows about the signal, in one call: the
     evidence, the backtest verdict with its curves and risk figures, the days
@@ -370,4 +371,45 @@ async def _card_excerpts(keys: list[str]) -> list[dict]:
     except Exception:  # noqa: BLE001
         return []
     return out
+
+
+# --- served from the daily precompute when fresh (market/precompute.py) -------
+
+async def watchlist(tickers=None, benchmark: str | None = None,
+                    data: MarketData | None = None, now: datetime | None = None) -> dict:
+    """The dashboard: the stored copy when fresh, else computed and stored.
+    Only the default watchlist is stored; any other list is computed."""
+    from market import precompute
+
+    if tickers is not None or benchmark is not None or data is not None:
+        return await compute_watchlist(tickers, benchmark, data, now)
+    return await precompute.cached(precompute.KEY_WATCHLIST,
+                                   lambda: compute_watchlist(now=now), now=now)
+
+
+async def signal_report(ticker: str, data: MarketData | None = None,
+                        now: datetime | None = None) -> dict:
+    from market import precompute
+
+    if data is not None:
+        return await compute_signal_report(ticker, data, now)
+    symbol = normalize_ticker(ticker)
+    return await precompute.cached(precompute.report_key(symbol),
+                                   lambda: compute_signal_report(symbol, now=now),
+                                   market=market_for(symbol), now=now)
+
+
+async def option_ideas(ticker: str, structure: str | None = None, days: int = 30,
+                       lot_size: int = 1, data: MarketData | None = None,
+                       now: datetime | None = None) -> dict:
+    """Stored only for the default view (the suggested structures, 30 days,
+    per share); any other request is computed."""
+    from market import precompute
+
+    if structure or days != 30 or lot_size != 1 or data is not None:
+        return await compute_option_ideas(ticker, structure, days, lot_size, data, now)
+    symbol = normalize_ticker(ticker)
+    return await precompute.cached(precompute.options_key(symbol),
+                                   lambda: compute_option_ideas(symbol, now=now),
+                                   market=market_for(symbol), now=now)
 
