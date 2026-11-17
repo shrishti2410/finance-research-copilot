@@ -91,7 +91,12 @@ def test_production_refuses_an_unsafe_setting_and_names_it(change, named):
         assert secret not in message, "a refusal must not echo a secret"
 
 
-def test_every_problem_is_listed_at_once():
+def test_every_problem_is_listed_at_once(monkeypatch):
+    # `_env_file=None` skips .env but not the process environment, and CI exports
+    # a real SEC_EDGAR_USER_AGENT (and local DATABASE_URL, REDIS_URL). Clear every
+    # setting's variable so this sees the bare defaults on any machine.
+    for name in Settings.model_fields:
+        monkeypatch.delenv(name.upper(), raising=False)
     with pytest.raises(ValueError) as caught:
         Settings(_env_file=None, environment="production")
     message = str(caught.value)
