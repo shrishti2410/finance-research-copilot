@@ -390,6 +390,23 @@ function OptionsTab({ token, ticker }: { token: string; ticker: string }) {
           <div><dt className="text-xs text-fg-subtle">Breakeven</dt><dd className="font-semibold">{s.breakevens.map((b) => `${sym}${b.toFixed(2)}`).join(" / ") || "–"}</dd></div>
           <div><dt className="text-xs text-fg-subtle">Net premium (est.)</dt><dd className="font-semibold">{s.net_premium_estimate >= 0 ? "receive " : "pay "}{sym}{Math.abs(s.net_premium_estimate).toFixed(2)}</dd></div>
         </dl>
+        <div className="mt-4 border-t border-border pt-4">
+          <p className="mb-2 text-xs uppercase tracking-wider text-fg-subtle">Greeks (estimates, per share, today)</p>
+          <dl className="tabular grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
+            {[
+              ["Delta", s.greeks.delta.toFixed(3), "value change per 1 move in the stock"],
+              ["Gamma", s.greeks.gamma.toFixed(4), "change in delta per 1 move"],
+              ["Theta", `${s.greeks.theta_per_day < 0 ? "−" : ""}${sym}${Math.abs(s.greeks.theta_per_day).toFixed(2)}`, "value change per day that passes"],
+              ["Vega", `${s.greeks.vega_per_vol_point < 0 ? "−" : ""}${sym}${Math.abs(s.greeks.vega_per_vol_point).toFixed(2)}`, "value change per volatility point"],
+            ].map(([label, value, help]) => (
+              <div key={label}>
+                <dt className="text-xs text-fg-subtle">{label}</dt>
+                <dd className="font-semibold">{value}</dd>
+                <dd className="text-[11px] text-fg-subtle">{help}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
         <div className="mt-4 overflow-x-auto">
           <table className="tabular w-full min-w-[420px] text-left text-sm">
             <caption className="sr-only">Legs of the structure</caption>
