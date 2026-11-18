@@ -4,7 +4,7 @@ export const GITHUB_URL = "https://github.com/shrishti2410/finance-research-copi
 
 export const SITE_NAME = "Finance Research Copilot";
 export const SITE_DESCRIPTION =
-  "Research public companies from their SEC filings and test rule-based trading strategies, with every number computed in code and checked.";
+  "Research public companies from their SEC filings, with a strategy audit of classic trading rules alongside, and every number computed in code and checked.";
 // The public address, for absolute URLs in sharing tags and the sitemap.
 // NEXT_PUBLIC_SITE_URL overrides it (a preview deploy, a custom domain).
 export const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://finance-research-copilot-swart.vercel.app";

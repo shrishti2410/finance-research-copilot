@@ -24,19 +24,19 @@ const FEATURES: { icon: typeof FileSearch; title: string; body: string; shot: Sh
   },
   {
     icon: Layers,
-    title: "Signals with reasons",
+    title: "Strategy audit: signals with reasons",
     body: "Textbook rules vote on each stock. Every vote is shown with its weight and a handbook card explaining the rule.",
     shot: "feature-signal",
   },
   {
     icon: Sigma,
-    title: "Honest backtests",
+    title: "Strategy audit: honest backtests",
     body: "Walk-forward, after trading costs, against buy-and-hold and random timing. When there is no edge, it says so.",
     shot: "feature-backtest",
   },
   {
     icon: LineChart,
-    title: "Options analytics",
+    title: "Strategy audit: options",
     body: "Payoffs, breakevens and Greeks for common structures, with premiums estimated from historical volatility.",
     shot: "feature-options",
   },
@@ -90,12 +90,13 @@ export default async function Landing() {
       <section className="mx-auto grid max-w-6xl items-center gap-10 px-4 pb-12 pt-12 sm:px-6 sm:pt-20 lg:grid-cols-[1fr_1.15fr]">
         <div className="fade-up flex flex-col gap-6">
           <h1 className="text-4xl font-semibold leading-[1.1] tracking-tight text-fg sm:text-5xl">
-            Research companies and test trading strategies, with every number checked
+            Research public companies from their filings, with every number checked
           </h1>
           <p className="max-w-xl text-lg text-fg-muted">
-            Ask questions answered from SEC filings, explore rule-based signals for Indian and US stocks, and
-            backtest them honestly. Python does the maths, the AI explains it, and a checker verifies each
-            figure.
+            Ask about 15 US companies and get answers from their annual reports, with the passages cited. A
+            strategy audit alongside shows what classic trading rules say about Indian and US stocks, and
+            whether they have actually worked. Python does the maths, the AI explains it, and a checker
+            verifies each figure.
           </p>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
             <DemoButton />
@@ -118,7 +119,7 @@ export default async function Landing() {
 
       <section aria-labelledby="features" className="mx-auto max-w-6xl px-4 pt-16 sm:px-6">
         <h2 id="features" className="text-2xl font-semibold tracking-tight text-fg">
-          Filings, signals and backtests in one place
+          Research first, with a strategy audit alongside
         </h2>
         <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
           {FEATURES.map(({ icon: Icon, title, body, shot }) => (

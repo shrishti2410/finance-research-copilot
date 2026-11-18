@@ -1,0 +1,43 @@
+"""Research is the main product; signals, backtests and options are the
+"Strategy audit" module (decided 2026-11-18). Wording only: no feature is
+removed, and every page keeps a link.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+SRC = Path(__file__).resolve().parents[1] / "frontend" / "src"
+CHROME = (SRC / "components" / "SiteChrome.tsx").read_text(encoding="utf-8")
+LANDING = (SRC / "app" / "page.tsx").read_text(encoding="utf-8")
+ABOUT = (SRC / "app" / "about" / "page.tsx").read_text(encoding="utf-8")
+SITE = (SRC / "lib" / "site.ts").read_text(encoding="utf-8")
+
+
+def _nav():
+    block = CHROME[CHROME.index("const NAV = ["):]
+    block = block[:block.index("];")]
+    return re.findall(r'href: "([^"]+)", label: "([^"]+)"', block)
+
+
+def test_the_nav_puts_research_first_then_the_strategy_audit():
+    assert _nav() == [("/research", "Research"), ("/dashboard", "Strategy audit")]
+
+
+def test_the_hero_leads_with_research():
+    h1 = re.search(r"<h1[^>]*>\s*(.*?)\s*</h1>", LANDING, re.S).group(1)
+    assert h1.lower().startswith("research")
+    assert "trading strateg" not in h1.lower()
+
+
+def test_strategy_audit_is_named_on_the_landing_page_about_and_in_the_description():
+    for name, text in (("landing", LANDING), ("about", ABOUT), ("site", SITE)):
+        assert re.search(r"[Ss]trategy audit", text), name
+
+
+def test_no_feature_loses_its_link():
+    for href in ("/research", "/dashboard", "/backtest", "/about"):
+        assert f'href: "{href}"' in CHROME, href
+    for href in ("/research", "/chart", "/dashboard", "/backtest", "?tab=options"):
+        assert href in ABOUT, href

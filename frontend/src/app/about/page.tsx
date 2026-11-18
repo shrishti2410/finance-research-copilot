@@ -8,7 +8,7 @@ import { AUTHOR } from "@/lib/site";
 export const metadata: Metadata = {
   title: "About",
   description:
-    "A free research and strategy-audit site for Indian and US stocks: what it does, what it covers, where the data comes from, and who built it.",
+    "A free research site for public companies, with a strategy audit for Indian and US stocks: what it does, what it covers, where the data comes from, and who built it.",
 };
 
 // About the site, for a visitor: plain words, no technical detail and no
@@ -23,12 +23,14 @@ function GitHubMark({ className }: { className?: string }) {
   );
 }
 
-const CAN_DO = [
-  {
-    href: "/research",
-    title: "Ask about a company's annual report",
-    body: "Ask questions about 15 US companies and get answers from their 10-K filings, with the passages shown.",
-  },
+const RESEARCH = {
+  href: "/research",
+  title: "Ask about a company's annual report",
+  body: "Ask questions about 15 US companies and get answers from their 10-K filings, with the passages shown.",
+};
+
+// The strategy audit: everything about trading rules and prices.
+const AUDIT = [
   {
     href: "/chart",
     title: "Charts and indicators",
@@ -87,15 +89,32 @@ export default function About() {
 
       <Section id="what" title="What this is">
         <p>
-          A free site for researching Indian and US stocks and for checking trading strategies honestly. You can
-          ask questions about a company&apos;s annual report, look at its charts, and see whether popular trading
-          rules would really have worked on it, without having to take anyone&apos;s word for it.
+          A free research site for public companies. Its main part answers your questions about a company from
+          its annual report. Alongside it, a strategy audit shows what popular trading rules say about Indian and
+          US stocks, and whether they would really have worked, without having to take anyone&apos;s word for it.
         </p>
       </Section>
 
       <Section id="can-do" title="What you can do">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-fg-subtle">Research</h3>
+        <ul className="grid gap-3">
+          {[RESEARCH].map(({ href, title, body }) => (
+            <li key={href}>
+              <Link
+                href={href}
+                className="flex h-full flex-col rounded-[var(--radius-card)] border border-border bg-surface p-4 hover:border-fg-subtle"
+              >
+                <span className="flex items-center gap-1 font-medium text-fg">
+                  {title} <ArrowRight className="size-4 text-accent" aria-hidden="true" />
+                </span>
+                <span className="mt-1 text-sm">{body}</span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+        <h3 className="pt-3 text-sm font-semibold uppercase tracking-wider text-fg-subtle">Strategy audit</h3>
         <ul className="grid gap-3 sm:grid-cols-2">
-          {CAN_DO.map(({ href, title, body }) => (
+          {AUDIT.map(({ href, title, body }) => (
             <li key={href}>
               <Link
                 href={href}
