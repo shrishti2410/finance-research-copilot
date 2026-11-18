@@ -12,6 +12,12 @@ what P/E does that EPS imply?":
 
 If it cannot ground a number, it says so instead of guessing.
 
+What is enforced today is **numerical provenance**: every figure in an answer
+must match a value a tool returned in the same turn
+([docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md)). Checking that each
+figure is the right one for its claim (the right company, period, unit and
+formula) is **claim-level verification, in progress**.
+
 FastAPI and an agent loop in Python, Postgres with pgvector, Redis, a Next.js
 client. The model is pluggable: Qwen 2.5 on a laptop through Ollama, or
 `openai/gpt-oss-120b` hosted on Groq.
@@ -40,9 +46,14 @@ Every number below links to the file that records how it was measured: the comma
 the commit, the date and machine, and the raw output. Anything not yet measured is
 marked **pending**.
 
-### Answer accuracy (40-question eval)
+### Answer accuracy on the 40-question dev set
 
-| system | passed | source |
+These are **dev-set** scores. The 40 questions were used during development,
+so they overstate accuracy on questions the system has not seen. A
+63-question held-out set is prepared (reviewed 2026-11-17) and has not been
+run.
+
+| system | dev set passed | source |
 |---|---:|---|
 | `gpt-oss-120b` on Groq, current code (`d106dae`, 2026-11-16) | **36/40** | [HOSTED_RUN_2026-11-16.md](benchmarks/HOSTED_RUN_2026-11-16.md) |
 | `gpt-oss-120b` on Groq, before structured facts (2026-11-15) | 30/40 | [MODEL_COMPARISON.md](benchmarks/MODEL_COMPARISON.md) |
@@ -76,7 +87,7 @@ Every failure is classified by hand from its trace, by the rule in
 |---|---|---|
 | corpus | 45 10-Ks of 15 companies, 2,914 chunks, 62,387 XBRL facts rows | [STEP4_CORPUS.md](benchmarks/STEP4_CORPUS.md) |
 | ingestion from empty | 19.4 min on a laptop CPU; resumes after a crash and gives an identical index | same |
-| retrieval hit@5, 2 filings against 45 | 100.0% against 75.9%: more years of each company confuse the year asked about | same |
+| retrieval hit@5 on a 29-question check, 2 filings against 45 | 100.0% against 75.9%: more years of each company confuse the year asked about | same |
 | concurrent users, local model | 5 with no failures; the model is the ceiling between 5 and 10 (2026-09-13) | [LOAD_TEST_RESULTS.md](benchmarks/LOAD_TEST_RESULTS.md) |
 | API memory under a 512 MB cap, answering a real question | 414.6 MiB peak, no out-of-memory kill | [CONTAINER_MEMORY.md](benchmarks/CONTAINER_MEMORY.md) |
 | public demo on free tiers (Vercel, Render, Neon, Upstash) | deployed 2026-11-16 (version 1), with what was and was not checked live | [DEPLOY.md](docs/DEPLOY.md) |
@@ -137,8 +148,11 @@ A research engine for daily signals on a watchlist:
 It is built to show what a signal is worth, not to recommend trades.
 
 **What is in it.**
-- **Signals.** 15 technical rules on an NSE stock, 16 on a US one, which can also
-  go short (trend, breakout, mean reversion, momentum).
+- **Signals.** 17 technical rules are defined in code (`market/strategies.py`); 15 of them vote
+on an NSE stock and 16 on a US one (trend, breakout, mean
+  reversion, momentum). One is a duplicate of Bollinger reversion and never
+  votes; a long/short variant votes only where overnight shorts are allowed,
+  that is on a US stock.
   - Weights are refitted walk-forward on the first trading day of each month,
     from each rule's trailing Sharpe ratio.
   - The market regime (ADX, the slope of the 50-day average, volatility
@@ -206,7 +220,7 @@ flowchart LR
     yahoo[Yahoo Finance<br/>daily bars] --> cache[(price cache)]
 
     subgraph quant [Quant engine: deterministic, no language model]
-        cache --> rules[15 rules] --> wf[walk-forward weights<br/>+ regime + drift flag]
+        cache --> rules[15 voting rules on NSE,<br/>16 on US] --> wf[walk-forward weights<br/>+ regime + drift flag]
         wf --> sig[signal, coverage,<br/>confidence]
         sig --> bt[backtest vs buy-and-hold,<br/>index, 200 random timings]
         bt --> verdict[verdict: edge / no edge]
@@ -234,6 +248,10 @@ numbers in that output.
 ## How it was built
 
 A few practices run through the repository:
+- **One dated test count.** The full suite on master `e16826d`, 2026-11-18,
+  with the whole local stack up: 1,622 passed, 12 xfailed, 0 skipped (1,634
+  collected, 200 of them marked `safety`). Other documents point here rather
+  than keep their own count.
 - **Every measurement has a record.** A claim about accuracy, latency or memory
   comes from a command run on the code it describes. It is written up in
   `benchmarks/` with the commit, machine and raw output, and labelled measured,

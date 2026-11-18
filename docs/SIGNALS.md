@@ -6,6 +6,12 @@ A BUY, SELL or HOLD for a stock, with its full evidence. The design rule:
 **Python computes every number; the language model never reads a price or
 predicts one.**
 
+The rules, defined once: 17 technical rules are defined in code (`market/strategies.py`); 15 of them vote
+on an NSE stock and 16 on a US one. `zscore_reversion` never votes:
+it is Bollinger reversion under another name (`benchmarks/RULE_DEDUP.md`).
+`sma_cross_long_short` votes only on a US stock, where overnight shorts are
+allowed.
+
 | layer | does | where |
 |---|---|---|
 | data | daily prices, cached; NSE tickers in rupees; Indian delivery costs | `market/store.py`, `market/markets.py`, `market/costs.py` |
