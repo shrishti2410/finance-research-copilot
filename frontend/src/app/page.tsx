@@ -1,4 +1,4 @@
-import { ArrowRight, Bot, Calculator, ChevronDown, Database, FileSearch, Layers, LineChart, ShieldCheck, Sigma } from "lucide-react";
+import { ArrowRight, Bot, Calculator, ChevronDown, Database, FileSearch, Layers, LineChart, Sigma } from "lucide-react";
 import Link from "next/link";
 
 import { DemoButton } from "@/components/DemoButton";
@@ -10,9 +10,9 @@ import { Card } from "@/components/ui/card";
 import { AUTHOR, GITHUB_URL } from "@/lib/site";
 import { loadStrip } from "@/lib/strip";
 
-// No figure on this page is a measurement. Measured results live on
-// /methodology, quoted from the benchmark records and checked by
-// tests/test_site_metrics.py. The counts here (8 stocks, 15 companies) are
+// No figure on this page is a measurement. Measured results live in the
+// README and benchmarks/ only, each quoted from its record and checked by
+// tests/test_readme_figures.py. The counts here (8 stocks, 15 companies) are
 // what the deployment covers.
 
 const FEATURES: { icon: typeof FileSearch; title: string; body: string; shot: ShotName }[] = [
@@ -164,22 +164,6 @@ export default async function Landing() {
             </li>
           ))}
         </ol>
-      </section>
-
-      <section aria-label="Methodology" className="mx-auto max-w-6xl px-4 pt-12 sm:px-6">
-        <Link
-          href="/methodology"
-          className="flex flex-col gap-3 rounded-[var(--radius-card)] border border-border bg-surface px-5 py-4 text-sm text-fg-muted hover:border-fg-subtle hover:text-fg sm:flex-row sm:items-center sm:justify-between"
-        >
-          <span className="flex items-start gap-3 sm:items-center">
-            <ShieldCheck className="size-5 shrink-0 text-accent" aria-hidden="true" />
-            Accuracy, speed and backtest results are measured and published with their sources, including where
-            the signal has no edge.
-          </span>
-          <span className="flex shrink-0 items-center gap-1 pl-8 text-accent sm:pl-0">
-            Methodology <ArrowRight className="size-4" aria-hidden="true" />
-          </span>
-        </Link>
       </section>
 
       <section aria-labelledby="faq" className="mx-auto max-w-3xl px-4 pt-20 sm:px-6">
