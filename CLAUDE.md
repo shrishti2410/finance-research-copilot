@@ -190,42 +190,42 @@ it.
      filing answers.
    - Add a frozen NSE eval set before any tuning.
 
-**Queued on 2026-11-18, in this order, each on its own branch with tests
-first and screenshots or a diff before merging:**
-1. **Top priority: broad questions.** "What is your analysis of NVIDIA?" on the
-   live site hit the 5-step limit (one get_financial_fact per step), then
-   showed raw tool JSON.
-   - A `get_company_snapshot` tool returns, in one call, three fiscal years of
-     financials, margins, EPS and growth (XBRL for the 15 US companies, Yahoo
-     for NSE, labelled), 1-year price performance and the signal with its
-     verdict. Units are declared for the guard.
-   - The prompt calls tools in parallel in the first step and always
-     reserves the last step for the answer.
-   - Broad answers use sectioned answers that end with the disclaimer.
-   - On exhaustion, one tool-free summary call (still guard-checked), else
-     plain sentences. Never raw JSON.
-   - A separate open-ended eval of about 10 questions, run once on Groq.
-2. **Remove /methodology.** Its architecture and guard cards (no figures)
-   move to /about as "How it's built". Results live in the README and
-   `benchmarks/` only; the figure tests check the README.
-3. **Forward paper trading, recording first.** It gains value only with
-   time.
-   - Append-only, hash-chained tables, written with grants for
-     `signals_precompute` on those tables only.
+**Order after the 2026-11-18 review.** Each item on its own branch, tests
+first, the diff shown before merging.
+
+*Done on 2026-11-18:* /methodology removed (results live in the README and
+`benchmarks/` only); /about rewritten to describe the site
+(`feat/about-rewrite`, awaiting merge).
+
+*In flight, in this order:*
+1. **Guard batch + broad questions** (`fix/broad-questions`, with
+   `integration/guard-batch` merged in).
+   - "What is your analysis of NVIDIA?" hit the 5-step limit and showed raw
+     tool JSON. Fixed with: `get_company_snapshot` (XBRL for the 15 US
+     companies, Yahoo for NSE, labelled, units declared), tools in parallel
+     in the first step, a tool-free last step, sectioned answers, a readable
+     fallback (never raw JSON).
+   - A last-step answer with an unsupported figure is kept under the
+     `[Unverified]` banner with each figure marked inline.
+   - Verified on Groq (fast subset + the 10 open-ended questions: step-limit
+     exhaustions, `[Unverified]` false flags, advice flags, request sizes),
+     then deployed.
+2. **NSE research Level A**, right after (1) is deployed: the company-name
+   resolver, NSE routing in the prompt (which companies have 10-Ks, which
+   only prices, signals, news and Yahoo fundamentals), news searched by full
+   company name. The snapshot already serves NSE fundamentals from Yahoo. A
+   frozen NSE eval of 8–10 questions, run once on Groq.
+3. **Paper-trading recording.**
+   - Append-only, hash-chained tables, with grants for `signals_precompute`
+     on those tables only.
    - The backtester's rules: next-open fills, the same costs, long/flat on
      NSE, no look-ahead.
    - Idempotent hooks in both precompute runs.
    - Then the comparisons (buy-and-hold, exposure-matched) and a /paper page
      with "too short to judge" below ~126 trading days. The wording is
      "signals", never "recommendations".
-4. **NSE in the research chat.**
-   - A company-name resolver for the watchlist, used by every tool.
-   - The prompt states which companies have 10-Ks and which are covered by
-     prices, signals, news and Yahoo fundamentals only.
-   - `search_news` searches by full company name.
-   - A labelled `get_fundamentals` tool, with units declared.
-   - A frozen NSE eval of 8–10 questions, run once on Groq.
-5. **Near-live quotes** for the strip and the dashboard cards.
+4. **Near-live quotes** for the strip and the dashboard cards (queued
+   earlier the same day).
    - `GET /market/quotes`, public. The server fetches during market hours
      only, at most once a minute, shared by every visitor and cached in
      Redis.
@@ -233,6 +233,47 @@ first and screenshots or a diff before merging:**
    - Each market is labelled honestly ("Delayed ~15 min · NSE open" /
      "Market closed · last close <date>"), with Yahoo's delay checked.
    - The CPU and Upstash command budget is measured.
+
+*Then:*
+
+**A. Positioning.** Research is the main product. Signals, backtests and
+options become a "Strategy audit" module, in the landing page, the nav and
+the About wording. No feature is removed.
+
+**B. Reliability and trust.**
+1. **No duplicate runs on refresh.** An idempotency key per question, a
+   Redis in-flight lock and a reconnectable stream, so a refresh never
+   produces duplicate messages.
+2. **Temporal validation in retrieval.** Reject passages whose fiscal year,
+   filing date or form type does not match the question. Benchmark
+   retrieval separately. Enable the company filter after the held-out
+   check.
+3. **Typed facts and calculation recipes in claim verification** (for
+   example, market cap = diluted weighted shares x price), rejecting
+   operands of the wrong kind. Extends item 1 below; a grounding-guard
+   change, so the diff is shown and waits.
+4. **Eval credibility.** Repeated runs of the dev set, spread over days
+   within the Groq budget, reported with the mean, the spread, Wilson
+   intervals and failure categories. The held-out set is run once. Extends
+   item 3 below.
+5. **Latency.** Per-stage timing on live requests (p50/p95, with and without
+   rate-limit waits), streaming, a cache for common questions, and instant
+   pre-generated example answers on the research page.
+6. **A filing coverage report** per 10-K: the sections found and missing.
+
+**C. Features, only these five:**
+1. An evidence explorer: click a figure to see its filing, section,
+   passage, fact, calculation and status.
+2. An agent trace view.
+3. A company comparison page from XBRL, with citations.
+4. A year-over-year change detector between a company's last two 10-Ks.
+5. Paper trading (in flight above).
+
+**Deferred:** DCF, report PDF export, news-price correlation, a model
+playground, watchlist alerts.
+
+The numbered items 1–7 above stay in the plan, after A–C, except where B
+extends them.
 
 Paper trading, previously out of scope, is in from 2026-11-18 as forward
 recording of the existing signals only.
@@ -243,8 +284,8 @@ reversion under another name, `benchmarks/RULE_DEDUP.md`). The **26 strategy
 cards** are handbook cards, 8 of them for options.
 
 **Out of scope for now:** Celery, a full Grafana stack, a portfolio engine,
-live option chains, and more strategies or indicators beyond
-this list.
+live option chains, more strategies or indicators beyond this list, and the
+deferred items above.
 
 These six rules are not optional.
 
