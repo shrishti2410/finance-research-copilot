@@ -280,6 +280,19 @@ function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialQuestion, ready, token, router]);
 
+  // "New question" in the header links here with ?new=1: an empty conversation,
+  // created on the first question as usual, then the flag is dropped from the URL.
+  const startNew = search.get("new");
+  useEffect(() => {
+    if (!startNew || !ready || !token) return;
+    router.replace("/research");
+    void Promise.resolve().then(() => {
+      setActiveId(null);
+      setThread({ id: null, items: [] });
+      setDraft("");
+    });
+  }, [startNew, ready, token, router]);
+
   if (!ready || !token) {
     return (
       <main className="flex min-h-[60vh] items-center justify-center text-sm text-fg-subtle">

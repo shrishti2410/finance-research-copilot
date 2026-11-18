@@ -52,8 +52,9 @@ LOGIN = (SRC / "app" / "login" / "page.tsx").read_text(encoding="utf-8")
 def test_the_demo_opens_research_where_the_example_questions_are():
     # Decided 2026-11-18. The research page shows its example questions when a
     # conversation is empty (EXAMPLES in app/research/page.tsx).
-    assert '"/dashboard"' not in DEMO
-    assert DEMO.count('"/research"') == 2              # the signed-in link and the demo sign-in
+    # The demo sign-in opens Research. (Signed in, the header's button may
+    # link to the dashboard: it must not repeat the Research tab, test_header_cta.)
+    assert 'router.push("/research")' in DEMO and 'router.push("/dashboard")' not in DEMO
     demo_block = LOGIN[LOGIN.index("await demo();"):][:120]
     assert 'router.replace("/research")' in demo_block
     assert "EXAMPLES.map" in (SRC / "app" / "research" / "page.tsx").read_text(encoding="utf-8")

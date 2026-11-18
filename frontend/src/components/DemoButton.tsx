@@ -2,7 +2,7 @@
 
 import { ArrowRight, Loader2 } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { ColdStartNotice, useSlow } from "@/components/states";
@@ -16,15 +16,24 @@ import { errorMessage, useAuth } from "@/lib/auth";
 export function DemoButton({ compact = false }: { compact?: boolean }) {
   const { token, demo } = useAuth();
   const router = useRouter();
+  const path = usePathname();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const slow = useSlow(busy);
 
   if (token) {
+    // The header's button never repeats the nav's Research tab: on /research it
+    // starts a new question, elsewhere it opens the dashboard.
+    const onResearch = path?.startsWith("/research") ?? false;
+    const [href, label] = compact
+      ? onResearch
+        ? ["/research?new=1", "New question"]
+        : ["/dashboard", "Dashboard"]
+      : ["/research", "Open Research"];
     return (
       <Button asChild size={compact ? "sm" : "lg"}>
-        <Link href="/research">
-          {compact ? "Research" : "Open Research"} <ArrowRight className="size-4" aria-hidden="true" />
+        <Link href={href}>
+          {label} <ArrowRight className="size-4" aria-hidden="true" />
         </Link>
       </Button>
     );
