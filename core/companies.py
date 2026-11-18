@@ -108,6 +108,17 @@ def names_company(c: Company, text: str) -> bool:
     return any(_has(a, text) for a in c.weak) and MARKET_CONTEXT.search(text) is not None
 
 
+def _hits(c: Company, q: str) -> list[str]:
+    """The names of `c` that `q` contains, as whole words."""
+    candidates = [c.symbol, c.name, *c.strong, *c.weak, *c.short,
+                  *(f"{k}:{v}" for k, v in c.ids.items()),
+                  c.ticker if len(c.ticker) >= 4 else None]
+    hits = [cand for cand in filter(None, candidates) if cand.upper() == q.upper() or _has(cand, q)]
+    if 2 <= len(c.ticker) <= 3 and re.search(rf"(?<![\w$]){re.escape(c.ticker)}(?!\w)", q):
+        hits.append(c.ticker)
+    return hits
+
+
 def resolve(text: str) -> Company | None:
     """The covered company `text` names, or None.
 
@@ -121,16 +132,17 @@ def resolve(text: str) -> Company | None:
         return None
     best: tuple[int, Company] | None = None
     for c in COVERED:
-        candidates = [c.symbol, c.name, *c.strong, *c.weak, *c.short,
-                      *(f"{k}:{v}" for k, v in c.ids.items()),
-                      c.ticker if len(c.ticker) >= 4 else None]
-        hits = [cand for cand in filter(None, candidates) if cand.upper() == q.upper() or _has(cand, q)]
-        if 2 <= len(c.ticker) <= 3 and re.search(rf"(?<![\w$]){re.escape(c.ticker)}(?!\w)", q):
-            hits.append(c.ticker)
-        for cand in hits:
+        for cand in _hits(c, q):
             if best is None or len(cand) > best[0]:
                 best = (len(cand), c)
     return best[1] if best else None
+
+
+def mentioned(text: str) -> list[Company]:
+    """Every covered company `text` names, in COVERED order: one for a
+    question about a company, two or more for a comparison."""
+    q = (text or "").strip()
+    return [c for c in COVERED if q and _hits(c, q)]
 
 
 def search_terms(c: Company) -> list[str]:

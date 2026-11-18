@@ -482,7 +482,9 @@ function IncompleteNote({ reason }: { reason: string }) {
         ? "Ran out of steps before finishing."
         : reason === "inference_error"
           ? "The model could not be reached."
-          : reason === "last_step_failed"
+          : reason === "model_busy"
+            ? "The AI is busy right now. Please try again in a minute."
+            : reason === "last_step_failed"
             ? "The model failed while writing the answer; these are the figures the tools returned."
             : reason;
   return (
