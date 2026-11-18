@@ -58,6 +58,7 @@ from tools.ratios import Period, RatioName
 from tools.ratios import calculate_ratio as _latest_ratio
 from tools.registry import Registry
 from tools.stock_price import get_stock_price
+from tools.snapshot import get_company_snapshot
 
 # How much of a retrieved *prose* passage the model sees. Enough to carry the
 # claim and its context; short enough that three of them are not the whole turn.
@@ -471,6 +472,7 @@ def build_registry() -> Registry:
     registry.register(get_price_analytics)
     registry.register(show_price_chart)
     registry.register(get_trading_signal)
+    registry.register(get_company_snapshot)
     return registry
 
 

@@ -45,6 +45,7 @@ from agent.prompts import (
     EXHAUSTED_NO_FINDINGS,
     EXHAUSTED_TEMPLATE,
     EXHAUSTED_TOOL_BUDGET,
+    LAST_TURN,
     EXHAUSTED_TOOL_BUDGET_NO_FINDINGS,
     system_prompt,
 )
@@ -636,12 +637,80 @@ async def _emit(on_event, event: dict[str, Any]) -> None:
         log.debug("agent: event consumer raised, continuing", exc_info=True)
 
 
+def _pct(x) -> str:
+    return f"{x * 100:.2f}%" if isinstance(x, (int, float)) else "n/a"
+
+
+def _describe(step: Step) -> str:
+    """One plain sentence for what a successful tool call established.
+
+    Never the raw result: a user who reaches an exhaustion or redirection
+    message is owed the facts, not a JSON dump (the live NVIDIA analysis of
+    2026-11-18 showed one). Known tools say what they found, with the figures
+    they returned; anything else is only named."""
+    r = step.result if isinstance(step.result, dict) else {}
+    a = step.arguments or {}
+    t = step.tool
+    who = r.get("ticker") or a.get("ticker") or a.get("company") or ""
+    if t == "get_financial_fact" and r.get("formatted"):
+        what = (r.get("description") or r.get("fact") or "figure").lower()
+        src = f" (SEC filing {r['accession']})" if r.get("accession") else ""
+        return f"{who} {what} for fiscal {r.get('fiscal_year')}: {r['formatted']}{src}."
+    if t == "calculate_ratio" and r.get("formatted"):
+        name = str(r.get("ratio", "ratio")).replace("_", " ")
+        return f"{who} {name} (period ending {r.get('period_end')}): {r['formatted']}."
+    if t == "calculate" and r.get("formula"):
+        return f"Calculated: {r['formula']}."
+    if t == "get_price_analytics" and "total_return" in r:
+        return (f"{who} from {r.get('start')} to {r.get('end')}: total return {_pct(r.get('total_return'))}, "
+                f"largest fall from a peak {_pct(r.get('max_drawdown'))}.")
+    if t == "get_stock_price" and r.get("last"):
+        last = r["last"] or {}
+        when = last.get("date") or r.get("end_date")
+        return f"{who} last closed at {last.get('close')} {r.get('currency') or ''} on {when}.".replace("  ", " ")
+    if t == "get_trading_signal" and r.get("signal"):
+        statement = (r.get("backtest") or {}).get("statement") or ""
+        return f"The signal engine's output for {who} is {r['signal']} ({r.get('coverage')}). {statement}".strip()
+    if t == "get_company_snapshot":
+        parts = []
+        fin = r.get("financials") or {}
+        years = fin.get("years") or []
+        if years:
+            y = years[-1]
+            label = f"fiscal {y['fiscal_year']}" if y.get("fiscal_year") else f"the year to {y.get('period_end')}"
+            if y.get("revenue") is not None:
+                parts.append(f"revenue in {label} was {y['revenue']:,} {fin.get('currency') or ''}".strip())
+            if y.get("net_margin") is not None:
+                parts.append(f"net margin {_pct(y['net_margin'])}")
+        perf = r.get("performance") or {}
+        if "total_return" in perf:
+            parts.append(f"the stock returned {_pct(perf['total_return'])} over the last year")
+        sig = r.get("signal") or {}
+        if sig.get("signal"):
+            parts.append(f"the signal engine's output is {sig['signal']} ({sig.get('coverage')})")
+        return (f"{who}: " + "; ".join(parts) + ".") if parts else f"Looked up an overview of {who}."
+    if t == "search_filings":
+        return f"Searched {who or 'the filings'} for \"{a.get('query', '')}\": {r.get('count', 0)} passage(s) found."
+    if t == "search_news":
+        return f"Searched the news for \"{a.get('query', '')}\": {len(r.get('articles') or [])} headline(s)."
+    if t == "show_price_chart":
+        return f"Drew a price chart of {who}."
+    # Any other tool: its top-level figures and short labels, as "name value"
+    # pairs. Nested data is left out; the figures are what the user is owed
+    # (tests/test_orchestrator.py, test_the_figures_survive_the_block).
+    pairs = [f"{k.replace('_', ' ')} {v}" for k, v in r.items()
+             if k not in ("ok", "ticker", "company", "source", "source_url")
+             and not isinstance(v, bool)
+             and (isinstance(v, (int, float)) or (isinstance(v, str) and len(v) <= 40))][:6]
+    head = f"Called {t}" + (f" for {who}" if who else "")
+    return f"{head}: {', '.join(pairs)}." if pairs else f"{head}."
+
+
 def _findings(steps: list[Step]) -> str:
-    """What the successful tool calls established, for the exhaustion message."""
-    lines = [
-        f"- {step.tool}({_one_line(step.arguments, 60)}): {_one_line(step.result, 220)}"
-        for step in steps if step.ok and step.tool != "final_answer"
-    ]
+    """What the successful tool calls established, as plain sentences, for the
+    exhaustion and redirection messages."""
+    lines = [f"- {_describe(step)}" for step in steps
+             if step.ok and step.tool not in ("final_answer", "ungrounded_answer")]
     return "\n".join(lines)
 
 
@@ -752,14 +821,14 @@ async def run_agent(
         headers={"X-Internal-Token": settings.internal_token},
     )
 
-    async def one_call(call_model: str, cap: int, stream: bool) -> dict:
+    async def one_call(call_model: str, cap: int, stream: bool, with_tools: bool = True) -> dict:
         """One chat completion, stopped at the per-call deadline.
 
         Each call gets the whole deadline: an escalation or a grounding retry is a
         new call with a new clock, so a turn of several legitimate calls is never
         cut short by the sum of them.
         """
-        return await _within_deadline(_one_call(call_model, cap, stream),
+        return await _within_deadline(_one_call(call_model, cap, stream, with_tools),
                                       settings.inference_call_deadline)
 
     # Which provider the proxy should use for each model. A header per call
@@ -771,17 +840,20 @@ async def run_agent(
     answer_headers = {"X-Inference-Provider": provider}
     router_headers = {"X-Inference-Provider": router_provider}
 
-    async def _one_call(call_model: str, cap: int, stream: bool) -> dict:
+    async def _one_call(call_model: str, cap: int, stream: bool, with_tools: bool = True) -> dict:
         """One chat completion. Accumulates usage; raises on transport failure."""
         nonlocal prompt_tokens, completion_tokens, cached_prompt_tokens, usage_measured
         payload = {
             "model": call_model,
             "messages": messages,
-            "tools": registry.schemas(),
             "temperature": temperature,
             "max_tokens": cap,
             "stream": False,
         }
+        # The last step is for the answer: it is sent with no tools, so the
+        # model writes from what it has instead of asking for more.
+        if with_tools:
+            payload["tools"] = registry.schemas()
         if stream:
             return await _stream_message(client, payload, on_token, answer_headers, waits)
         response = await client.post("/chat/completions", json=payload,
@@ -813,8 +885,15 @@ async def run_agent(
             # do -- see settings.agent_router_model. And a grounding retry is an
             # instruction to go and verify a figure, which is the same kind of
             # work.
-            use_router = bool(router_model) and not escalate_next
+            # The last iteration is kept for writing the answer: no tools are
+            # offered, so the model cannot spend it on one more lookup. On the
+            # live site (2026-11-18) a broad question spent all five steps on
+            # lookups and never answered.
+            last = iteration == max_iterations
+            use_router = bool(router_model) and not escalate_next and not last
             escalate_next = False
+            if last:
+                messages.append({"role": "user", "content": LAST_TURN})
 
             call_started = time.perf_counter()
             await _emit(on_event, {"type": "iteration", "iteration": iteration,
@@ -841,7 +920,7 @@ async def run_agent(
                                                "from": router_model, "to": model})
                         message = await one_call(model, max_tokens, stream_tokens)
                 else:
-                    message = await one_call(model, max_tokens, stream_tokens)
+                    message = await one_call(model, max_tokens, stream_tokens, with_tools=not last)
             except Exception as exc:  # noqa: BLE001 - upstream down, timeout, bad JSON
                 model_ms = (time.perf_counter() - call_started) * 1000
                 if isinstance(exc, InferenceDeadlineExceeded):
@@ -884,7 +963,13 @@ async def run_agent(
                     cached_prompt_tokens=cached_prompt_tokens, call_usage=call_usage,
                 )
             model_ms = (time.perf_counter() - call_started) * 1000
-            tool_calls = message.get("tool_calls") or []
+            # Tools were not offered on the last step; a call made anyway is
+            # not run.
+            tool_calls = [] if last else (message.get("tool_calls") or [])
+            # A last step that wrote nothing (it asked for a tool anyway) ends
+            # like any exhausted run: with the findings in plain sentences.
+            if last and not (message.get("content") or "").strip():
+                break
 
             if not tool_calls:
                 answer = (message.get("content") or "").strip()

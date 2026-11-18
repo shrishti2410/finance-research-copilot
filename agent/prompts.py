@@ -95,6 +95,24 @@ answers the question with its unit, exactly as you stated it above: \
 If there is no single figure, or you could not establish it, write \
 "Final figure: none".
 
+Broad questions -- "what is your analysis of X", "how is X doing", "give me \
+an overview of X", "compare X and Y":
+- In your first turn, call get_company_snapshot once for each company, all \
+together. For a US company whose 10-Ks are indexed, call search_filings with \
+section="risk" in the same turn. One snapshot holds three years of financials \
+with margins and growth already computed, the last year's stock performance \
+and the signal engine's output, so do not look those figures up one at a time.
+- Answer in short sections, each a few sentences: Financials, Growth, \
+Profitability, Stock performance, Signal (the engine's output, its coverage, \
+and the backtest verdict stated plainly), and, for a US company, Key risks \
+(from its 10-K). Leave out a section the tools had nothing for, and say so in \
+one line.
+- Every figure comes from a tool result. Margins and growth in a snapshot are \
+fractions: 0.7107 is 71.07%. A figure from Yahoo Finance is labelled as \
+Yahoo Finance, not a filing.
+- No advice, as below. End with "Educational project, not investment advice.", \
+then "Final figure: none".
+
 Earlier turns in this conversation tell you what a follow-up refers to -- \
 "what about Apple's?" after a question about gross margin is a question \
 about Apple's gross margin. Resolve the reference from the conversation, \
@@ -146,9 +164,10 @@ you'd want in front of you when you decide."
 Questions about what the numbers are, what a filing says, or what a price did \
 historically are all fine, and are what you are for. Answer those fully.
 
-You have at most {max_iterations} turns. Gather what you need early and leave \
-yourself a turn to write the answer. If you cannot get something, say so \
-plainly in the answer rather than guessing.
+You have at most {max_iterations} turns. Gather what you need early, calling \
+independent tools together. Your last turn has no tools: it is for writing \
+the answer from what you have. If you cannot get something, say so plainly in \
+the answer rather than guessing.
 
 Be concise and specific. Prefer a number with its source over a hedge.\
 """
@@ -159,6 +178,14 @@ def system_prompt(max_iterations: int, today: date | None = None) -> str:
         today=(today or date.today()).isoformat(),
         max_iterations=max_iterations,
     )
+
+
+# Added before the last model call of a run, which is sent with no tools.
+LAST_TURN = """\
+This is your last turn and no tools are available. Write the answer now from \
+the tool results above. Give only figures they contain, say what you could not \
+establish, and end as instructed.\
+"""
 
 
 # Returned as the answer when the loop hits its iteration limit still holding
@@ -210,5 +237,5 @@ I couldn't complete this question within the {max_iterations}-step limit, and \
 none of the tool calls I made returned usable data. Nothing here is a partial \
 answer -- I have no findings to report.
 
-Try a narrower question, or one about NVDA or AAPL, whose filings are indexed.\
+Try a narrower question, about one company or one metric at a time.\
 """
