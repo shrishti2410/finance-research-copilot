@@ -743,6 +743,32 @@ def _describe(step: Step) -> str:
     return f"{head}: {', '.join(pairs)}." if pairs else f"{head}."
 
 
+# An internal field name or path left in an answer: snake_case, optionally
+# dotted, optionally with "[]" (revenue_growth, signal.backtest_statement,
+# financials.years[].net_margin), with or without backticks. Only names with an
+# underscore are touched, so domains (finance.yahoo.com), tickers (SBIN.NS) and
+# "e.g." are left alone.
+_FIELD_NAME = re.compile(
+    r"`?(?<![\w.])([a-z][a-z0-9]*(?:_[a-z0-9]+)*(?:(?:\[\])?\.[a-z][a-z0-9]*(?:_[a-z0-9]+)*)*)(?:\[\])?`?(?!\w)")
+
+
+def plain_labels(answer: str) -> str:
+    """`answer` with internal field names written as words (live-site feedback,
+    2026-11-18: "snapshot revenue_growth: 1.191069").
+
+    Runs after the guards. It rewrites identifiers only, never a figure, and
+    leaves any "Final figure:" line as the model wrote it, since the grader
+    reads that line (tests/test_plain_sources.py)."""
+    def words(m: re.Match) -> str:
+        name = m.group(1)
+        if "_" not in name:
+            return m.group(0)
+        return name.replace("[]", "").replace(".", " ").replace("_", " ")
+
+    return "\n".join(line if _FINAL_FIGURE.match(line) else _FIELD_NAME.sub(words, line)
+                     for line in answer.split("\n"))
+
+
 def _error_details(exc: Exception) -> str:
     """What a failed model call said: the status and the start of the body for
     an HTTP error (a provider's error body names its reason, e.g. Groq's
@@ -1156,6 +1182,12 @@ async def run_agent(
                         "iteration": iteration,
                         "figures": [f.text for f in unverified],
                     })
+
+                # Field names the model left in its text become words. After the
+                # grounding check (it changes no figure, only identifiers) and
+                # before the advice check, so a replacement message is left as
+                # written and the advice check reads the text the user will.
+                answer = plain_labels(answer)
 
                 # The advice backstop. Last, because it is the only check that
                 # replaces the answer outright rather than annotating it -- and

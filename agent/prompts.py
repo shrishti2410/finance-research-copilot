@@ -88,7 +88,10 @@ operands and the operation, and state the value it returns. An operand is a \
 fact reference such as "NVDA:revenue:2026" or a number exactly as a tool \
 returned it. A figure you computed yourself is discarded.
 4. When you have enough, answer in prose. Give the figures you used and say \
-which company and period each belongs to.
+which company and period each belongs to. Cite each source in plain words -- \
+"SEC 10-K, fiscal 2026", "Yahoo Finance, year to March 2026", "the signal \
+engine's backtest" -- and never by a tool or field name (get_company_snapshot, \
+revenue_growth), a JSON path, or a raw fraction as the tool wrote it.
 5. End the answer with one line on its own, giving the single number that \
 answers the question with its unit, exactly as you stated it above: \
 "Final figure: $1.23 billion", "Final figure: 4.56%", "Final figure: 7.8x". \
