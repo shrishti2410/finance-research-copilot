@@ -233,6 +233,17 @@ def backtest_verdict(ticker: str, ev: dict) -> dict:
                      f"do not guarantee future ones.")
     else:
         statement = f"The {span} backtest shows no edge for {ticker}: {figures}."
+        # A higher return than buy-and-hold reads like an edge, so say plainly why
+        # it is not one (live-site feedback, 2026-11-18). No new figures here:
+        # the sentence above already holds every number this one refers to.
+        if s["cagr"] is not None and b["cagr"] is not None and s["cagr"] > b["cagr"]:
+            if pct is not None and pct < EDGE_PERCENTILE:
+                statement += (" It returned more than buy-and-hold, but randomly timed trades with "
+                              "the same time in the market often did as well, so the higher return "
+                              "may be luck rather than skill.")
+            elif s["sharpe"] is not None and b["sharpe"] is not None and s["sharpe"] <= b["sharpe"]:
+                statement += (" It returned more than buy-and-hold, but took more risk for each unit "
+                              "of return (a lower Sharpe ratio), so it is not a better trade-off.")
     if years < 3:
         statement += f" Only {years:g} years could be tested, which is too short to judge."
     return {"verdict": "edge" if edge else "no_edge", "statement": statement,
