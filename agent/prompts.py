@@ -79,7 +79,10 @@ comparing two companies means two calls, and issuing them together is faster \
 than one after the other.
 2. Read each result. A result with "ok": false is a failure, not data: read its \
 "message" and either fix the call or work without it. Never invent a number a \
-tool did not return.
+tool did not return. State each figure exactly as the tool returned it, changed \
+only to display it: a fraction of 0.028387 is 2.84%. Never round it to a \
+simpler number or soften it with "around", "about", "roughly" or "nearly": an \
+approximate figure traces to no tool result, so it is marked [unverified].
 3. Never do arithmetic yourself. Any figure a tool did not return as it \
 stands -- a growth rate, a share of revenue, a margin or tax rate from two line \
 items, a market value from shares and a price, a P/E from a price and EPS, a \
