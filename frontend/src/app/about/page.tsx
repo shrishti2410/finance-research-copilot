@@ -1,13 +1,19 @@
 import type { Metadata } from "next";
-import { Briefcase, ExternalLink, FileText, Scale, ShieldCheck, Sigma } from "lucide-react";
+import Link from "next/link";
+import { ArrowRight, Briefcase, ExternalLink, FileText } from "lucide-react";
 
 import { Card } from "@/components/ui/card";
-import { AUTHOR, GITHUB_URL } from "@/lib/site";
+import { AUTHOR } from "@/lib/site";
 
 export const metadata: Metadata = {
   title: "About",
-  description: `Who built Finance Research Copilot, and how to reach ${AUTHOR.name}.`,
+  description:
+    "A free research and strategy-audit site for Indian and US stocks: what it does, what it covers, where the data comes from, and who built it.",
 };
+
+// About the site, for a visitor: plain words, no technical detail and no
+// measured figures (tests/test_readme_figures.py). How it is built, and every
+// measured result, is in the README and benchmarks/.
 
 function GitHubMark({ className }: { className?: string }) {
   return (
@@ -17,51 +23,42 @@ function GitHubMark({ className }: { className?: string }) {
   );
 }
 
-// "How it's built": the architecture and the guards, moved here from the
-// removed methodology page. No figures: every measured result is in the
-// README and benchmarks/, quoted from its record.
-const GUARDS = [
+const CAN_DO = [
   {
-    icon: ShieldCheck,
-    title: "Every figure is checked",
-    body: "A number in an answer must match something a tool returned. If it does not, the agent tries again or marks the answer unverified.",
+    href: "/research",
+    title: "Ask about a company's annual report",
+    body: "Ask questions about 15 US companies and get answers from their 10-K filings, with the passages shown.",
   },
   {
-    icon: Scale,
-    title: "Reports, never advises",
-    body: "A second check replaces any answer that tells you to buy, sell or hold with what the data shows.",
+    href: "/chart",
+    title: "Charts and indicators",
+    body: "Daily price charts with moving averages, RSI, MACD and Bollinger bands.",
   },
   {
-    icon: Sigma,
-    title: "Backtests that can say no",
-    body: "Walk-forward weights, Indian trading costs, random-timing baselines and hold-out stocks. The signal is shown with its verdict: no edge.",
+    href: "/dashboard",
+    title: "What classic trading rules say",
+    body: "See what 15 classic trading rules (16 for US stocks) say about a stock today, and whether they have actually worked on it in the past.",
+  },
+  {
+    href: "/backtest",
+    title: "Backtests",
+    body: "Test a trading rule on a stock's past prices, after trading costs, and compare it with simply holding the stock.",
+  },
+  {
+    href: "/stock/SBIN.NS?tab=options",
+    title: "Options payoffs",
+    body: "See how common options strategies pay off at different prices, with their break-even points.",
   },
 ];
 
-function Box({ title, items, tone = "default" }: { title: string; items: string[]; tone?: "default" | "accent" }) {
+function Section({ id, title, children }: { id: string; title: string; children: React.ReactNode }) {
   return (
-    <div
-      className={
-        "flex-1 rounded-[var(--radius-card)] border p-4 " +
-        (tone === "accent" ? "border-accent/50 bg-surface-2" : "border-border bg-surface")
-      }
-    >
-      <p className="text-sm font-semibold text-fg">{title}</p>
-      <ul className="mt-2 space-y-1 text-xs text-fg-muted">
-        {items.map((i) => (
-          <li key={i}>{i}</li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-// The boxes stack at every width, so the arrow always points down.
-function Arrow() {
-  return (
-    <div aria-hidden="true" className="flex items-center justify-center text-fg-subtle">
-      <span className="text-xl">↓</span>
-    </div>
+    <section aria-labelledby={id} className="mt-10">
+      <h2 id={id} className="text-xl font-semibold tracking-tight text-fg">
+        {title}
+      </h2>
+      <div className="mt-3 space-y-3 text-fg-muted">{children}</div>
+    </section>
   );
 }
 
@@ -93,75 +90,71 @@ export default function About() {
   return (
     <main className="mx-auto max-w-3xl px-4 pb-6 pt-12 sm:px-6 sm:pt-16">
       <p className="text-sm font-medium text-accent">About</p>
-      <h1 className="mt-2 text-3xl font-semibold tracking-tight text-fg sm:text-4xl">Built by {AUTHOR.name}</h1>
-      <div className="mt-6 space-y-4 text-fg-muted">
-        <p>
-          Finance Research Copilot is a project I designed and built end to end: a FastAPI service and an agent
-          loop in Python, Postgres with pgvector, a signal engine and backtester, and this Next.js front end.
-        </p>
-        <p>
-          The rule I held it to is that every number is computed in code and checked, and every measured claim
-          comes from a committed record. Where a result is negative, as the trading signal&apos;s is, the site
-          says so.
-        </p>
-      </div>
+      <h1 className="mt-2 text-3xl font-semibold tracking-tight text-fg sm:text-4xl">Finance Research Copilot</h1>
 
-      <section aria-labelledby="how-built" className="mt-10">
-        <h2 id="how-built" className="text-xl font-semibold tracking-tight text-fg">
-          How it&apos;s built
-        </h2>
-        <div className="mt-4 flex flex-col gap-3">
-          <Box title="Browser" items={["Next.js app", "Dashboard, charts, research chat"]} />
-          <Arrow />
-          <Box
-            title="API and agent"
-            tone="accent"
-            items={["FastAPI", "Agent loop with tool calls", "Grounding check on every figure", "Advice check on every answer"]}
-          />
-          <Arrow />
-          <Box
-            title="Tools and data"
-            items={[
-              "10-K search (pgvector)",
-              "Reported figures (SEC XBRL)",
-              "Daily prices, cached in Postgres",
-              "Signal engine and backtester (Python)",
-              "Strategy cards (pgvector)",
-            ]}
-          />
-          <Arrow />
-          <Box title="Language model" items={["Hosted: gpt-oss-120b", "Local: Qwen 2.5 on Ollama", "Explains what the tools return"]} />
-        </div>
-        <h3 className="mt-8 text-sm font-semibold uppercase tracking-wider text-fg-subtle">Guards</h3>
-        <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-3">
-          {GUARDS.map(({ icon: Icon, title, body }) => (
-            <Card key={title} className="p-5">
-              <Icon className="size-5 text-accent" aria-hidden="true" />
-              <p className="mt-3 font-medium text-fg">{title}</p>
-              <p className="mt-1 text-sm text-fg-muted">{body}</p>
-            </Card>
-          ))}
-        </div>
-        <p className="mt-4 text-sm text-fg-muted">
-          Measured results, each with the command and commit that produced it, are in the{" "}
-          <a href={`${GITHUB_URL}#readme`} target="_blank" rel="noreferrer noopener" className="text-accent underline">
-            README
-          </a>{" "}
-          and the{" "}
-          <a href={`${GITHUB_URL}/tree/master/benchmarks`} target="_blank" rel="noreferrer noopener" className="text-accent underline">
-            benchmark records
-          </a>
-          .
+      <Section id="what" title="What this is">
+        <p>
+          A free site for researching Indian and US stocks and for checking trading strategies honestly. You can
+          ask questions about a company&apos;s annual report, look at its charts, and see whether popular trading
+          rules would really have worked on it, without having to take anyone&apos;s word for it.
         </p>
-      </section>
+      </Section>
+
+      <Section id="can-do" title="What you can do">
+        <ul className="grid gap-3 sm:grid-cols-2">
+          {CAN_DO.map(({ href, title, body }) => (
+            <li key={href}>
+              <Link
+                href={href}
+                className="flex h-full flex-col rounded-[var(--radius-card)] border border-border bg-surface p-4 hover:border-fg-subtle"
+              >
+                <span className="flex items-center gap-1 font-medium text-fg">
+                  {title} <ArrowRight className="size-4 text-accent" aria-hidden="true" />
+                </span>
+                <span className="mt-1 text-sm">{body}</span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </Section>
+
+      <Section id="covered" title="What's covered">
+        <p>
+          <span className="font-medium text-fg">Charts, signals and backtests:</span> five Indian stocks listed on
+          the NSE (Coforge, Dixon Technologies, State Bank of India, Premier Energies and HDFC Bank) and three US
+          stocks (NVIDIA, Apple and Microsoft).
+        </p>
+        <p>
+          <span className="font-medium text-fg">Annual-report questions:</span> 15 large US companies, including
+          Apple, NVIDIA, Microsoft, Alphabet, Amazon, JPMorgan Chase and Coca-Cola.
+        </p>
+      </Section>
+
+      <Section id="data" title="Data and freshness">
+        <p>
+          Company reports come from SEC EDGAR, the US regulator&apos;s public filing system. Prices are daily
+          closing prices from Yahoo Finance, updated after each market close, so they are never live.
+        </p>
+      </Section>
+
+      <Section id="principles" title="Principles">
+        <ul className="list-disc space-y-2 pl-5">
+          <li>Numbers come from the data, not from guesswork. If a figure can&apos;t be checked, it is marked.</li>
+          <li>
+            Trading signals are shown with their real track record, including when they have no edge over simply
+            holding the stock.
+          </li>
+          <li>Everything here is for learning. It is not investment advice, and it never tells you to buy or sell.</li>
+        </ul>
+      </Section>
 
       <Card className="mt-10 p-5">
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-fg-subtle">Find me</h2>
-        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <h2 className="text-xl font-semibold tracking-tight text-fg">Built by {AUTHOR.name}</h2>
+        <p className="mt-2 text-fg-muted">I designed and built this site on my own.</p>
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
           <ProfileLink href={AUTHOR.github} label="GitHub" icon={<GitHubMark className="size-5" />} />
           <ProfileLink href={AUTHOR.linkedin} label="LinkedIn" icon={<Briefcase className="size-5" aria-hidden="true" />} />
           <ProfileLink href={AUTHOR.resume} label="Resume" icon={<FileText className="size-5" aria-hidden="true" />} />
-          <ProfileLink href={GITHUB_URL} label="This project's source" icon={<GitHubMark className="size-5" />} />
         </div>
       </Card>
     </main>
