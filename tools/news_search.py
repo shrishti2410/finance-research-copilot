@@ -25,6 +25,19 @@ Yahoo's content is still reachable here, just relevance-ranked first. One
 well-targeted feed beats two where one is untargeted, because a model reading an
 off-topic headline will summarize it as news about the company it asked for.
 
+Entity-resolved, and filtered (2026-11-18)
+------------------------------------------
+"Dixon" returned the City of Dixon, a MotoGP rider and obituaries: a name
+search finds everyone with the name. So a query that names a covered company
+(core/companies.py) is searched by the company's full name and exchange
+identifiers ('"Dixon Technologies" OR "Dixon Tech" OR NSE:DIXON OR 540699'),
+and only headlines that name the company are kept -- by an unambiguous name,
+an exchange code or a long ticker, or an ambiguous one ("Apple") next to
+market words. A query for anything else is kept to headlines that carry its
+own words. Financial publishers and company or filing news are ranked first,
+then by date. Nothing reaches the model unfiltered; "filtered_out" says how
+many were dropped.
+
 What this is not
 ----------------
 A headline scanner, not an archive. The feed carries what publishers are
@@ -46,6 +59,7 @@ from urllib.parse import quote_plus
 import requests
 from lxml import etree
 
+from core.companies import Company, names_company, resolve, search_terms
 from core.config import settings
 from core.retry import RetryPolicy, retrying, status_is_transient
 from tools.base import ERROR_BAD_INPUT, ERROR_UPSTREAM, error, ok
@@ -193,6 +207,56 @@ def _parse_feed(payload: bytes, feed_name: str) -> list[dict[str, Any]]:
     return items
 
 
+# Publishers whose coverage is financial: ranked first.
+FINANCIAL_SOURCES = re.compile(
+    r"moneycontrol|economic ?times|business ?standard|livemint|\bmint\b|financial express|"
+    r"business today|ndtv profit|cnbc|reuters|bloomberg|marketscreener|tradingview|kalkine|"
+    r"equitybulls|zee business|businessline|investing\.com|seeking alpha|marketwatch|barron|"
+    r"wall street journal|\bwsj\b|financial times|yahoo finance|motley fool|benzinga|nasdaq\.com",
+    re.I)
+# Company or filing news: ranked first among the rest.
+COMPANY_NEWS = re.compile(
+    r"\b(filing|nse|bse|sec|8-k|10-k|10-q|results?|quarter|q[1-4]|fy\d{2,4}|earnings|revenue|"
+    r"profit|dividend|buyback|acquir\w*|acquisition|agreement|merger|stake|board|order|"
+    r"guidance|shares?|stock)\b", re.I)
+_STOPWORDS = {"the", "and", "for", "news", "latest", "recent", "today", "about", "with",
+              "from", "what", "stock", "shares", "share", "company"}
+
+
+def _words(text: str) -> list[str]:
+    return [w for w in re.findall(r"[a-z0-9&]+", text.lower()) if len(w) >= 3 and w not in _STOPWORDS]
+
+
+def _feed_query(text: str, company: Company | None) -> str:
+    """The search sent to the feed. A covered company is searched by its full
+    names and exchange identifiers, plus any topic words the query adds
+    ("Dixon acquisition" -> acquisition); anything else as written."""
+    if company is None:
+        return text
+    named = {w for a in (company.name, *company.strong, *company.weak, *company.short,
+                         company.symbol, company.ticker) for w in _words(a)}
+    extra = [w for w in _words(text) if w not in named]
+    terms = " OR ".join(search_terms(company))
+    return f"({terms}) {' '.join(extra)}".strip() if extra else terms
+
+
+def _relevant(article: dict, text: str, company: Company | None) -> bool:
+    body = f"{article['title']} {article['snippet']}"
+    if company is not None:
+        return names_company(company, body)
+    wanted = _words(text)
+    have = set(_words(body))
+    return not wanted or sum(w in have for w in wanted) * 2 >= len(wanted)
+
+
+def _rank(article: dict) -> tuple:
+    body = f"{article['title']} {article['snippet']}"
+    score = (2 if FINANCIAL_SOURCES.search(article["source"] or "") else 0) \
+        + (1 if COMPANY_NEWS.search(body) else 0)
+    when = article["published"] or datetime.min.replace(tzinfo=timezone.utc)
+    return (score, when)
+
+
 def _dedupe_key(article: dict) -> str:
     return re.sub(r"[^a-z0-9]+", "", article["title"].lower())[:80]
 
@@ -258,8 +322,9 @@ def search_news(query: str, days_back: int = 7) -> dict[str, Any]:
     collected: list[dict[str, Any]] = []
     reached: list[str] = []
     failures: list[str] = []
+    company = resolve(text)
 
-    for name, url in _feeds(text, days):
+    for name, url in _feeds(_feed_query(text, company), days):
         try:
             collected.extend(_parse_feed(_fetch(url), name))
             reached.append(name)
@@ -281,13 +346,13 @@ def search_news(query: str, days_back: int = 7) -> dict[str, Any]:
         if article["published"] is None or article["published"] >= cutoff
     ]
 
+    # Only headlines about what was asked for reach the model.
+    relevant = [a for a in in_window if _relevant(a, text, company)]
+    filtered_out = len(in_window) - len(relevant)
+
     seen: set[str] = set()
     unique = []
-    for article in sorted(
-        in_window,
-        key=lambda a: a["published"] or datetime.min.replace(tzinfo=timezone.utc),
-        reverse=True,
-    ):
+    for article in sorted(relevant, key=_rank, reverse=True):
         key = _dedupe_key(article)
         if key in seen:
             continue
@@ -313,12 +378,15 @@ def search_news(query: str, days_back: int = 7) -> dict[str, Any]:
             for a in articles
         ],
         sources_queried=reached,
+        filtered_out=filtered_out,
+        **({"company": {"name": company.name, "symbol": company.symbol}} if company else {}),
         **({"sources_failed": failures} if failures else {}),
     )
 
     if not articles:
+        about = f"{company.name}" if company else repr(text)
         result["coverage_note"] = (
-            f"No headlines for {text!r} in the last {days} days from "
+            f"No headlines about {about} in the last {days} days from "
             f"{', '.join(reached)}. News RSS carries only what publishers are "
             f"currently syndicating, so this means the feed has nothing -- it is "
             f"not evidence that no news exists."

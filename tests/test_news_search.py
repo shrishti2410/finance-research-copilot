@@ -1,5 +1,8 @@
 """Tests for the news tool. No live calls -- `requests.get` is replaced.
 
+Since 2026-11-18 the tool keeps only headlines about what was asked for
+(tests/test_news_relevance.py), so these fixtures name the company searched.
+
 Feeds are built as real RSS 2.0 XML rather than stubbed at the parse boundary,
 so the parsing is exercised: Google News' "Headline - Publisher" titles, HTML
 inside <description>, and RFC 822 dates.
@@ -40,7 +43,7 @@ def item(title: str, link: str, days_ago: float = 1, description: str = "Some te
 
 GOOGLE_FEED = rss([
     item("NVIDIA beats expectations - Bloomberg", "https://ex.com/a", days_ago=1),
-    item("Chip export rules tighten - Reuters", "https://ex.com/b", days_ago=3),
+    item("Nvidia faces tighter chip export rules - Reuters", "https://ex.com/b", days_ago=3),
     item("Old news about NVIDIA - CNBC", "https://ex.com/c", days_ago=40),
 ])
 
@@ -139,7 +142,7 @@ def test_html_entities_are_decoded(http):
     lxml hands back the literal text "&nbsp;". Left alone it reaches the model
     verbatim -- the live NVDA call was full of them."""
     http["default"] = rss([
-        item("Headline - Wire", "https://ex.com/e",
+        item("Nvidia headline - Wire", "https://ex.com/e",
              description="Chips &amp;amp; margins under pressure&amp;nbsp;today.")
     ])
     assert news_search.search_news("NVDA")["articles"][0]["snippet"] == (
@@ -188,7 +191,7 @@ def test_a_wider_window_includes_them(http):
 
 def test_undated_articles_are_kept(http):
     """Feeds omit pubDate often enough that dropping them loses real headlines."""
-    http["default"] = rss([item("No date here - Wire", "https://ex.com/n", dated=False)])
+    http["default"] = rss([item("Nvidia, no date here - Wire", "https://ex.com/n", dated=False)])
     result = news_search.search_news("NVIDIA")
 
     assert result["count"] == 1
@@ -275,7 +278,7 @@ def test_no_results_is_ok_with_a_coverage_note(http):
 def test_short_coverage_is_flagged(http):
     """A model must not read 'nothing older than 2 days' as 'nothing happened
     in the last 30'."""
-    http["default"] = rss([item("Recent - Wire", "https://ex.com/r", days_ago=1)])
+    http["default"] = rss([item("Nvidia recent - Wire", "https://ex.com/r", days_ago=1)])
     result = news_search.search_news("NVIDIA", days_back=30)
     assert "rolled out of it" in result["coverage_note"]
 
@@ -285,7 +288,7 @@ def test_hitting_the_cap_is_not_reported_as_short_coverage(http):
     biting, not the feeds failing to reach back -- saying otherwise tells the
     model there is no older news when it simply was not shown."""
     http["default"] = rss([
-        item(f"Story {i} - Wire", f"https://ex.com/{i}", days_ago=0.1)
+        item(f"Nvidia story {i} - Wire", f"https://ex.com/{i}", days_ago=0.1)
         for i in range(40)
     ])
     result = news_search.search_news("NVIDIA", days_back=30)
