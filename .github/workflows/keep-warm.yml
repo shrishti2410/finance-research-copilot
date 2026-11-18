@@ -1,0 +1,46 @@
+# Keep the free Render API awake from 02:30 to 18:30 UTC (08:00 to midnight in
+# India), so a visitor in that window does not wait for a cold start.
+#
+# Enabled 2026-11-18 by the user, who confirmed the API is the workspace's only
+# Render service. Per https://render.com/docs/free (read 2026-11-18): 750 free
+# instance hours per workspace per calendar month; running out suspends every
+# free service until the next month; a free service spins down after 15 minutes
+# without inbound traffic.
+#
+# The hours: 80 pings a day, 02:30 to 18:24 UTC, never more than 14 minutes
+# apart, keep the service up until about 18:39, 16.15 hours a day: 501 hours in
+# a 31-day month, 484 in a 30-day one. That leaves about 249 hours for visits
+# outside the window (each keeps it up at least 15 minutes).
+#
+# Only /health, which touches no database, so Neon's compute can still suspend;
+# never /health/ready. GitHub may start a scheduled run late under load (a late
+# run only means a short cold period), and disables schedules in a repository
+# with no activity for 60 days. Free: Actions minutes are not billed for public
+# repositories.
+
+name: keep-warm
+
+on:
+  workflow_dispatch:
+  schedule:
+    # GitHub cron is UTC. "*/14" restarts every hour (:00 :14 :28 :42 :56), so
+    # the window's two ends are listed by hand.
+    - cron: "30,44,58 2 * * *"
+    - cron: "*/14 3-17 * * *"
+    - cron: "10,24 18 * * *"
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping /health
+        env:
+          API: https://finance-research-copilot.onrender.com
+        run: |
+          # /health touches nothing but the process: no database, no model.
+          # A cold start takes about a minute, so allow two.
+          curl --fail --silent --show-error --max-time 120 --retry 2 --retry-delay 10 \
+            -o /dev/null -w "HTTP %{http_code} in %{time_total}s\n" "$API/health"

@@ -269,7 +269,12 @@ function RiskTable({ risk, benchmark }: { risk: SignalReport["evaluation"]["risk
         <caption className="sr-only">Risk-adjusted figures over the backtest window</caption>
         <thead className="text-xs text-fg-subtle">
           <tr>
-            {["", "CAGR", "Max drawdown", "Sharpe", "Sortino", "Calmar", "Time in market"].map((h) => (
+            {/* The first column names the strategy: a header a screen reader can
+                announce, kept out of sight as before. */}
+            <th scope="col" className="border-b border-border py-2 pr-4 font-medium">
+              <span className="sr-only">Strategy</span>
+            </th>
+            {["CAGR", "Max drawdown", "Sharpe", "Sortino", "Calmar", "Time in market"].map((h) => (
               <th key={h} scope="col" className="border-b border-border py-2 pr-4 font-medium">{h}</th>
             ))}
           </tr>

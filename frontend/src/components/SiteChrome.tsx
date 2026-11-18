@@ -135,6 +135,7 @@ const FOOTER_LINKS: { title: string; links: { label: string; href: string; exter
       { label: "Signals", href: "/dashboard" },
       { label: "Backtests", href: "/backtest" },
       { label: "Methodology", href: "/methodology" },
+      { label: "About", href: "/about" },
     ],
   },
   {

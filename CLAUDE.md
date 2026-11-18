@@ -76,6 +76,17 @@ it.
      Record the source and the date.
    - The landing page and the dashboard render from Vercel's cache/ISR even
      when the API is asleep: stale data, clearly dated, never an error.
+   - **Decided 2026-11-18:** the user confirmed the API is the workspace's only
+     Render service.
+     - Keep-warm runs 02:30–18:30 UTC (08:00 to midnight IST), pinging
+       `/health` only, never `/health/ready`, so Neon can suspend.
+     - The hours: 80 pings a day, at most 14 minutes apart, keep the service
+       up 02:30–~18:39, 16.15 h a day. That is 501 h in a 31-day month (484 h
+       in a 30-day one), out of Render's 750 free hours per workspace. About
+       249 h remain for visits outside the window; each visit keeps the
+       service up at least 15 min.
+     - `tests/test_keep_warm.py` pins the window, the 14-minute gap, the
+       hours margin, and `/health` only.
 2. **Sharing and discovery.** Open Graph and Twitter meta tags; a 1200x630
    preview image; a favicon; a title and description for every page; a
    sitemap and `robots.txt`.

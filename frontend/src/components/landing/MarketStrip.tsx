@@ -15,18 +15,11 @@ import { Pause, Play } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { API_BASE } from "@/lib/api";
+import type { StripEntry } from "@/lib/strip";
 
 const STRIP_TIMEOUT_MS = 12_000;
 
-type Entry = {
-  ticker: string;
-  exchange: string | null;
-  kind: "index" | "stock";
-  currency_symbol: string | null;
-  price: number;
-  change_pct: number | null;
-  as_of: string | null;
-};
+type Entry = StripEntry;
 
 const INDEX_NAMES: Record<string, string> = { "^NSEI": "Nifty 50", SPY: "S&P 500 (SPY)" };
 
@@ -61,8 +54,11 @@ function closeLabel(entries: Entry[]): string {
   return ["NSE", "US"].filter((m) => latest[m]).map((m) => `${m} close ${day(latest[m])}`).join(" · ");
 }
 
-export function MarketStrip() {
-  const [entries, setEntries] = useState<Entry[] | null>(null);
+/** `initial`: the entries the cached page was built with (src/lib/strip.ts),
+ * shown at once; the browser still asks the API and shows newer ones if it
+ * answers. Without them the strip appears only when the API does. */
+export function MarketStrip({ initial = null }: { initial?: Entry[] | null }) {
+  const [entries, setEntries] = useState<Entry[] | null>(initial);
   const [paused, setPaused] = useState(false);
 
   useEffect(() => {
