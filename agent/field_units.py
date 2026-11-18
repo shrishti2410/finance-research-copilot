@@ -56,6 +56,23 @@ TOOL_FIELD_UNITS: dict[str, dict[str, str]] = {
     },
     "search_filings": {"count": "count", "results[].score": "level"},
     "show_price_chart": {"bars": "count", "last_close": "money", "latest.rsi14": "level"},
+    # The same fields for a US company (SEC XBRL) and an NSE one (Yahoo
+    # Finance): amounts and diluted EPS in the stated currency; margins and
+    # growth computed in tools/snapshot.py as fractions (0.710681 is 71.07%);
+    # the year's return, volatility and drawdown as get_price_analytics gives
+    # them. The signal's figures are in its text, read as text.
+    "get_company_snapshot": {
+        "financials.years[].fiscal_year": "date",
+        "financials.years[].revenue": "money", "financials.years[].gross_profit": "money",
+        "financials.years[].operating_income": "money", "financials.years[].net_income": "money",
+        "financials.years[].eps_diluted": "money",
+        "financials.years[].gross_margin": "ratio", "financials.years[].operating_margin": "ratio",
+        "financials.years[].net_margin": "ratio",
+        "financials.years[].revenue_growth": "ratio", "financials.years[].net_income_growth": "ratio",
+        "performance.trading_days": "count",
+        "performance.total_return": "ratio", "performance.annualised_volatility": "ratio",
+        "performance.max_drawdown": "ratio",
+    },
 }
 
 

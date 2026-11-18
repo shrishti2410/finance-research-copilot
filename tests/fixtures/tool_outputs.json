@@ -1,5 +1,5 @@
 {
- "_comment": "Real outputs of every agent tool, captured 2026-11-17 from the local data by the unit audit (lists cut to two items, long text to 300 characters). tests/test_tool_units.py checks every numeric field in them has a declared unit.",
+ "_comment": "Real outputs of every agent tool, captured 2026-11-17 from the local data by the unit audit (lists cut to two items, long text to 300 characters). tests/test_tool_units.py checks every numeric field in them has a declared unit. get_company_snapshot added 2026-11-18 (NVDA from SEC XBRL, DIXON.NS from Yahoo Finance), uncut.",
  "outputs": [
   {
    "tool": "get_financial_fact",
@@ -322,6 +322,156 @@
     "last_close": 1080.0,
     "latest": {
      "rsi14": 72.279497
+    }
+   }
+  },
+  {
+   "tool": "get_company_snapshot",
+   "arguments": {
+    "ticker": "NVDA"
+   },
+   "result": {
+    "ok": true,
+    "ticker": "NVDA",
+    "financials": {
+     "source": "SEC 10-K filings (XBRL)",
+     "currency": "USD",
+     "years": [
+      {
+       "fiscal_year": 2024,
+       "revenue": 60922000000,
+       "period_end": "2024-01-28",
+       "accession": "0001045810-26-000021",
+       "gross_profit": 44301000000,
+       "operating_income": 32972000000,
+       "net_income": 29760000000,
+       "eps_diluted": 1.19,
+       "gross_margin": 0.727176,
+       "operating_margin": 0.541217,
+       "net_margin": 0.488493,
+       "revenue_growth": 1.258545,
+       "net_income_growth": 5.813187
+      },
+      {
+       "fiscal_year": 2025,
+       "revenue": 130497000000,
+       "period_end": "2025-01-26",
+       "accession": "0001045810-26-000021",
+       "gross_profit": 97858000000,
+       "operating_income": 81453000000,
+       "net_income": 72880000000,
+       "eps_diluted": 2.94,
+       "gross_margin": 0.749887,
+       "operating_margin": 0.624175,
+       "net_margin": 0.55848,
+       "revenue_growth": 1.142034,
+       "net_income_growth": 1.448925
+      },
+      {
+       "fiscal_year": 2026,
+       "revenue": 215938000000,
+       "period_end": "2026-01-25",
+       "accession": "0001045810-26-000021",
+       "gross_profit": 153463000000,
+       "operating_income": 130387000000,
+       "net_income": 120067000000,
+       "eps_diluted": 4.9,
+       "gross_margin": 0.710681,
+       "operating_margin": 0.603817,
+       "net_margin": 0.556025,
+       "revenue_growth": 0.654735,
+       "net_income_growth": 0.647462
+      }
+     ]
+    },
+    "performance": {
+     "start": "2025-11-18",
+     "end": "2026-11-17",
+     "trading_days": 251,
+     "total_return": -0.140756,
+     "annualised_volatility": 0.387737,
+     "max_drawdown": -0.350192,
+     "currency": "USD"
+    },
+    "signal": {
+     "signal": "BUY",
+     "as_of": "2026-11-17",
+     "coverage": "9 of 16 rules",
+     "backtest_verdict": "no_edge",
+     "backtest_statement": "The 4.98-year backtest shows no edge for NVDA: the signal returned 12.3% a year against 37.2% for buy-and-hold, with a Sharpe ratio of 0.51 against 0.87, and beat 46.5% of 200 random re-timings of its own trades (95% would be needed to rule out luck).",
+     "note": "A mechanical vote of textbook rules on past prices; not a forecast or a recommendation."
+    }
+   }
+  },
+  {
+   "tool": "get_company_snapshot",
+   "arguments": {
+    "ticker": "DIXON.NS"
+   },
+   "result": {
+    "ok": true,
+    "ticker": "DIXON.NS",
+    "financials": {
+     "source": "Yahoo Finance annual statements, not a filing",
+     "currency": "INR",
+     "years": [
+      {
+       "period_end": "2024-03-31",
+       "revenue": 176139100000,
+       "gross_profit": 15213200000,
+       "operating_income": 5421400000,
+       "net_income": 3677500000,
+       "eps_diluted": 61.2686,
+       "gross_margin": 0.08637,
+       "operating_margin": 0.030779,
+       "net_margin": 0.020878,
+       "revenue_growth": 0.446924,
+       "net_income_growth": 0.439222
+      },
+      {
+       "period_end": "2025-03-31",
+       "revenue": 385932900000,
+       "gross_profit": 26316200000,
+       "operating_income": 12675400000,
+       "net_income": 10955400000,
+       "eps_diluted": 180.0556,
+       "gross_margin": 0.068189,
+       "operating_margin": 0.032844,
+       "net_margin": 0.028387,
+       "revenue_growth": 1.191069,
+       "net_income_growth": 1.979035
+      },
+      {
+       "period_end": "2026-03-31",
+       "revenue": 485373900000,
+       "gross_profit": 30935000000,
+       "operating_income": 14743900000,
+       "net_income": 14386400000,
+       "eps_diluted": 235.6707,
+       "gross_margin": 0.063734,
+       "operating_margin": 0.030376,
+       "net_margin": 0.02964,
+       "revenue_growth": 0.257664,
+       "net_income_growth": 0.313179
+      }
+     ]
+    },
+    "performance": {
+     "start": "2025-11-18",
+     "end": "2026-11-16",
+     "trading_days": 246,
+     "total_return": -0.178192,
+     "annualised_volatility": 0.412978,
+     "max_drawdown": -0.383768,
+     "currency": "INR"
+    },
+    "signal": {
+     "signal": "BUY",
+     "as_of": "2026-11-16",
+     "coverage": "6 of 15 rules",
+     "backtest_verdict": "no_edge",
+     "backtest_statement": "The 4.9-year backtest shows no edge for DIXON.NS: the signal returned 27.3% a year against 19.1% for buy-and-hold, with a Sharpe ratio of 1.10 against 0.65, and beat 89% of 200 random re-timings of its own trades (95% would be needed to rule out luck).",
+     "note": "A mechanical vote of textbook rules on past prices; not a forecast or a recommendation."
     }
    }
   }
