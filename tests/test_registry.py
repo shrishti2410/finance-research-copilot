@@ -487,3 +487,34 @@ def test_an_alias_that_repeats_the_real_argument_is_dropped():
     assert result["ok"] and result["company"] == "aapl"
     differs = run(reg.call("echo", {"ticker": "AAPL", "company": "NVDA"})).result
     assert differs["error"] == "bad_input" and "ticker" in differs["message"]
+
+
+def test_a_continuation_line_that_looks_like_a_parameter_stays_in_its_description():
+    """calculate's operand `a` reached the model as "Either a fact reference
+    written": the next line, "TICKER:fact:fiscal_year (...)", was read as a new
+    parameter named TICKER. Only the function's own parameters start entries."""
+    from tools.registry import parse_docstring
+
+    def tool(a: str, b: str) -> dict:
+        """Do it.
+
+        Args:
+            a: The first operand. Either a fact reference written
+                TICKER:fact:fiscal_year ("NVDA:revenue:2026"), or a number.
+            b: The second operand.
+        """
+        return {}
+
+    _, params = parse_docstring(tool)
+    assert set(params) == {"a", "b"}
+    assert params["a"].endswith('TICKER:fact:fiscal_year ("NVDA:revenue:2026"), or a number.')
+
+
+def test_the_calculate_tool_shows_the_whole_operand_description():
+    from tools.registry import Registry
+    from tools.calculator import calculate
+
+    reg = Registry()
+    reg.register(calculate, name="calculate")
+    a = reg.schemas()[0]["function"]["parameters"]["properties"]["a"]["description"]
+    assert "TICKER:fact:fiscal_year" in a and "A number no tool returned is refused." in a

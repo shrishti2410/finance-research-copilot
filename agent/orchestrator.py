@@ -55,6 +55,7 @@ from agent.advice import (
     advisory_spans,
 )
 from agent.grounding import ungrounded_operands, unsupported_figures
+from agent.budget import fit_to_budget
 from agent.untrusted import wrap_tool_result
 from agent.tools import build_registry, compact_for_model
 from core.config import settings
@@ -533,6 +534,11 @@ class AgentResult:
     # rest hit it; this does not.
     call_usage: list[dict[str, int]] = field(default_factory=list)
     router_calls: int = 0
+    # One entry per request sent to a model (router calls included), in order:
+    # {"estimated_tokens", "budget", "trimmed", "over_budget"}. Estimated from
+    # length before sending (agent/budget.py), so it is there even when the
+    # provider rejects the request and reports no usage.
+    request_sizes: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def tool_calls(self) -> list[Step]:
@@ -570,6 +576,7 @@ class AgentResult:
             "total_tokens": self.total_tokens,
             "usage_measured": self.usage_measured,
             "call_usage": list(self.call_usage),
+            "request_sizes": list(self.request_sizes),
             "steps": [step.to_dict() for step in self.steps],
         }
 
@@ -810,6 +817,27 @@ async def run_agent(
     prompt_tokens = completion_tokens = cached_prompt_tokens = 0
     usage_measured = False
     call_usage: list[dict[str, int]] = []
+    # The compact result behind each tool message, by tool_call_id, so the
+    # budget can trim it and wrap it again (agent/budget.py).
+    tool_results: dict[str, tuple[str, dict]] = {}
+    request_sizes: list[dict[str, Any]] = []
+
+    def within_budget(call_model: str, with_tools: bool = True) -> list[dict[str, Any]]:
+        """The messages to send to `call_model`: the largest tool results
+        trimmed if the request would be over the budget. Logs the size. The
+        last step is sent without tools, so its schemas are not counted."""
+        sent, report = fit_to_budget(messages, registry.schemas() if with_tools else [],
+                                     settings.agent_request_token_budget,
+                                     tool_results, wrap_tool_result)
+        entry = {"estimated_tokens": report["estimated_tokens"], "budget": report["budget"],
+                 "trimmed": len(report["trimmed"]), "over_budget": bool(report.get("over_budget"))}
+        request_sizes.append(entry)
+        log.info("agent: request to %s, about %d tokens (budget %d)%s%s", call_model,
+                 entry["estimated_tokens"], entry["budget"],
+                 f", {entry['trimmed']} tool result(s) trimmed" if entry["trimmed"] else "",
+                 ", still over budget" if entry["over_budget"] else "")
+        return sent
+
     owns_client = client is None
     client = client or httpx.AsyncClient(
         base_url=settings.agent_inference_base_url,
@@ -845,7 +873,7 @@ async def run_agent(
         nonlocal prompt_tokens, completion_tokens, cached_prompt_tokens, usage_measured
         payload = {
             "model": call_model,
-            "messages": messages,
+            "messages": within_budget(call_model, with_tools),
             "temperature": temperature,
             "max_tokens": cap,
             "stream": False,
@@ -902,7 +930,7 @@ async def run_agent(
                 if use_router:
                     router_calls += 1
                     routed = await _within_deadline(_router_message(client, {
-                        "model": router_model, "messages": messages,
+                        "model": router_model, "messages": within_budget(router_model),
                         "tools": registry.schemas(), "temperature": temperature,
                         "max_tokens": router_max_tokens,
                     }, router_headers, waits), settings.inference_call_deadline)
@@ -960,7 +988,7 @@ async def run_agent(
                     total_ms=(time.perf_counter() - started) * 1000,
                     prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
                     usage_measured=usage_measured,
-                    cached_prompt_tokens=cached_prompt_tokens, call_usage=call_usage,
+                    cached_prompt_tokens=cached_prompt_tokens, call_usage=call_usage, request_sizes=request_sizes,
                 )
             model_ms = (time.perf_counter() - call_started) * 1000
             # Tools were not offered on the last step; a call made anyway is
@@ -1119,7 +1147,7 @@ async def run_agent(
                     total_ms=(time.perf_counter() - started) * 1000,
                     prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
                     usage_measured=usage_measured,
-                    cached_prompt_tokens=cached_prompt_tokens, call_usage=call_usage,
+                    cached_prompt_tokens=cached_prompt_tokens, call_usage=call_usage, request_sizes=request_sizes,
                 )
 
             # The assistant's tool-call message has to go into the history
@@ -1206,15 +1234,19 @@ async def run_agent(
                          iteration, step.tool, step.ok, step.latency_ms,
                          _one_line(step.arguments, 120))
 
+                call_id = call.get("id") or f"call_{uuid.uuid4().hex[:8]}"
+                compact = compact_for_model(name, outcome)
+                if isinstance(compact, dict):
+                    tool_results[call_id] = (name, compact)
                 messages.append({
                     "role": "tool",
-                    "tool_call_id": call.get("id") or f"call_{uuid.uuid4().hex[:8]}",
+                    "tool_call_id": call_id,
                     "name": name,
                     # Enclosed rather than pasted in raw. A filing excerpt or a
                     # news headline is written by someone who is not operating
                     # this agent, and arrives in the same conversation as the
                     # system prompt. See agent/untrusted.py.
-                    "content": wrap_tool_result(name, compact_for_model(name, outcome)),
+                    "content": wrap_tool_result(name, compact),
                 })
 
             if over_budget:
@@ -1257,7 +1289,7 @@ async def run_agent(
                     total_ms=(time.perf_counter() - started) * 1000,
                     prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
                     usage_measured=usage_measured,
-                    cached_prompt_tokens=cached_prompt_tokens, call_usage=call_usage,
+                    cached_prompt_tokens=cached_prompt_tokens, call_usage=call_usage, request_sizes=request_sizes,
                 )
 
         # Budget exhausted with tool calls still outstanding.
@@ -1280,7 +1312,7 @@ async def run_agent(
             total_ms=(time.perf_counter() - started) * 1000,
             prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
             usage_measured=usage_measured,
-                    cached_prompt_tokens=cached_prompt_tokens, call_usage=call_usage,
+                    cached_prompt_tokens=cached_prompt_tokens, call_usage=call_usage, request_sizes=request_sizes,
         )
     finally:
         if owns_client:

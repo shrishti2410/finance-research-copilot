@@ -127,6 +127,7 @@ import re
 import warnings
 from dataclasses import dataclass
 
+from agent.field_units import unit_of
 from core.numerics import candidates
 
 __all__ = [
@@ -205,6 +206,21 @@ _HYPHENS = str.maketrans({
 def _plain_hyphens(text: str) -> str:
     return text.translate(_HYPHENS)
 
+
+# A citation marker as gpt-oss writes it: 【0†value】, 【3†L10-L22】. The digits
+# inside are a source index and line numbers, never figures. Read as figures,
+# they put the [Unverified] banner on four correct answers in the 2026-11-17
+# calculator run (benchmarks/HOSTED_RUN_2026-11-17_CALCULATOR.md). Only a closed
+# marker with the dagger is blanked; a "[0]" or an unclosed bracket is not.
+_CITATION_MARKER = re.compile(r"【[^】†\n]{0,40}†[^】\n]{0,80}】")
+
+
+def _without_citation_markers(text: str) -> str:
+    """The text with each citation marker blanked to spaces of the same length,
+    so the figures around it keep their positions."""
+    return _CITATION_MARKER.sub(lambda m: " " * len(m.group(0)), text)
+
+
 # A rendered statement says once, above the grid, what its cells are in:
 # "(In millions, except per share data)". Under that note a bare "68" is a
 # figure -- $68 million -- even though nothing on the cell itself says so. The
@@ -226,6 +242,9 @@ class Figure:
     # Half a unit in the last place the answer wrote, in `value`'s units. The
     # tolerance a derivation has to meet; see the module docstring.
     half_ulp: float = 0.0
+    # Written with a percent sign or "percent": supported only by a percentage
+    # or a ratio x 100 (`percent_evidence`).
+    is_percent: bool = False
 
     def __str__(self) -> str:
         return self.text
@@ -293,6 +312,71 @@ def _walk_figures(value, key: str | None = None) -> list[float]:
     return []
 
 
+_PERCENT_KEY = re.compile(r"pct|percent", re.I)
+
+
+def _walk_percent(value, tool: str | None = None, path: str = "",
+                  unit: str | None = None) -> list[float]:
+    """The values in a tool result that a figure written as a percentage may
+    match: percentages as they are, and ratios times 100.
+
+    - text: only numbers written with a percent sign ("29%", "71.07 percent");
+    - a numeric field: by its declared unit (agent/field_units.py). A field
+      named pct/percent, or whose sibling "unit" is "percent", is a percentage
+      as it is; a ratio counts x 100; a level, count, amount or date is never a
+      percentage (an RSI of 72.3 does not support "72.3%"). An undeclared field
+      counts as a possible ratio, x 100, as before the declarations existed.
+    A bare number in text ("5 of 16 rules", "Item 7") is never a percentage.
+    Each value is also offered as its magnitude: "a drawdown of 31.9%" and
+    "fell 12.6%" state a negative fraction without its sign.
+    """
+    if isinstance(value, bool):
+        return []
+    if isinstance(value, (int, float)):
+        key = path.rsplit(".", 1)[-1].replace("[]", "")
+        declared = unit_of(tool, path)
+        if key in _BOOKKEEPING_KEYS and declared is None:
+            return []
+        if _PERCENT_KEY.search(key) or (unit or "").lower() == "percent" or declared == "percent":
+            v = float(value)
+        elif declared == "unit_field":
+            v = float(value) if (unit or "").lower() == "percent" else float(value) * 100.0
+        elif declared == "fact":
+            if (unit or "").lower() != "pure":
+                return []
+            v = float(value) * 100.0
+        elif declared in (None, "ratio"):
+            v = float(value) * 100.0
+        else:
+            return []                       # level, count, money, date
+        return [v, abs(v)] if v < 0 else [v]
+    if isinstance(value, str):
+        return [x for c in candidates(value) if c.is_percent
+                for x in ([c.value, abs(c.value)] if c.value < 0 else [c.value])]
+    if isinstance(value, dict):
+        sibling_unit = value.get("unit") if isinstance(value.get("unit"), str) else None
+        out: list[float] = []
+        for item_key, item in value.items():
+            out.extend(_walk_percent(item, tool, f"{path}.{item_key}" if path else item_key,
+                                     sibling_unit))
+        return out
+    if isinstance(value, (list, tuple)):
+        out = []
+        for item in value:
+            out.extend(_walk_percent(item, tool, path + "[]", unit))
+        return out
+    return []
+
+
+def _successful_tool_results(steps):
+    """(tool name, result) for each successful call, as _successful_results."""
+    for step in steps:
+        tool = getattr(step, "tool", None) or (
+            step.get("tool") if isinstance(step, dict) else None)
+        for result in _successful_results([step]):
+            yield tool, result
+
+
 def _successful_results(steps):
     for step in steps:
         tool = getattr(step, "tool", None) or (
@@ -320,6 +404,15 @@ def evidence_values(steps) -> set[float]:
     values: set[float] = set()
     for result in _successful_results(steps):
         values.update(_walk(result))
+    return values
+
+
+def percent_evidence(steps) -> set[float]:
+    """What a figure written as a percentage may match directly: the
+    percentages in this turn's successful results, and their ratios x 100."""
+    values: set[float] = set()
+    for tool, result in _successful_tool_results(steps):
+        values.update(_walk_percent(result, tool))
     return values
 
 
@@ -433,7 +526,7 @@ def answer_figures(answer: str) -> list[Figure]:
     "fiscal year 2026" and "January 31, 2026" do not become claims that need
     supporting.
     """
-    answer = _plain_hyphens(answer)
+    answer = _without_citation_markers(_plain_hyphens(answer))
     figures: list[Figure] = []
     seen: set[float] = set()
     for candidate in candidates(answer):
@@ -449,6 +542,7 @@ def answer_figures(answer: str) -> list[Figure]:
             start=candidate.start,
             context=" ".join(answer[start:end].split()),
             half_ulp=_half_ulp(candidate),
+            is_percent=candidate.is_percent,
         ))
     return figures
 
@@ -473,12 +567,19 @@ def unsupported_figures(answer: str, steps) -> list[Figure]:
     figure the model derived is not accepted on the strength of arithmetic
     this guard can reconstruct; it has to have come back from the `calculate`
     tool, whose result is then where it is found. See the module docstring.
+
+    A figure written as a percentage is matched only against percentages and
+    ratios x 100 (`percent_evidence`), not against any number: "5%" is not
+    supported by the 5 in "5 of 16 rules" (benchmarks/SIGNALS_EXPLAIN_7C.md,
+    SBIN.NS).
     """
     evidence = evidence_values(steps)
     if not evidence:
         return answer_figures(answer)
+    percents = percent_evidence(steps)
     return [figure for figure in answer_figures(answer)
-            if not _directly_supported(figure.value, evidence)]
+            if not (_directly_supported(figure.value, percents, (1.0,)) if figure.is_percent
+                    else _directly_supported(figure.value, evidence))]
 
 
 def unsupported_figures_reconstructing(answer: str, steps) -> list[Figure]:
