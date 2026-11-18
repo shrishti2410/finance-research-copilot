@@ -190,12 +190,14 @@ it.
      filing answers.
    - Add a frozen NSE eval set before any tuning.
 
-**Order after the 2026-11-18 review.** Each item on its own branch, tests
-first, the diff shown before merging.
+**Order after the 2026-11-18 reviews.** Each item on its own branch, tests
+first, the diff shown before merging, no browser runs (rule 6): the user
+checks pages in their own browser.
 
 *Done on 2026-11-18:* /methodology removed (results live in the README and
-`benchmarks/` only); /about rewritten to describe the site
-(`feat/about-rewrite`, awaiting merge).
+`benchmarks/` only); /about rewritten to describe the site. Positioning
+(research first; signals, backtests and options as the "Strategy audit")
+on `feat/strategy-audit-positioning`, awaiting approval.
 
 *In flight, in this order:*
 1. **Guard batch + broad questions** (`fix/broad-questions`, with
@@ -207,25 +209,18 @@ first, the diff shown before merging.
      fallback (never raw JSON).
    - A last-step answer with an unsupported figure is kept under the
      `[Unverified]` banner with each figure marked inline.
-   - Verified on Groq (fast subset + the 10 open-ended questions: step-limit
-     exhaustions, `[Unverified]` false flags, advice flags, request sizes),
-     then deployed.
-2. **NSE research Level A**, right after (1) is deployed: the company-name
-   resolver, NSE routing in the prompt (which companies have 10-Ks, which
-   only prices, signals, news and Yahoo fundamentals), news searched by full
-   company name. The snapshot already serves NSE fundamentals from Yahoo. A
-   frozen NSE eval of 8–10 questions, run once on Groq.
-3. **Paper-trading recording.**
+   - Verified on Groq (the fast subset + 5 open-ended questions on
+     2026-11-18, the other 5 the next day), then deployed.
+2. **Paper-trading recording.**
    - Append-only, hash-chained tables, with grants for `signals_precompute`
      on those tables only.
    - The backtester's rules: next-open fills, the same costs, long/flat on
      NSE, no look-ahead.
    - Idempotent hooks in both precompute runs.
-   - Then the comparisons (buy-and-hold, exposure-matched) and a /paper page
-     with "too short to judge" below ~126 trading days. The wording is
+   - Then the comparisons (buy-and-hold, exposure-matched) and the record
+     shown with "too short to judge" below ~126 trading days. The wording is
      "signals", never "recommendations".
-4. **Near-live quotes** for the strip and the dashboard cards (queued
-   earlier the same day).
+3. **Near-live quotes** for the strip and the dashboard cards.
    - `GET /market/quotes`, public. The server fetches during market hours
      only, at most once a minute, shared by every visitor and cached in
      Redis.
@@ -234,13 +229,99 @@ first, the diff shown before merging.
      "Market closed · last close <date>"), with Yahoo's delay checked.
    - The CPU and Upstash command budget is measured.
 
-*Then:*
+NSE research Level A (the name resolver, NSE routing in the prompt, news by
+full company name) is folded into P0.1 below.
 
-**A. Positioning.** Research is the main product. Signals, backtests and
-options become a "Strategy audit" module, in the landing page, the nav and
-the About wording. No feature is removed.
+### The product plan (set 2026-11-18, from a user-focused review)
 
-**B. Reliability and trust.**
+**One journey around a company page**, serving three users: investors
+(fundamentals, comparison, a watchlist), students and researchers
+(verifiable evidence), and traders (the strategy audit). Research stays the
+main product.
+
+**Before P0 starts:** propose the data model and the API endpoints for
+search, the company page and compare, with the free data sources and their
+limits (Yahoo's rate limits, the NSE list's licence, the CPU cost of
+on-demand signals at 0.1 CPU), and wait for the user's approval.
+
+**P0, built first** (each on its own branch, tests first, no browser runs):
+1. **Universal search.**
+   - Any NSE stock, from NSE's listed-equity list stored in the repo as a
+     dated snapshot, and US stocks.
+   - By name, symbol or sector.
+   - One name resolver, used by search and by every agent tool.
+2. **A company page, `/company/[ticker]`,** for any searchable stock, with
+   these tabs:
+   - Overview: price, market cap, sector, description.
+   - Financials: revenue, profit, EPS and cash flow. XBRL for the 15 US 10-K
+     companies; Yahoo fundamentals, labelled, for the others.
+   - Ratios: P/E, P/B, ROE, debt/equity, margins.
+   - Growth: annual, and quarterly where available.
+   - Chart.
+   - News.
+   - Ask AI: answers with clickable evidence. The evidence explorer (filing,
+     section, passage, fact, calculation, status) lives here.
+   - Strategy audit: the signal, the backtest, options and the paper-trading
+     record.
+
+   Signals and backtests for stocks outside the watchlist are computed on
+   demand, cached, with a clear "computing" state; the watchlist stays
+   precomputed.
+3. **A compare page:** 2–4 companies side by side (growth, margins, ROE,
+   P/E, P/B, debt, cash flow, valuation history).
+   - Periods aligned.
+   - Consolidated vs standalone figures, and different fiscal year-ends, are
+     flagged.
+   - The AI explains the differences from the data only.
+4. **My watchlist:** add and remove, several lists, sorting, notes. Stored
+   in the browser (localStorage) for demo users; no signup needed.
+5. **Freshness labels on every price and figure:**
+   - the data type (previous close, delayed or live);
+   - when it was last updated;
+   - the exchange's time zone;
+   - whether the market is open or closed;
+   - the source.
+
+Also in P0:
+- **The homepage** gets a central search box and three entry cards
+  (Research a company, Compare companies, Test a strategy), and keeps the
+  no-signup demo.
+- **Options:** "estimated premium (historical volatility)" made
+  unmissable, and a scenario slider (price ± %, a volatility change, days
+  to expiry).
+
+**P1, after P0:**
+- a company news and events timeline;
+- price and metric alerts;
+- quarterly results analysis;
+- saved research and history;
+- exportable reports.
+
+**P2, later:**
+- AI peer comparisons;
+- DCF with sensitivity;
+- earnings surprise;
+- portfolio risk;
+- research monitoring.
+
+**Kept from the earlier plans:**
+- the guard and trust work (B1–B6 below);
+- the agent trace view;
+- the year-over-year change detector between a company's last two 10-Ks;
+- futures (item 6 above);
+- Level B Indian annual reports (item 7 above).
+
+The evidence explorer and the comparison page from the earlier list are now
+P0.2 and P0.3. Positioning (A) is done.
+
+**Never build:**
+- another generic chatbot;
+- buy or sell recommendations;
+- price prediction;
+- indicator bloat;
+- social features.
+
+**B. Reliability and trust** (kept; alongside P0 where it fits):
 1. **No duplicate runs on refresh.** An idempotency key per question, a
    Redis in-flight lock and a reconnectable stream, so a refresh never
    produces duplicate messages.
@@ -250,30 +331,21 @@ the About wording. No feature is removed.
    check.
 3. **Typed facts and calculation recipes in claim verification** (for
    example, market cap = diluted weighted shares x price), rejecting
-   operands of the wrong kind. Extends item 1 below; a grounding-guard
+   operands of the wrong kind. Extends item 1 above; a grounding-guard
    change, so the diff is shown and waits.
 4. **Eval credibility.** Repeated runs of the dev set, spread over days
    within the Groq budget, reported with the mean, the spread, Wilson
    intervals and failure categories. The held-out set is run once. Extends
-   item 3 below.
+   item 3 above.
 5. **Latency.** Per-stage timing on live requests (p50/p95, with and without
    rate-limit waits), streaming, a cache for common questions, and instant
    pre-generated example answers on the research page.
 6. **A filing coverage report** per 10-K: the sections found and missing.
 
-**C. Features, only these five:**
-1. An evidence explorer: click a figure to see its filing, section,
-   passage, fact, calculation and status.
-2. An agent trace view.
-3. A company comparison page from XBRL, with citations.
-4. A year-over-year change detector between a company's last two 10-Ks.
-5. Paper trading (in flight above).
+**Deferred:** news-price correlation, a model playground.
 
-**Deferred:** DCF, report PDF export, news-price correlation, a model
-playground, watchlist alerts.
-
-The numbered items 1–7 above stay in the plan, after A–C, except where B
-extends them.
+The numbered items 1–7 above stay in the plan, after P0, except where B or
+P0 extends them.
 
 Paper trading, previously out of scope, is in from 2026-11-18 as forward
 recording of the existing signals only.
@@ -283,9 +355,10 @@ on a US one (`zscore_reversion` stopped voting on 2026-11-18: it is Bollinger
 reversion under another name, `benchmarks/RULE_DEDUP.md`). The **26 strategy
 cards** are handbook cards, 8 of them for options.
 
-**Out of scope for now:** Celery, a full Grafana stack, a portfolio engine,
-live option chains, more strategies or indicators beyond this list, and the
-deferred items above.
+**Out of scope for now:** Celery, a full Grafana stack, a portfolio engine
+(P2's portfolio risk aside), live option chains, more strategies or
+indicators beyond this list, the deferred items above, and the never-build
+list.
 
 These six rules are not optional.
 
