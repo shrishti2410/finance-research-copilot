@@ -62,27 +62,20 @@ function Section({ id, title, children }: { id: string; title: string; children:
   );
 }
 
-// A link the author has not supplied yet is shown as "coming soon", never as
-// an invented address (src/lib/site.ts).
+// Only links the author has supplied (src/lib/site.ts); a missing one is not
+// shown at all, never as a placeholder and never invented.
 function ProfileLink({ href, label, icon }: { href: string; label: string; icon: React.ReactNode }) {
-  const body = (
-    <>
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer noopener"
+      className="flex items-center gap-3 rounded-[var(--radius-control)] border border-border bg-surface px-4 py-3 hover:border-fg-subtle"
+    >
       <span className="text-accent">{icon}</span>
       <span className="font-medium text-fg">{label}</span>
-      {href ? <ExternalLink className="ml-auto size-4 text-fg-subtle" aria-hidden="true" /> : (
-        <span className="ml-auto text-xs text-fg-subtle">coming soon</span>
-      )}
-    </>
-  );
-  const box = "flex items-center gap-3 rounded-[var(--radius-control)] border border-border bg-surface px-4 py-3";
-  return href ? (
-    <a href={href} target="_blank" rel="noreferrer noopener" className={`${box} hover:border-fg-subtle`}>
-      {body}
+      <ExternalLink className="ml-auto size-4 text-fg-subtle" aria-hidden="true" />
     </a>
-  ) : (
-    <div className={box} aria-disabled="true">
-      {body}
-    </div>
   );
 }
 
@@ -152,9 +145,15 @@ export default function About() {
         <h2 className="text-xl font-semibold tracking-tight text-fg">Built by {AUTHOR.name}</h2>
         <p className="mt-2 text-fg-muted">I designed and built this site on my own.</p>
         <div className="mt-4 grid gap-3 sm:grid-cols-3">
-          <ProfileLink href={AUTHOR.github} label="GitHub" icon={<GitHubMark className="size-5" />} />
-          <ProfileLink href={AUTHOR.linkedin} label="LinkedIn" icon={<Briefcase className="size-5" aria-hidden="true" />} />
-          <ProfileLink href={AUTHOR.resume} label="Resume" icon={<FileText className="size-5" aria-hidden="true" />} />
+          {[
+            { href: AUTHOR.github, label: "GitHub", icon: <GitHubMark className="size-5" /> },
+            { href: AUTHOR.linkedin, label: "LinkedIn", icon: <Briefcase className="size-5" aria-hidden="true" /> },
+            { href: AUTHOR.resume, label: "Resume", icon: <FileText className="size-5" aria-hidden="true" /> },
+          ]
+            .filter((l) => l.href)
+            .map((l) => (
+              <ProfileLink key={l.label} {...l} />
+            ))}
         </div>
       </Card>
     </main>

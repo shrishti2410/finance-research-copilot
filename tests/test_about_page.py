@@ -37,10 +37,13 @@ def test_how_it_is_built_is_not_on_the_page_but_is_in_the_readme():
     assert "## Architecture" in readme and "Grounding guard" in readme
 
 
-def test_profile_links_the_author_has_not_sent_stay_empty():
-    # Shown as "coming soon"; never an invented address.
+def test_only_the_name_and_github_until_the_author_adds_more():
+    # 2026-11-18: no placeholders on the page. LinkedIn and a resume appear
+    # only once their URLs are set in src/lib/site.ts; never invented.
+    assert "coming soon" not in ABOUT
     assert re.search(r'linkedin: ""', SITE) and re.search(r'resume: ""', SITE)
-    assert "coming soon" in ABOUT
+    assert "AUTHOR.github" in ABOUT
+    assert ".filter((l) => l.href)" in ABOUT
 
 
 def test_it_says_it_is_not_investment_advice():
