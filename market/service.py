@@ -15,6 +15,7 @@ requested range. Without that, every overlay would start blank on the left.
 from __future__ import annotations
 
 import math
+from collections import OrderedDict
 from datetime import date, datetime, timedelta, timezone
 
 from market import analytics, indicators
@@ -73,9 +74,58 @@ def _num(value: float) -> float | None:
     return None if value is None or (isinstance(value, float) and math.isnan(value)) else round(float(value), 6)
 
 
+# The chart endpoint's results, kept until the stock's market closes another
+# session. The 2026-11-18 load test found the chart the slowest endpoint at
+# Render's 0.1 CPU: every request re-read two years of bars and recomputed its
+# indicators (benchmarks/LOAD_TEST_MARKET.md). Bounded: an entry is a few
+# thousand points, and the container has 512 MB.
+CHART_CACHE_SIZE = 24
+_chart_cache: "OrderedDict[tuple, dict]" = OrderedDict()
+
+
+def clear_chart_cache() -> None:
+    _chart_cache.clear()
+
+
+def chart_cache_size() -> int:
+    return len(_chart_cache)
+
+
 async def chart_data(ticker: str, start: date, end: date, names: list[str],
                      data: MarketData | None = None) -> dict:
-    data = data or MarketData()
+    """Bars and indicator series for a chart.
+
+    Without `data`, the result is cached per session: the key is the stock, the
+    range, the indicators, the provider, the market's latest close and the
+    signal code's version, so a new close or new code computes afresh. A result
+    is kept only if it already holds that close's session (or the range ends
+    before it): one computed just after the close, before the provider has the
+    day's bar, would otherwise stand for the whole session."""
+    key = None
+    if data is None:
+        from market.precompute import CODE_VERSION, last_close
+
+        data = MarketData()
+        symbol = normalize_ticker(ticker)
+        close = last_close(datetime.now(timezone.utc), market_for(symbol))
+        key = (symbol, start, end, tuple(names), data.provider.name, close.date(), CODE_VERSION)
+        hit = _chart_cache.get(key)
+        if hit is not None:
+            _chart_cache.move_to_end(key)
+            return hit
+    result = await _compute_chart(ticker, start, end, names, data)
+    if key is not None:
+        session = key[5]
+        last_bar = result["bars"][-1]["time"] if result["bars"] else None
+        if end < session or (last_bar is not None and last_bar >= session.isoformat()):
+            _chart_cache[key] = result
+            while len(_chart_cache) > CHART_CACHE_SIZE:
+                _chart_cache.popitem(last=False)
+    return result
+
+
+async def _compute_chart(ticker: str, start: date, end: date, names: list[str],
+                         data: MarketData) -> dict:
     symbol = normalize_ticker(ticker)
     warm = await data.history(symbol, start - timedelta(days=WARMUP_CALENDAR_DAYS), end)
     shown = [i for i, b in enumerate(warm) if b.day >= start]
