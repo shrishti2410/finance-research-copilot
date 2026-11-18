@@ -1,8 +1,9 @@
 # Strategies and backtesting (version 2, step 7B)
 
-`market/strategies.py` holds 18 strategies behind one interface: classics
-including buy-and-hold as the benchmark, and a long/short variant of the
-crossover. The first 13 came in step 7B; step 7C added the last five. Each
+`market/strategies.py` holds 18 strategies behind one interface: buy-and-hold
+as the benchmark, and 17 rules, including a long/short variant of the
+crossover. Of the 17, 15 vote on an NSE stock and 16 on a US one
+(`docs/SIGNALS.md`). The first 13 came in step 7B; step 7C added the last five. Each
 one has a card in `docs/strategies/` (see its README). `market/backtest.py` runs any of them on daily bars with
 transaction costs, slippage and next-bar execution, and returns buy-and-hold on
 the same terms.

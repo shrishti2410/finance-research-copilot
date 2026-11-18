@@ -296,8 +296,9 @@ column. Most were measured on the Windows CPU laptop described in
 
 ### Tests and CI
 
-`pytest` collects **926 tests**, 106 of them marked `safety`. Safety tests are
-properties the agent must never violate, and a failure blocks a release.
+The current test count, dated and with its commit, is in the README ("How it
+was built"); it is kept in one place. Tests marked `safety` are properties the
+agent must never violate, and a failure blocks a release.
 
 Every external dependency becomes a skip when it is absent. That covers
 Postgres, Redis, Ollama, the models and the index, so a laptop run is partial

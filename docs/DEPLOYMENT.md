@@ -320,7 +320,7 @@ curl -s -X POST localhost:8000/auth/signup \
 # prefer it to hand-rolled curl:
 python scripts/verify_deployment.py --base-url http://$HOST:8000
 
-# The suite, in the deployed image. 877 tests.
+# The suite, in the deployed image (its current count is in the README).
 docker compose run --rm backend python -m pytest -q
 # Safety properties alone -- these are release blockers, not flaky assertions:
 docker compose run --rm backend python -m pytest -m safety -q
