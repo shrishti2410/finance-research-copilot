@@ -20,5 +20,9 @@ echo "start: migrating the database to head"
 alembic upgrade head
 
 echo "start: serving on port ${PORT}"
+# --timeout-keep-alive 15: a visitor pauses between clicks, and uvicorn's
+# default of 5 s closed connections just as a request arrived
+# (benchmarks/LOAD_TEST_MARKET.md).
 exec uvicorn api.main:app --host 0.0.0.0 --port "${PORT}" --proxy-headers \
+    --timeout-keep-alive 15 \
     --forwarded-allow-ips="${FORWARDED_ALLOW_IPS:-127.0.0.1}"
