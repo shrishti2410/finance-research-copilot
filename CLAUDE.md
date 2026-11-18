@@ -179,6 +179,63 @@ it.
 
    Label everything as an estimate: there is no live NSE futures data. Reuse
    the options pricing and payoff code.
+7. **Level B NSE research** (set 2026-11-18), next to futures, after the
+   hardening backlog: RAG over the annual reports of the 5 NSE watchlist
+   stocks.
+   - The user downloads the PDFs by hand; NSE and BSE block automated
+     downloads.
+   - Parse the PDFs, tables included, and chunk each table whole.
+   - Index with citations: company, year, page.
+   - Extend the company resolver and the system prompt so these stocks get
+     filing answers.
+   - Add a frozen NSE eval set before any tuning.
+
+**Queued on 2026-11-18, in this order, each on its own branch with tests
+first and screenshots or a diff before merging:**
+1. **Top priority: broad questions.** "What is your analysis of NVIDIA?" on the
+   live site hit the 5-step limit (one get_financial_fact per step), then
+   showed raw tool JSON.
+   - A `get_company_snapshot` tool returns, in one call, three fiscal years of
+     financials, margins, EPS and growth (XBRL for the 15 US companies, Yahoo
+     for NSE, labelled), 1-year price performance and the signal with its
+     verdict. Units are declared for the guard.
+   - The prompt calls tools in parallel in the first step and always
+     reserves the last step for the answer.
+   - Broad answers use sectioned answers that end with the disclaimer.
+   - On exhaustion, one tool-free summary call (still guard-checked), else
+     plain sentences. Never raw JSON.
+   - A separate open-ended eval of about 10 questions, run once on Groq.
+2. **Remove /methodology.** Its architecture and guard cards (no figures)
+   move to /about as "How it's built". Results live in the README and
+   `benchmarks/` only; the figure tests check the README.
+3. **Forward paper trading, recording first.** It gains value only with
+   time.
+   - Append-only, hash-chained tables, written with grants for
+     `signals_precompute` on those tables only.
+   - The backtester's rules: next-open fills, the same costs, long/flat on
+     NSE, no look-ahead.
+   - Idempotent hooks in both precompute runs.
+   - Then the comparisons (buy-and-hold, exposure-matched) and a /paper page
+     with "too short to judge" below ~126 trading days. The wording is
+     "signals", never "recommendations".
+4. **NSE in the research chat.**
+   - A company-name resolver for the watchlist, used by every tool.
+   - The prompt states which companies have 10-Ks and which are covered by
+     prices, signals, news and Yahoo fundamentals only.
+   - `search_news` searches by full company name.
+   - A labelled `get_fundamentals` tool, with units declared.
+   - A frozen NSE eval of 8–10 questions, run once on Groq.
+5. **Near-live quotes** for the strip and the dashboard cards.
+   - `GET /market/quotes`, public. The server fetches during market hours
+     only, at most once a minute, shared by every visitor and cached in
+     Redis.
+   - The browser polls every 30 s while the tab is visible.
+   - Each market is labelled honestly ("Delayed ~15 min · NSE open" /
+     "Market closed · last close <date>"), with Yahoo's delay checked.
+   - The CPU and Upstash command budget is measured.
+
+Paper trading, previously out of scope, is in from 2026-11-18 as forward
+recording of the existing signals only.
 
 Facts to keep straight: the signal has **15 voting rules** on an NSE stock and 16
 on a US one (`zscore_reversion` stopped voting on 2026-11-18: it is Bollinger
@@ -186,7 +243,7 @@ reversion under another name, `benchmarks/RULE_DEDUP.md`). The **26 strategy
 cards** are handbook cards, 8 of them for options.
 
 **Out of scope for now:** Celery, a full Grafana stack, a portfolio engine,
-paper trading, live option chains, and more strategies or indicators beyond
+live option chains, and more strategies or indicators beyond
 this list.
 
 These five rules are not optional.
