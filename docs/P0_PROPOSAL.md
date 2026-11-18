@@ -1,7 +1,23 @@
 # P0 proposal: data model, endpoints and data sources
 
-Status: **proposed 2026-11-18, awaiting approval.** Nothing in P0 is built
-until this is approved (CLAUDE.md, "The product plan").
+Status: **proposed 2026-11-18; decided the same day, as below.** The rest of
+this document is the proposal as written; where it differs from the
+decisions, the decisions hold.
+
+## Decisions (2026-11-18)
+
+1. **Yahoo is not extended to the wider universe.** It stays limited to the
+   covered stocks, labelled as an educational project, with hard caching.
+2. **The NSE list is not committed.** Universal NSE coverage waits for a
+   licensed source (option (c), researched later). US expansion, later, uses
+   SEC company facts.
+3. **P0 is reduced to the covered set:** the 8 watchlist stocks and the 15 US
+   10-K companies. It has the company page, compare, the personal watchlist,
+   freshness labels, and search over that set. `instruments` holds those 20
+   companies (the 3 US watchlist stocks are among the 15), not 2,600.
+4. **The on-demand audit cap is approved as proposed.**
+5. **P0 comes after the in-flight work and the technical review's items a–d**
+   (CLAUDE.md, "Order after the 2026-11-18 reviews").
 
 Covers search, the company page and compare (P0.1–P0.3), plus what the
 watchlist and freshness labels (P0.4–P0.5) need from the API. Every figure
