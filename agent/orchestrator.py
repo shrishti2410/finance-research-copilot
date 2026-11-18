@@ -46,6 +46,7 @@ from agent.prompts import (
     EXHAUSTED_TEMPLATE,
     EXHAUSTED_TOOL_BUDGET,
     LAST_TURN,
+    LAST_STEP_FAILED,
     EXHAUSTED_TOOL_BUDGET_NO_FINDINGS,
     system_prompt,
 )
@@ -742,6 +743,21 @@ def _describe(step: Step) -> str:
     return f"{head}: {', '.join(pairs)}." if pairs else f"{head}."
 
 
+def _error_details(exc: Exception) -> str:
+    """What a failed model call said: the status and the start of the body for
+    an HTTP error (a provider's error body names its reason, e.g. Groq's
+    "tool_use_failed"), else the exception. Holds no credentials: request
+    headers are not included."""
+    response = getattr(exc, "response", None)
+    if response is not None:
+        try:
+            body = response.text
+        except Exception:  # noqa: BLE001 - a streamed body that was not read
+            body = "<body not read>"
+        return f"HTTP {response.status_code}: {body[:600]}"
+    return f"{type(exc).__name__}: {exc}"
+
+
 def _findings(steps: list[Step]) -> str:
     """What the successful tool calls established, as plain sentences, for the
     exhaustion and redirection messages."""
@@ -980,6 +996,34 @@ async def run_agent(
                     message = await one_call(model, max_tokens, stream_tokens, with_tools=not last)
             except Exception as exc:  # noqa: BLE001 - upstream down, timeout, bad JSON
                 model_ms = (time.perf_counter() - call_started) * 1000
+                findings = _findings(steps)
+                if last and findings:
+                    # The step kept for writing the answer failed, but the tools
+                    # had found things: show them rather than "couldn't reach
+                    # the model". Seen 2026-11-18: a 400 on this step, likely a
+                    # tool call on a step that offered none. The provider's
+                    # status and body are logged so the cause can be confirmed.
+                    log.error("agent: the last step (iteration %d, no tools) failed; "
+                              "answering with the findings: %s", iteration, _error_details(exc))
+                    answer = LAST_STEP_FAILED.format(findings=findings)
+                    steps.append(Step(
+                        iteration=iteration, tool="final_answer", arguments={},
+                        result=f"last step failed: {type(exc).__name__}", latency_ms=model_ms,
+                        model_latency_ms=model_ms, ok=False,
+                    ))
+                    return AgentResult(
+                        answer=answer,
+                        steps=steps, iterations=iteration, completed=False,
+                        stop_reason="last_step_failed", model=model,
+                        router_model=router_model, router_calls=router_calls,
+                        provider=provider, router_provider=router_provider,
+                        rate_limit_wait_ms=sum(waits),
+                        total_ms=(time.perf_counter() - started) * 1000,
+                        prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+                        usage_measured=usage_measured,
+                        cached_prompt_tokens=cached_prompt_tokens, call_usage=call_usage,
+                        request_sizes=request_sizes,
+                    )
                 if isinstance(exc, InferenceDeadlineExceeded):
                     # Not "couldn't reach the model": it was reached, and it was
                     # still going. Saying so is what lets someone tell a slow

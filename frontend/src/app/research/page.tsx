@@ -482,7 +482,9 @@ function IncompleteNote({ reason }: { reason: string }) {
         ? "Ran out of steps before finishing."
         : reason === "inference_error"
           ? "The model could not be reached."
-          : reason;
+          : reason === "last_step_failed"
+            ? "The model failed while writing the answer; these are the figures the tools returned."
+            : reason;
   return (
     <p className="mt-2 rounded border border-warn/40 bg-surface-2 px-2.5 py-1.5 text-xs text-warn">
       Incomplete · {explanation}

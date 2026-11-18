@@ -232,6 +232,19 @@ partial answer.
 Ask for less at once: one company, or one group of metrics, per question.\
 """
 
+# When the last step -- the one kept for writing the answer -- fails at the
+# provider, and the tools had already established something. Every figure in
+# {findings} comes from a tool result, in plain sentences (orchestrator._findings).
+LAST_STEP_FAILED = """\
+I gathered the figures below, but the model failed while writing the full answer, \
+so here is what the tools established:
+{findings}
+
+Ask again for a written analysis.
+
+Educational project, not investment advice.\
+"""
+
 EXHAUSTED_NO_FINDINGS = """\
 I couldn't complete this question within the {max_iterations}-step limit, and \
 none of the tool calls I made returned usable data. Nothing here is a partial \
