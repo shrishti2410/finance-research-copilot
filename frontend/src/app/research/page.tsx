@@ -15,6 +15,7 @@ import {
   type TraceStep,
 } from "@/lib/api";
 import { errorMessage, useAuth } from "@/lib/auth";
+import { followAfterScroll, shouldShowJump } from "@/lib/chatScroll.mjs";
 
 /**
  * A turn still in flight. It is deliberately not a `Message`: it has no id
@@ -72,6 +73,21 @@ function ChatPage() {
   const [error, setError] = useState<string | null>(null);
 
   const bottomRef = useRef<HTMLDivElement>(null);
+  // Follow a streaming answer down only while the reader is at the bottom
+  // (src/lib/chatScroll.mjs). The ref is what the effect reads; the state
+  // drives the "Jump to latest" button.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const followingRef = useRef(true);
+  const lastTopRef = useRef(0);
+  const [following, setFollowing] = useState(true);
+  const follow = useCallback((on: boolean) => {
+    followingRef.current = on;
+    setFollowing(on);
+  }, []);
+  const toBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, []);
   const busy = pending !== null;
 
   useEffect(() => {
@@ -118,9 +134,17 @@ function ChatPage() {
     };
   }, [token, activeId]);
 
+  // Instant, not smooth: a smooth scroll's in-between positions read as the
+  // reader leaving the bottom.
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, pending]);
+    if (followingRef.current) toBottom();
+  }, [messages, pending, toBottom]);
+
+  // A different conversation starts at its latest message.
+  useEffect(() => {
+    followingRef.current = true;
+    void Promise.resolve().then(() => setFollowing(true));
+  }, [activeId]);
 
   async function newConversation() {
     if (!token) return;
@@ -138,6 +162,8 @@ function ChatPage() {
   async function send(question: string) {
     if (!token || !question.trim() || busy) return;
     setError(null);
+    // Asking a question means wanting to see the answer arrive.
+    follow(true);
 
     // A thread is created on demand, so the first question does not require
     // clicking "New conversation" first.
@@ -312,7 +338,17 @@ function ChatPage() {
             + New conversation
           </button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="relative min-h-0 flex-1">
+        <div
+          ref={scrollRef}
+          className="h-full overflow-y-auto"
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            const next = followAfterScroll(lastTopRef.current, el);
+            lastTopRef.current = el.scrollTop;
+            if (next !== followingRef.current) follow(next);
+          }}
+        >
           <div className="mx-auto max-w-3xl px-4 py-8 sm:px-6">
             {messages.length === 0 && !pending && (
               <div className="mt-16 text-center">
@@ -407,6 +443,19 @@ function ChatPage() {
 
             <div ref={bottomRef} />
           </div>
+        </div>
+        {shouldShowJump(following, messages.length > 0 || pending !== null) && (
+          <button
+            type="button"
+            onClick={() => {
+              follow(true);
+              toBottom();
+            }}
+            className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full border border-border bg-surface-2 px-4 py-1.5 text-xs font-medium text-fg shadow-lg hover:border-fg-subtle"
+          >
+            Jump to latest ↓
+          </button>
+        )}
         </div>
 
         {error && (
