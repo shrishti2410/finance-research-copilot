@@ -486,8 +486,8 @@ function ResearchTab({ ticker }: { ticker: string }) {
             <p className="font-medium text-fg">{name}&apos;s 10-K filings are indexed</p>
             <p className="mt-1 text-fg-muted">
               The research chat answers from {name}&apos;s last three annual 10-K reports and its reported figures
-              (SEC XBRL), as well as prices, the signal engine and news. Every figure in an answer is checked
-              against what a tool returned.
+              (SEC XBRL), as well as prices, the signal engine and news. Every figure in an answer is traced to
+              what a tool returned.
             </p>
           </>
         ) : (
@@ -496,7 +496,7 @@ function ResearchTab({ ticker }: { ticker: string }) {
             <p className="mt-1 text-fg-muted">
               The filings search covers only the annual 10-K reports of 15 US companies, such as NVIDIA and Apple.
               Indian companies do not file 10-Ks, so for {name} the research chat works from NSE prices and returns,
-              the signal engine and news. Every figure in an answer is checked against what a tool returned.
+              the signal engine and news. Every figure in an answer is traced to what a tool returned.
             </p>
           </>
         )}

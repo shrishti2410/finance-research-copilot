@@ -9,7 +9,8 @@ import { ColdStartNotice, useSlow } from "@/components/states";
 import { Button } from "@/components/ui/button";
 import { errorMessage, useAuth } from "@/lib/auth";
 
-/** Sign in to the shared demo account and open the dashboard. `compact` is
+/** Sign in to the shared demo account and open Research, where the example
+ * questions are (research is the main product, 2026-11-18). `compact` is
  * the header's version: small, and the slow-start notice is left to the
  * spinner (there is no room for it under a header button). */
 export function DemoButton({ compact = false }: { compact?: boolean }) {
@@ -22,8 +23,8 @@ export function DemoButton({ compact = false }: { compact?: boolean }) {
   if (token) {
     return (
       <Button asChild size={compact ? "sm" : "lg"}>
-        <Link href="/dashboard">
-          {compact ? "Dashboard" : "Open the dashboard"} <ArrowRight className="size-4" aria-hidden="true" />
+        <Link href="/research">
+          {compact ? "Research" : "Open Research"} <ArrowRight className="size-4" aria-hidden="true" />
         </Link>
       </Button>
     );
@@ -38,7 +39,7 @@ export function DemoButton({ compact = false }: { compact?: boolean }) {
           setError(null);
           try {
             await demo();
-            router.push("/dashboard");
+            router.push("/research");
           } catch (err) {
             // The header has no room for the message: the sign-in page shows
             // its own, with the demo button there to retry.

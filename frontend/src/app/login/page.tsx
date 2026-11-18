@@ -54,7 +54,7 @@ export default function LoginPage() {
                 setPending(true);
                 try {
                   await demo();
-                  router.replace("/dashboard");
+                  router.replace("/research");
                 } finally {
                   setPending(false);
                 }

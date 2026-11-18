@@ -8,7 +8,7 @@ import { AUTHOR } from "@/lib/site";
 export const metadata: Metadata = {
   title: "About",
   description:
-    "A free research and strategy-audit site for Indian and US stocks: what it does, what it covers, where the data comes from, and who built it.",
+    "A free research site for public companies, with a strategy audit for Indian and US stocks: what it does, what it covers, where the data comes from, and who built it.",
 };
 
 // About the site, for a visitor: plain words, no technical detail and no
@@ -23,12 +23,14 @@ function GitHubMark({ className }: { className?: string }) {
   );
 }
 
-const CAN_DO = [
-  {
-    href: "/research",
-    title: "Ask about a company's annual report",
-    body: "Ask questions about 15 US companies and get answers from their 10-K filings, with the passages shown.",
-  },
+const RESEARCH = {
+  href: "/research",
+  title: "Ask about a company's annual report",
+  body: "Ask questions about 15 US companies and get answers from their 10-K filings, with the passages shown.",
+};
+
+// The strategy audit: everything about trading rules and prices.
+const AUDIT = [
   {
     href: "/chart",
     title: "Charts and indicators",
@@ -62,27 +64,20 @@ function Section({ id, title, children }: { id: string; title: string; children:
   );
 }
 
-// A link the author has not supplied yet is shown as "coming soon", never as
-// an invented address (src/lib/site.ts).
+// Only links the author has supplied (src/lib/site.ts); a missing one is not
+// shown at all, never as a placeholder and never invented.
 function ProfileLink({ href, label, icon }: { href: string; label: string; icon: React.ReactNode }) {
-  const body = (
-    <>
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer noopener"
+      className="flex items-center gap-3 rounded-[var(--radius-control)] border border-border bg-surface px-4 py-3 hover:border-fg-subtle"
+    >
       <span className="text-accent">{icon}</span>
       <span className="font-medium text-fg">{label}</span>
-      {href ? <ExternalLink className="ml-auto size-4 text-fg-subtle" aria-hidden="true" /> : (
-        <span className="ml-auto text-xs text-fg-subtle">coming soon</span>
-      )}
-    </>
-  );
-  const box = "flex items-center gap-3 rounded-[var(--radius-control)] border border-border bg-surface px-4 py-3";
-  return href ? (
-    <a href={href} target="_blank" rel="noreferrer noopener" className={`${box} hover:border-fg-subtle`}>
-      {body}
+      <ExternalLink className="ml-auto size-4 text-fg-subtle" aria-hidden="true" />
     </a>
-  ) : (
-    <div className={box} aria-disabled="true">
-      {body}
-    </div>
   );
 }
 
@@ -94,15 +89,32 @@ export default function About() {
 
       <Section id="what" title="What this is">
         <p>
-          A free site for researching Indian and US stocks and for checking trading strategies honestly. You can
-          ask questions about a company&apos;s annual report, look at its charts, and see whether popular trading
-          rules would really have worked on it, without having to take anyone&apos;s word for it.
+          A free research site for public companies. Its main part answers your questions about a company from
+          its annual report. Alongside it, a strategy audit shows what popular trading rules say about Indian and
+          US stocks, and whether they would really have worked, without having to take anyone&apos;s word for it.
         </p>
       </Section>
 
       <Section id="can-do" title="What you can do">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-fg-subtle">Research</h3>
+        <ul className="grid gap-3">
+          {[RESEARCH].map(({ href, title, body }) => (
+            <li key={href}>
+              <Link
+                href={href}
+                className="flex h-full flex-col rounded-[var(--radius-card)] border border-border bg-surface p-4 hover:border-fg-subtle"
+              >
+                <span className="flex items-center gap-1 font-medium text-fg">
+                  {title} <ArrowRight className="size-4 text-accent" aria-hidden="true" />
+                </span>
+                <span className="mt-1 text-sm">{body}</span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+        <h3 className="pt-3 text-sm font-semibold uppercase tracking-wider text-fg-subtle">Strategy audit</h3>
         <ul className="grid gap-3 sm:grid-cols-2">
-          {CAN_DO.map(({ href, title, body }) => (
+          {AUDIT.map(({ href, title, body }) => (
             <li key={href}>
               <Link
                 href={href}
@@ -139,7 +151,7 @@ export default function About() {
 
       <Section id="principles" title="Principles">
         <ul className="list-disc space-y-2 pl-5">
-          <li>Numbers come from the data, not from guesswork. If a figure can&apos;t be checked, it is marked.</li>
+          <li>Numbers come from the data, not from guesswork. If a figure can&apos;t be traced to its source, it is marked.</li>
           <li>
             Trading signals are shown with their real track record, including when they have no edge over simply
             holding the stock.
@@ -152,9 +164,15 @@ export default function About() {
         <h2 className="text-xl font-semibold tracking-tight text-fg">Built by {AUTHOR.name}</h2>
         <p className="mt-2 text-fg-muted">I designed and built this site on my own.</p>
         <div className="mt-4 grid gap-3 sm:grid-cols-3">
-          <ProfileLink href={AUTHOR.github} label="GitHub" icon={<GitHubMark className="size-5" />} />
-          <ProfileLink href={AUTHOR.linkedin} label="LinkedIn" icon={<Briefcase className="size-5" aria-hidden="true" />} />
-          <ProfileLink href={AUTHOR.resume} label="Resume" icon={<FileText className="size-5" aria-hidden="true" />} />
+          {[
+            { href: AUTHOR.github, label: "GitHub", icon: <GitHubMark className="size-5" /> },
+            { href: AUTHOR.linkedin, label: "LinkedIn", icon: <Briefcase className="size-5" aria-hidden="true" /> },
+            { href: AUTHOR.resume, label: "Resume", icon: <FileText className="size-5" aria-hidden="true" /> },
+          ]
+            .filter((l) => l.href)
+            .map((l) => (
+              <ProfileLink key={l.label} {...l} />
+            ))}
         </div>
       </Card>
     </main>

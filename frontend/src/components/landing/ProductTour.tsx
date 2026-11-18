@@ -33,7 +33,7 @@ const STOPS: { value: string; label: string; shot: ShotName; text: string }[] = 
     value: "research",
     label: "Research",
     shot: "tour-research",
-    text: "For the US companies, the 10-K filings are indexed. Suggested questions open the research chat, which answers with its sources and checks every figure against what a tool returned.",
+    text: "For the US companies, the 10-K filings are indexed. Suggested questions open the research chat, which answers with its sources and traces every figure to what a tool returned.",
   },
 ];
 
