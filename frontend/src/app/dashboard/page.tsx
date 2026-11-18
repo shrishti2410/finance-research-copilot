@@ -48,7 +48,7 @@ function StockCard({ card }: { card: WatchlistCard }) {
     <Link
       href={`/stock/${encodeURIComponent(card.ticker)}`}
       className="group rounded-[var(--radius-card)] focus-visible:outline-2"
-      aria-label={`${name}: open the stock page`}
+      data-stock-card={card.ticker}
     >
       <Card className="flex h-full flex-col gap-4 p-5 transition-colors group-hover:border-fg-subtle">
         <div className="flex items-start justify-between gap-3">
@@ -83,15 +83,24 @@ function StockCard({ card }: { card: WatchlistCard }) {
   );
 }
 
+// The same shape as the loaded page (two markets: a heading, the index strip,
+// and five and three cards, at their measured heights), so nothing below it
+// moves when the data arrives. A smaller skeleton pushed the footer down:
+// Lighthouse measured a layout shift of 0.104 on a phone.
 function Loading() {
   return (
-    <div aria-busy="true" aria-label="Loading the watchlist" className="flex flex-col gap-4">
-      <Skeleton className="h-20 w-full rounded-[var(--radius-card)]" />
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {Array.from({ length: 5 }).map((_, i) => (
-          <Skeleton key={i} className="h-48 rounded-[var(--radius-card)]" />
-        ))}
-      </div>
+    <div aria-busy="true" aria-label="Loading the watchlist" className="flex flex-col gap-6">
+      {[5, 3].map((cards, g) => (
+        <div key={g} className="flex flex-col gap-4">
+          <Skeleton className="h-5 w-32 rounded" />
+          <Skeleton className="h-[106px] w-full rounded-[var(--radius-card)] md:h-[82px]" />
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {Array.from({ length: cards }).map((_, i) => (
+              <Skeleton key={i} className="h-[202px] rounded-[var(--radius-card)]" />
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

@@ -57,7 +57,7 @@ const NARROW = { width: 700, height: 900, scale: 2 };
 //   a function  run in the page, returning the element(s) to cut round
 const PAGES = [
   {
-    path: "/dashboard", wait: "[aria-label$='open the stock page']", view: { ...WIDE, scale: 1.5 }, zoom: 0.78,
+    path: "/dashboard", wait: "[data-stock-card]", view: { ...WIDE, scale: 1.5 }, zoom: 0.78,
     outputs: [{ name: "hero-dashboard", clip: "viewport",
       alt: "The watchlist dashboard: the Nifty 50 with five NSE stocks, and the S&P 500 with three US stocks, each with its price, day change, 60-day sparkline and signal." }],
   },

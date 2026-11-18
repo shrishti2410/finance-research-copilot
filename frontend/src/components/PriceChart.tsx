@@ -176,6 +176,71 @@ export function chartHref(spec: ChartSpec): string {
   return `/chart?${query.toString()}`;
 }
 
+const TABLE_DAYS = 20;
+
+function fmt(n: number | undefined, digits = 2): string {
+  return n === undefined || !Number.isFinite(n) ? "–" : n.toLocaleString("en-US", { maximumFractionDigits: digits, minimumFractionDigits: digits });
+}
+
+/** The chart in words and as a table: the text alternative to the canvas. */
+function ChartText({ data }: { data: ChartData }) {
+  const bars = data.bars;
+  const first = bars[0];
+  const last = bars[bars.length - 1];
+  const change = first && last ? (last.close / first.close - 1) * 100 : null;
+  const keys = Object.keys(data.series).filter((k) => k !== "volume");
+  const latest = Object.fromEntries(keys.map((k) => [k, data.series[k]?.at(-1)?.value]));
+  const byDay = Object.fromEntries(keys.map((k) => [k, new Map(data.series[k].map((p) => [p.time, p.value]))]));
+  const label = (k: string) => data.indicators[k]?.label ?? k;
+  const recent = bars.slice(-TABLE_DAYS).reverse();
+  return (
+    <div className="mt-2 text-xs text-fg-muted">
+      <p className="sr-only">
+        {data.ticker} daily candles from {first?.time} to {last?.time}: close {fmt(first?.close)} then {fmt(last?.close)}
+        {change === null ? "" : `, a change of ${change >= 0 ? "+" : ""}${change.toFixed(2)}%`}
+        {keys.length ? `. Latest ${keys.map((k) => `${label(k)} ${fmt(latest[k])}`).join(", ")}.` : "."}
+      </p>
+      <details>
+        <summary className="cursor-pointer text-fg-muted hover:text-fg">Show the last {recent.length} days as a table</summary>
+        <div className="mt-2 max-h-72 overflow-auto rounded-md border border-border" tabIndex={0}
+             role="region" aria-label={`${data.ticker}: the last ${recent.length} trading days`}>
+          <table className="tabular w-full text-left text-xs">
+            <caption className="sr-only">{data.ticker}: the last {recent.length} trading days, newest first</caption>
+            <thead className="sticky top-0 bg-surface-2 text-fg-subtle">
+              <tr>
+                <th scope="col" className="px-2 py-1 font-medium">Day</th>
+                <th scope="col" className="px-2 py-1 font-medium">Open</th>
+                <th scope="col" className="px-2 py-1 font-medium">High</th>
+                <th scope="col" className="px-2 py-1 font-medium">Low</th>
+                <th scope="col" className="px-2 py-1 font-medium">Close</th>
+                <th scope="col" className="px-2 py-1 font-medium">Volume</th>
+                {keys.map((k) => (
+                  <th key={k} scope="col" className="px-2 py-1 font-medium">{label(k)}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {recent.map((b) => (
+                <tr key={b.time} className="border-t border-border">
+                  <th scope="row" className="px-2 py-1 font-normal text-fg">{b.time}</th>
+                  <td className="px-2 py-1">{fmt(b.open)}</td>
+                  <td className="px-2 py-1">{fmt(b.high)}</td>
+                  <td className="px-2 py-1">{fmt(b.low)}</td>
+                  <td className="px-2 py-1 text-fg">{fmt(b.close)}</td>
+                  <td className="px-2 py-1">{b.volume.toLocaleString("en-US")}</td>
+                  {keys.map((k) => (
+                    <td key={k} className="px-2 py-1">{fmt(byDay[k].get(b.time))}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </div>
+  );
+}
+
 export function PriceChart({
   spec,
   token,
@@ -235,7 +300,12 @@ export function PriceChart({
       </figcaption>
       {error && <p className="text-xs text-down">{error}</p>}
       {!data && !error && <div aria-busy="true" className="animate-pulse rounded-md bg-surface-2" style={{ height }} />}
-      <div ref={container} style={{ height }} className={data ? "" : "hidden"} />
+      {/* The canvas says nothing to a screen reader: it gets a summary, and the
+          numbers it draws are in a table one click (or Enter) away. Not
+          aria-hidden: the chart holds TradingView's attribution link. */}
+      <div ref={container} style={{ height }} className={data ? "" : "hidden"} role="group"
+           aria-label={`${spec.ticker} price chart; the figures are in the table below it`} />
+      {data ? <ChartText data={data} /> : null}
       <p className="mt-2 text-[10px] text-fg-subtle">
         Prices: Yahoo Finance via yfinance, split-adjusted; returns use the dividend-adjusted
         close. Charts: TradingView Lightweight Charts™, Copyright (c) 2025 TradingView, Inc.,{" "}
