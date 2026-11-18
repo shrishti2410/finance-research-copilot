@@ -26,7 +26,9 @@ def test_the_nav_puts_research_first_then_the_strategy_audit():
 
 
 def test_the_hero_leads_with_research():
-    h1 = re.search(r"<h1[^>]*>\s*(.*?)\s*</h1>", LANDING, re.S).group(1)
+    # The h1 renders HEADLINE (src/lib/site.ts), shared with the share card.
+    assert re.search(r"<h1[^>]*>\s*\{HEADLINE\}\s*</h1>", LANDING)
+    h1 = re.search(r'export const HEADLINE = "([^"]+)"', SITE).group(1)
     assert h1.lower().startswith("research")
     assert "trading strateg" not in h1.lower()
 

@@ -1,1 +1,0 @@
-Finance Research Copilot: research public companies from their filings, with a strategy audit alongside. Shows the signals dashboard.

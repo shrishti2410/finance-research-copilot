@@ -7,7 +7,7 @@ import { MarketStrip } from "@/components/landing/MarketStrip";
 import { ProductTour } from "@/components/landing/ProductTour";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { AUTHOR, GITHUB_URL } from "@/lib/site";
+import { AUTHOR, GITHUB_URL, HEADLINE } from "@/lib/site";
 import { loadStrip } from "@/lib/strip";
 
 // No figure on this page is a measurement. Measured results live in the
@@ -90,7 +90,7 @@ export default async function Landing() {
       <section className="mx-auto grid max-w-6xl items-center gap-10 px-4 pb-12 pt-12 sm:px-6 sm:pt-20 lg:grid-cols-[1fr_1.15fr]">
         <div className="fade-up flex flex-col gap-6">
           <h1 className="text-4xl font-semibold leading-[1.1] tracking-tight text-fg sm:text-5xl">
-            Research public companies from their filings, with every figure traced to its source
+            {HEADLINE}
           </h1>
           <p className="max-w-xl text-lg text-fg-muted">
             Ask about 15 US companies and get answers from their annual reports, with the passages cited. A

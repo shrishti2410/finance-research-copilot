@@ -3,6 +3,13 @@
 export const GITHUB_URL = "https://github.com/shrishti2410/finance-research-copilot";
 
 export const SITE_NAME = "Finance Research Copilot";
+
+// The landing page's headline, shared with the link-preview card
+// (app/opengraph-image.tsx) so the two cannot drift apart.
+export const HEADLINE = "Research public companies from their filings, with every figure traced to its source";
+
+// The three ways in, on the link-preview card.
+export const ENTRY_POINTS = ["Research a company", "Compare companies", "Test a strategy"];
 export const SITE_DESCRIPTION =
   "Research public companies from their SEC filings, with a strategy audit of classic trading rules alongside, and every figure computed in code and traced to its source.";
 // The public address, for absolute URLs in sharing tags and the sitemap.
