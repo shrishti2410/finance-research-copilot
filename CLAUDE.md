@@ -189,7 +189,7 @@ cards** are handbook cards, 8 of them for options.
 paper trading, live option chains, and more strategies or indicators beyond
 this list.
 
-These five rules are not optional.
+These six rules are not optional.
 
 ## When to stop for approval
 
@@ -336,3 +336,23 @@ Never combine either one with an agent change in the same commit.
   tokens from any pasted output.
 - **If a secret is ever committed,** stop and tell the user. It needs rotating,
   and rewriting history is their decision.
+
+## 6. No browser runs unless the user asks in that message
+
+Set 2026-11-18: headless runs have left windows behind, and the user then has
+to restart Windows Explorer from Task Manager.
+
+- **No browser screenshots or headless-browser runs** (Edge, Chrome,
+  Playwright, Lighthouse, axe) unless the user explicitly asks for one in the
+  same message. Approval for one run does not carry over to the next. This
+  overrides "screenshots" wherever the plan above asks for them: the plan's
+  screenshot steps happen only when the user asks.
+- **Verify instead with** tests, the build, and HTTP checks (`curl`). Then
+  name the pages for the user to look at; they check them in their own
+  browser and send the screenshots.
+- **If a browser run is approved:**
+  - one run only;
+  - close the browser in a `finally` block;
+  - then kill any `msedge`/`chrome` process you started whose command line
+    contains `--headless` or `--remote-debugging`;
+  - confirm that 0 remain before reporting.
