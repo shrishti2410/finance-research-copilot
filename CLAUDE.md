@@ -220,8 +220,15 @@ demo opens Research with example questions).
      fallback (never raw JSON).
    - A last-step answer with an unsupported figure is kept under the
      `[Unverified]` banner with each figure marked inline.
-   - Verified on Groq (the fast subset + 5 open-ended questions on
-     2026-11-18, the other 5 the next day), then deployed.
+   - Fast subset on Groq 2026-11-18: 11/15, flat; 0 `[Unverified]`, advice
+     or step-limit flags; per-call requests under 7,000 tokens
+     (`benchmarks/HOSTED_RUN_2026-11-18_GUARD_BROAD.md`). A 400 on the
+     tool-free last step now falls back to the tools' findings, with the
+     error logged.
+   - Deployed without waiting for the open-ended run (production showed raw
+     JSON on broad questions). The 10 open-ended questions run on the
+     deployed code in the next Groq window, with their live latency
+     measured per stage (model calls, rate-limit waits, tools).
 2. **Paper-trading recording.**
    - Append-only, hash-chained tables, with grants for `signals_precompute`
      on those tables only.
@@ -246,7 +253,15 @@ shown and waits.
 
 Replaces item 1 above and the earlier B3.
 
-**b. Idempotent, observable agent execution.**
+**b. Idempotent, observable agent execution.** First, because one question
+can exceed Groq's 8,000 tokens a minute on its own, so even a single live
+user waits:
+- **The query router, first:** a deterministic path for facts, ratios,
+  calculations and prices, with no model call where none is needed; the
+  agent only for research questions. Measure the live per-stage latency
+  of the 10 open-ended questions before and after.
+
+Then:
 - Idempotency keys with uniqueness in the database, and in-flight dedup, so
   a refresh never runs a question twice.
 - Request lifecycle states.
@@ -255,8 +270,6 @@ Replaces item 1 above and the earlier B3.
   prompt version, the data snapshot, the retrieval config and the
   validation result.
 - Per-stage tracing.
-- A query router: a deterministic path for facts, ratios, calculations and
-  prices; the agent only for research.
 - A provider interface with failover, timeouts and a circuit breaker, and
   the same validation for every provider.
 - CPU-bound work off the event loop.
