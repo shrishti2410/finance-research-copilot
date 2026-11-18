@@ -205,7 +205,7 @@ export default async function Landing() {
 
       <section className="mx-auto flex max-w-6xl flex-col items-center gap-4 px-4 pt-20 text-center sm:px-6">
         <h2 className="text-2xl font-semibold tracking-tight text-fg">See it on real data</h2>
-        <p className="max-w-xl text-fg-muted">The demo needs no sign-up. It opens the watchlist with today&apos;s signals.</p>
+        <p className="max-w-xl text-fg-muted">The demo needs no sign-up. It opens Research with example questions to try.</p>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
           <DemoButton />
           <Button asChild variant="secondary" size="lg">
