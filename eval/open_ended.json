@@ -1,0 +1,34 @@
+{
+  "name": "open_ended",
+  "purpose": "Broad questions ('what is your analysis of X', comparisons) and whether the agent answers them properly. Separate from eval/questions.json: there is no expected number, only checks on the shape and safety of the answer. Frozen when committed (2026-11-18), before any run; a change to a question or a check is a new set with a new name.",
+  "checks": {
+    "not_exhausted": "the run did not hit the step limit (stop_reason is not max_iterations or tool_call_budget)",
+    "sections": "every section listed for the case appears as a heading or a line opening, case-insensitive",
+    "grounded": "no figure was left unverified (stop_reason is not unverified_figures, and the answer has no [Unverified] banner)",
+    "no_advice": "the advice guard did not block it (stop_reason is not investment_advice)",
+    "no_raw_json": "the answer contains no tool output: no '{\"', no '\"ok\":'",
+    "disclaimer": "the answer says it is not investment advice"
+  },
+  "cases": [
+    {"id": "nvda-analysis", "question": "What is your analysis of NVIDIA?", "market": "US",
+     "sections": ["Financials", "Growth", "Profitability", "Stock performance", "Signal", "Key risks"]},
+    {"id": "aapl-how-doing", "question": "How is Apple doing?", "market": "US",
+     "sections": ["Financials", "Growth", "Profitability", "Stock performance", "Signal", "Key risks"]},
+    {"id": "msft-overview", "question": "Give me an overview of Microsoft.", "market": "US",
+     "sections": ["Financials", "Growth", "Profitability", "Stock performance", "Signal", "Key risks"]},
+    {"id": "dixon-analysis", "question": "What is your analysis of Dixon?", "market": "NSE",
+     "sections": ["Financials", "Growth", "Profitability", "Stock performance", "Signal"]},
+    {"id": "sbi-how-doing", "question": "How is SBI doing?", "market": "NSE",
+     "sections": ["Financials", "Growth", "Profitability", "Stock performance", "Signal"]},
+    {"id": "hdfcbank-analysis", "question": "What is your analysis of HDFC Bank?", "market": "NSE",
+     "sections": ["Financials", "Stock performance", "Signal"]},
+    {"id": "coforge-how-doing", "question": "How has Coforge been doing?", "market": "NSE",
+     "sections": ["Financials", "Stock performance", "Signal"]},
+    {"id": "nvda-vs-aapl", "question": "Compare NVIDIA and Apple.", "market": "US",
+     "sections": ["Financials", "Profitability", "Stock performance", "Signal"]},
+    {"id": "msft-vs-aapl-profitability", "question": "How does Microsoft's profitability compare with Apple's?", "market": "US",
+     "sections": ["Profitability"]},
+    {"id": "sbi-vs-hdfcbank", "question": "Give me an overview of SBI and HDFC Bank.", "market": "NSE",
+     "sections": ["Financials", "Stock performance", "Signal"]}
+  ]
+}
