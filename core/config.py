@@ -158,6 +158,13 @@ class Settings(BaseSettings):
     # discarded when it stops asking for tools -- a low cap makes that draft
     # cheap to throw away.
     agent_router_max_tokens: int = 128
+    # The most tokens one request to the model may carry, estimated
+    # (agent/budget.py). Groq's free tier rejects a request over its 8,000
+    # tokens-a-minute limit outright with a 413; two eval questions were lost
+    # that way on 2026-11-17 (8,100 and 8,250 tokens, estimated). Over the
+    # budget, the largest tool results are trimmed, saying what was dropped.
+    # 0 turns the budget off.
+    agent_request_token_budget: int = 7000
     agent_max_iterations: int = 5
     # Bounds work, where agent_max_iterations bounds round-trips: Qwen
     # emits parallel tool calls, and one iteration held 16 of them in the

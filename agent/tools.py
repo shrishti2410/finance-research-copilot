@@ -58,6 +58,7 @@ from tools.ratios import Period, RatioName
 from tools.ratios import calculate_ratio as _latest_ratio
 from tools.registry import Registry
 from tools.stock_price import get_stock_price
+from tools.snapshot import get_company_snapshot
 
 # How much of a retrieved *prose* passage the model sees. Enough to carry the
 # claim and its context; short enough that three of them are not the whole turn.
@@ -110,31 +111,25 @@ async def search_filings(
     section: Literal["risk", "mdna", "income"] | None = None,
     k: int = 3,
 ) -> dict[str, Any]:
-    """Search the text of companies' SEC 10-K annual report filings.
+    """Search the text of companies' SEC 10-K filings.
 
-    Use this for what a company *said* in its annual report: how it describes
-    its risks, its own explanation of results, or the exact wording of a
-    disclosure, and for segment and product figures such as Apple's Services
-    net sales or NVIDIA's Data Center revenue. For a company-wide reported
-    figure for a fiscal year (revenue, net income, EPS, share counts, tax
-    expense), call get_financial_fact first; the income statement
-    (section="income") is here too, returned whole with all three fiscal
-    years. For a margin or ratio, use calculate_ratio.
+    For what a company *said* (its risks, its own explanation of results,
+    exact wording) and for segment and product figures (Apple's Services net
+    sales, NVIDIA's Data Center revenue). For a company-wide figure for a
+    fiscal year (revenue, net income, EPS, share counts), call
+    get_financial_fact first; section="income" returns the
+    whole income statement, all three years. For a ratio, use calculate_ratio.
 
-    Only filings that have been indexed are searchable: up to the last three
-    10-Ks of each indexed company. A search for a company that is not indexed
-    returns no results; that means it is not indexed, not that the company said
-    nothing.
+    Only indexed filings are searchable (up to the last three 10-Ks of each
+    indexed company). No results for a company means it is not indexed, not
+    that it said nothing.
 
     Args:
-        query: What to look for, in natural language. Describe the topic
-            ("competition from other chipmakers", "supply chain concentration"),
+        query: The topic in natural language ("supply chain concentration"),
             not just a keyword.
-        company: Restrict to one company. A ticker ("NVDA") or part of the name
-            ("NVIDIA"). Omit to search all indexed filings.
-        section: Restrict to one part of the filing. "risk" is Item 1A Risk
-            Factors, "mdna" is Item 7 Management's Discussion and Analysis, and
-            "income" is the consolidated income statement. Omit to search all.
+        company: A ticker ("NVDA") or part of the name. Omit to search all.
+        section: "risk" (Item 1A Risk Factors), "mdna" (Item 7 MD&A) or
+            "income" (the income statement). Omit to search all.
         k: How many passages to return. Defaults to 3.
 
     Returns:
@@ -175,42 +170,28 @@ async def calculate_ratio(
     period: Period = "annual",
     fiscal_year: int | str | None = None,
 ) -> dict[str, Any]:
-    """Calculate a financial ratio for a company from its reported financials.
+    """Calculate a financial ratio for a company from its reported financials,
+    with the formula and the figures it was computed from.
 
-    Use this for questions about profitability, leverage, liquidity or
-    valuation. The result includes the formula used and the raw dollar figures
-    it was computed from, so the number can be checked rather than trusted.
-
-    When the question names a fiscal year, pass it as fiscal_year. Without it
-    the result is the most recent period of the kind asked for, named in
-    "period_end", which may not be the year the question means. For a line
-    item such as revenue, net income, EPS or a share count, use
-    get_financial_fact instead.
+    When the question names a fiscal year, pass it as fiscal_year; without it
+    the result is the most recent period, named in "period_end", which may
+    not be the year meant. For a line item (revenue, net income, EPS, share
+    counts), use get_financial_fact.
 
     Args:
-        ticker: Stock ticker symbol, e.g. "NVDA" or "AAPL". Case-insensitive.
-        ratio_name: Which ratio to compute. One of:
-            "gross_margin" - gross profit / revenue.
-            "operating_margin" - operating income / revenue.
-            "net_margin" - net income / revenue.
-            "return_on_equity" - net income / shareholders' equity.
-            "debt_to_equity" - total debt / shareholders' equity. Returned as a
-                multiple, so 0.07 means debt is 7% of equity. Most recent
-                fiscal year only.
-            "current_ratio" - current assets / current liabilities.
-            "pe_ratio" - share price / trailing twelve-month earnings per
-                share. Always as-of-now, because it depends on the live market
-                price; `period` and `fiscal_year` do not apply to it.
-        period: Which reporting period to use when no fiscal_year is given.
-            "annual" is the most recent completed fiscal year (default),
-            "quarterly" the most recent reported quarter, "ttm" trailing
-            twelve months.
-        fiscal_year: The company's own fiscal year, e.g. 2025, for a ratio of
-            that year, or "latest" for the company's most recent reported fiscal
-            year from its SEC filings. Use "latest" when the question names no
-            year, one call per company: fiscal years end in different months
-            (NVDA's in January, Apple's in September), so two companies'
-            latest years can differ.
+        ticker: Stock ticker, e.g. "NVDA".
+        ratio_name: The margins and return_on_equity are fractions of revenue
+            or equity. "debt_to_equity" is a multiple (0.07: debt is 7% of
+            equity), most recent fiscal year only. "current_ratio" is current
+            assets / current liabilities. "pe_ratio" is price / trailing
+            twelve-month EPS, always as of now (period and fiscal_year do not
+            apply).
+        period: With no fiscal_year: "annual" (latest fiscal year, default),
+            "quarterly" (latest quarter) or "ttm" (trailing twelve months).
+        fiscal_year: The company's own fiscal year (e.g. 2025), or "latest"
+            when the question names no year. "latest" is resolved per
+            company: fiscal years end in different months (NVIDIA's January,
+            Apple's September), so call once per company.
 
     Returns:
         On success, a dict with "ok": True and: ticker, ratio, period,
@@ -253,21 +234,17 @@ async def get_price_analytics(
     end_date: str = "",
     benchmark: str = "auto",
 ) -> dict[str, Any]:
-    """Return, risk and drawdown of a stock over a period, from daily prices.
-
-    Use this for questions about how a stock performed: total or annualised
-    return, volatility, the largest fall from a peak (max drawdown), Sharpe
-    ratio, or beta and correlation against a benchmark. Computed from the
-    dividend-adjusted close. For a single day's price, use get_stock_price.
+    """How a stock performed over a period: total and annualised return,
+    volatility, max drawdown, Sharpe ratio, and beta and correlation against a
+    benchmark, from the dividend-adjusted close. For one day's price, use
+    get_stock_price.
 
     Args:
-        ticker: The stock symbol, e.g. "NVDA"; an Indian NSE stock takes
-            ".NS", e.g. "SBIN.NS".
+        ticker: e.g. "NVDA"; an NSE stock takes ".NS", e.g. "SBIN.NS".
         start_date: First day, YYYY-MM-DD.
         end_date: Last day, YYYY-MM-DD; today when omitted.
-        benchmark: Symbol to measure beta and correlation against. "auto"
-            (the default) uses the stock's market index: SPY for a US stock,
-            ^NSEI (Nifty 50) for an NSE one. "" for none.
+        benchmark: "auto" (default): SPY for a US stock, ^NSEI (Nifty 50)
+            for an NSE one. "" for none.
 
     Returns:
         A dict with "ok": True and total_return, annualised_return and
@@ -298,12 +275,9 @@ async def show_price_chart(
     end_date: str = "",
     indicators: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Show the user a price chart in the chat: candlesticks and volume, with
-    optional indicators.
-
-    Call this when the user asks to see, chart or plot a stock's price, or
-    asks about a technical indicator. The chart is drawn for the user; the
-    result also gives the latest value of each indicator, to quote.
+    """Show the user a price chart (candles, volume, optional indicators) when
+    they ask to see or plot a price, or about a technical indicator. The
+    result also gives each indicator's latest value, to quote.
 
     Args:
         ticker: The stock symbol, e.g. "AAPL".
@@ -471,6 +445,7 @@ def build_registry() -> Registry:
     registry.register(get_price_analytics)
     registry.register(show_price_chart)
     registry.register(get_trading_signal)
+    registry.register(get_company_snapshot)
     return registry
 
 

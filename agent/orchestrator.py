@@ -45,6 +45,8 @@ from agent.prompts import (
     EXHAUSTED_NO_FINDINGS,
     EXHAUSTED_TEMPLATE,
     EXHAUSTED_TOOL_BUDGET,
+    LAST_TURN,
+    LAST_STEP_FAILED,
     EXHAUSTED_TOOL_BUDGET_NO_FINDINGS,
     system_prompt,
 )
@@ -54,6 +56,7 @@ from agent.advice import (
     advisory_spans,
 )
 from agent.grounding import ungrounded_operands, unsupported_figures
+from agent.budget import fit_to_budget
 from agent.untrusted import wrap_tool_result
 from agent.tools import build_registry, compact_for_model
 from core.config import settings
@@ -259,6 +262,35 @@ def with_a_sentence(answer: str) -> str:
     if prose.strip() or figure in (None, FINAL_FIGURE_NONE):
         return answer
     return FIGURE_ONLY_ANSWER.format(figure=figure) + "\n" + answer
+
+
+# Put after each figure the grounding guard could not trace, where it stands.
+# The banner names the figures; this marks them in the text, so a reader who
+# skims past the banner still sees which numbers are unconfirmed.
+UNVERIFIED_MARK = " [unverified]"
+
+
+def mark_unverified(answer: str, figures) -> str:
+    """`answer` with UNVERIFIED_MARK after every occurrence of each of
+    `figures` (as returned by unsupported_figures).
+
+    By the figure's text, not its position: the guard reports each distinct
+    figure once, and a figure the answer repeats is just as unconfirmed the
+    second time. Bounded so that 4.9 is not found inside 4.90 or 14.9.
+
+    Not inside a "Final figure:" line: split_final_figure cuts that line before
+    the user reads the answer, and its value is what the eval scores, which
+    must reach the grader as the model wrote it.
+    """
+    lines = [(m.start(), m.end()) for m in _FINAL_FIGURE.finditer(answer)]
+    ends: set[int] = set()
+    for text in {f.text for f in figures}:
+        for m in re.finditer(r"(?<![\d.,])" + re.escape(text) + r"(?![\d%])", answer):
+            if not any(a <= m.start() < b for a, b in lines):
+                ends.add(m.end())
+    for end in sorted(ends, reverse=True):
+        answer = answer[:end] + UNVERIFIED_MARK + answer[end:]
+    return answer
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -532,6 +564,11 @@ class AgentResult:
     # rest hit it; this does not.
     call_usage: list[dict[str, int]] = field(default_factory=list)
     router_calls: int = 0
+    # One entry per request sent to a model (router calls included), in order:
+    # {"estimated_tokens", "budget", "trimmed", "over_budget"}. Estimated from
+    # length before sending (agent/budget.py), so it is there even when the
+    # provider rejects the request and reports no usage.
+    request_sizes: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def tool_calls(self) -> list[Step]:
@@ -569,6 +606,7 @@ class AgentResult:
             "total_tokens": self.total_tokens,
             "usage_measured": self.usage_measured,
             "call_usage": list(self.call_usage),
+            "request_sizes": list(self.request_sizes),
             "steps": [step.to_dict() for step in self.steps],
         }
 
@@ -636,12 +674,95 @@ async def _emit(on_event, event: dict[str, Any]) -> None:
         log.debug("agent: event consumer raised, continuing", exc_info=True)
 
 
+def _pct(x) -> str:
+    return f"{x * 100:.2f}%" if isinstance(x, (int, float)) else "n/a"
+
+
+def _describe(step: Step) -> str:
+    """One plain sentence for what a successful tool call established.
+
+    Never the raw result: a user who reaches an exhaustion or redirection
+    message is owed the facts, not a JSON dump (the live NVIDIA analysis of
+    2026-11-18 showed one). Known tools say what they found, with the figures
+    they returned; anything else is only named."""
+    r = step.result if isinstance(step.result, dict) else {}
+    a = step.arguments or {}
+    t = step.tool
+    who = r.get("ticker") or a.get("ticker") or a.get("company") or ""
+    if t == "get_financial_fact" and r.get("formatted"):
+        what = (r.get("description") or r.get("fact") or "figure").lower()
+        src = f" (SEC filing {r['accession']})" if r.get("accession") else ""
+        return f"{who} {what} for fiscal {r.get('fiscal_year')}: {r['formatted']}{src}."
+    if t == "calculate_ratio" and r.get("formatted"):
+        name = str(r.get("ratio", "ratio")).replace("_", " ")
+        return f"{who} {name} (period ending {r.get('period_end')}): {r['formatted']}."
+    if t == "calculate" and r.get("formula"):
+        return f"Calculated: {r['formula']}."
+    if t == "get_price_analytics" and "total_return" in r:
+        return (f"{who} from {r.get('start')} to {r.get('end')}: total return {_pct(r.get('total_return'))}, "
+                f"largest fall from a peak {_pct(r.get('max_drawdown'))}.")
+    if t == "get_stock_price" and r.get("last"):
+        last = r["last"] or {}
+        when = last.get("date") or r.get("end_date")
+        return f"{who} last closed at {last.get('close')} {r.get('currency') or ''} on {when}.".replace("  ", " ")
+    if t == "get_trading_signal" and r.get("signal"):
+        statement = (r.get("backtest") or {}).get("statement") or ""
+        return f"The signal engine's output for {who} is {r['signal']} ({r.get('coverage')}). {statement}".strip()
+    if t == "get_company_snapshot":
+        parts = []
+        fin = r.get("financials") or {}
+        years = fin.get("years") or []
+        if years:
+            y = years[-1]
+            label = f"fiscal {y['fiscal_year']}" if y.get("fiscal_year") else f"the year to {y.get('period_end')}"
+            if y.get("revenue") is not None:
+                parts.append(f"revenue in {label} was {y['revenue']:,} {fin.get('currency') or ''}".strip())
+            if y.get("net_margin") is not None:
+                parts.append(f"net margin {_pct(y['net_margin'])}")
+        perf = r.get("performance") or {}
+        if "total_return" in perf:
+            parts.append(f"the stock returned {_pct(perf['total_return'])} over the last year")
+        sig = r.get("signal") or {}
+        if sig.get("signal"):
+            parts.append(f"the signal engine's output is {sig['signal']} ({sig.get('coverage')})")
+        return (f"{who}: " + "; ".join(parts) + ".") if parts else f"Looked up an overview of {who}."
+    if t == "search_filings":
+        return f"Searched {who or 'the filings'} for \"{a.get('query', '')}\": {r.get('count', 0)} passage(s) found."
+    if t == "search_news":
+        return f"Searched the news for \"{a.get('query', '')}\": {len(r.get('articles') or [])} headline(s)."
+    if t == "show_price_chart":
+        return f"Drew a price chart of {who}."
+    # Any other tool: its top-level figures and short labels, as "name value"
+    # pairs. Nested data is left out; the figures are what the user is owed
+    # (tests/test_orchestrator.py, test_the_figures_survive_the_block).
+    pairs = [f"{k.replace('_', ' ')} {v}" for k, v in r.items()
+             if k not in ("ok", "ticker", "company", "source", "source_url")
+             and not isinstance(v, bool)
+             and (isinstance(v, (int, float)) or (isinstance(v, str) and len(v) <= 40))][:6]
+    head = f"Called {t}" + (f" for {who}" if who else "")
+    return f"{head}: {', '.join(pairs)}." if pairs else f"{head}."
+
+
+def _error_details(exc: Exception) -> str:
+    """What a failed model call said: the status and the start of the body for
+    an HTTP error (a provider's error body names its reason, e.g. Groq's
+    "tool_use_failed"), else the exception. Holds no credentials: request
+    headers are not included."""
+    response = getattr(exc, "response", None)
+    if response is not None:
+        try:
+            body = response.text
+        except Exception:  # noqa: BLE001 - a streamed body that was not read
+            body = "<body not read>"
+        return f"HTTP {response.status_code}: {body[:600]}"
+    return f"{type(exc).__name__}: {exc}"
+
+
 def _findings(steps: list[Step]) -> str:
-    """What the successful tool calls established, for the exhaustion message."""
-    lines = [
-        f"- {step.tool}({_one_line(step.arguments, 60)}): {_one_line(step.result, 220)}"
-        for step in steps if step.ok and step.tool != "final_answer"
-    ]
+    """What the successful tool calls established, as plain sentences, for the
+    exhaustion and redirection messages."""
+    lines = [f"- {_describe(step)}" for step in steps
+             if step.ok and step.tool not in ("final_answer", "ungrounded_answer")]
     return "\n".join(lines)
 
 
@@ -741,6 +862,27 @@ async def run_agent(
     prompt_tokens = completion_tokens = cached_prompt_tokens = 0
     usage_measured = False
     call_usage: list[dict[str, int]] = []
+    # The compact result behind each tool message, by tool_call_id, so the
+    # budget can trim it and wrap it again (agent/budget.py).
+    tool_results: dict[str, tuple[str, dict]] = {}
+    request_sizes: list[dict[str, Any]] = []
+
+    def within_budget(call_model: str, with_tools: bool = True) -> list[dict[str, Any]]:
+        """The messages to send to `call_model`: the largest tool results
+        trimmed if the request would be over the budget. Logs the size. The
+        last step is sent without tools, so its schemas are not counted."""
+        sent, report = fit_to_budget(messages, registry.schemas() if with_tools else [],
+                                     settings.agent_request_token_budget,
+                                     tool_results, wrap_tool_result)
+        entry = {"estimated_tokens": report["estimated_tokens"], "budget": report["budget"],
+                 "trimmed": len(report["trimmed"]), "over_budget": bool(report.get("over_budget"))}
+        request_sizes.append(entry)
+        log.info("agent: request to %s, about %d tokens (budget %d)%s%s", call_model,
+                 entry["estimated_tokens"], entry["budget"],
+                 f", {entry['trimmed']} tool result(s) trimmed" if entry["trimmed"] else "",
+                 ", still over budget" if entry["over_budget"] else "")
+        return sent
+
     owns_client = client is None
     client = client or httpx.AsyncClient(
         base_url=settings.agent_inference_base_url,
@@ -752,14 +894,14 @@ async def run_agent(
         headers={"X-Internal-Token": settings.internal_token},
     )
 
-    async def one_call(call_model: str, cap: int, stream: bool) -> dict:
+    async def one_call(call_model: str, cap: int, stream: bool, with_tools: bool = True) -> dict:
         """One chat completion, stopped at the per-call deadline.
 
         Each call gets the whole deadline: an escalation or a grounding retry is a
         new call with a new clock, so a turn of several legitimate calls is never
         cut short by the sum of them.
         """
-        return await _within_deadline(_one_call(call_model, cap, stream),
+        return await _within_deadline(_one_call(call_model, cap, stream, with_tools),
                                       settings.inference_call_deadline)
 
     # Which provider the proxy should use for each model. A header per call
@@ -771,17 +913,20 @@ async def run_agent(
     answer_headers = {"X-Inference-Provider": provider}
     router_headers = {"X-Inference-Provider": router_provider}
 
-    async def _one_call(call_model: str, cap: int, stream: bool) -> dict:
+    async def _one_call(call_model: str, cap: int, stream: bool, with_tools: bool = True) -> dict:
         """One chat completion. Accumulates usage; raises on transport failure."""
         nonlocal prompt_tokens, completion_tokens, cached_prompt_tokens, usage_measured
         payload = {
             "model": call_model,
-            "messages": messages,
-            "tools": registry.schemas(),
+            "messages": within_budget(call_model, with_tools),
             "temperature": temperature,
             "max_tokens": cap,
             "stream": False,
         }
+        # The last step is for the answer: it is sent with no tools, so the
+        # model writes from what it has instead of asking for more.
+        if with_tools:
+            payload["tools"] = registry.schemas()
         if stream:
             return await _stream_message(client, payload, on_token, answer_headers, waits)
         response = await client.post("/chat/completions", json=payload,
@@ -813,8 +958,15 @@ async def run_agent(
             # do -- see settings.agent_router_model. And a grounding retry is an
             # instruction to go and verify a figure, which is the same kind of
             # work.
-            use_router = bool(router_model) and not escalate_next
+            # The last iteration is kept for writing the answer: no tools are
+            # offered, so the model cannot spend it on one more lookup. On the
+            # live site (2026-11-18) a broad question spent all five steps on
+            # lookups and never answered.
+            last = iteration == max_iterations
+            use_router = bool(router_model) and not escalate_next and not last
             escalate_next = False
+            if last:
+                messages.append({"role": "user", "content": LAST_TURN})
 
             call_started = time.perf_counter()
             await _emit(on_event, {"type": "iteration", "iteration": iteration,
@@ -823,7 +975,7 @@ async def run_agent(
                 if use_router:
                     router_calls += 1
                     routed = await _within_deadline(_router_message(client, {
-                        "model": router_model, "messages": messages,
+                        "model": router_model, "messages": within_budget(router_model),
                         "tools": registry.schemas(), "temperature": temperature,
                         "max_tokens": router_max_tokens,
                     }, router_headers, waits), settings.inference_call_deadline)
@@ -841,9 +993,37 @@ async def run_agent(
                                                "from": router_model, "to": model})
                         message = await one_call(model, max_tokens, stream_tokens)
                 else:
-                    message = await one_call(model, max_tokens, stream_tokens)
+                    message = await one_call(model, max_tokens, stream_tokens, with_tools=not last)
             except Exception as exc:  # noqa: BLE001 - upstream down, timeout, bad JSON
                 model_ms = (time.perf_counter() - call_started) * 1000
+                findings = _findings(steps)
+                if last and findings:
+                    # The step kept for writing the answer failed, but the tools
+                    # had found things: show them rather than "couldn't reach
+                    # the model". Seen 2026-11-18: a 400 on this step, likely a
+                    # tool call on a step that offered none. The provider's
+                    # status and body are logged so the cause can be confirmed.
+                    log.error("agent: the last step (iteration %d, no tools) failed; "
+                              "answering with the findings: %s", iteration, _error_details(exc))
+                    answer = LAST_STEP_FAILED.format(findings=findings)
+                    steps.append(Step(
+                        iteration=iteration, tool="final_answer", arguments={},
+                        result=f"last step failed: {type(exc).__name__}", latency_ms=model_ms,
+                        model_latency_ms=model_ms, ok=False,
+                    ))
+                    return AgentResult(
+                        answer=answer,
+                        steps=steps, iterations=iteration, completed=False,
+                        stop_reason="last_step_failed", model=model,
+                        router_model=router_model, router_calls=router_calls,
+                        provider=provider, router_provider=router_provider,
+                        rate_limit_wait_ms=sum(waits),
+                        total_ms=(time.perf_counter() - started) * 1000,
+                        prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+                        usage_measured=usage_measured,
+                        cached_prompt_tokens=cached_prompt_tokens, call_usage=call_usage,
+                        request_sizes=request_sizes,
+                    )
                 if isinstance(exc, InferenceDeadlineExceeded):
                     # Not "couldn't reach the model": it was reached, and it was
                     # still going. Saying so is what lets someone tell a slow
@@ -881,10 +1061,16 @@ async def run_agent(
                     total_ms=(time.perf_counter() - started) * 1000,
                     prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
                     usage_measured=usage_measured,
-                    cached_prompt_tokens=cached_prompt_tokens, call_usage=call_usage,
+                    cached_prompt_tokens=cached_prompt_tokens, call_usage=call_usage, request_sizes=request_sizes,
                 )
             model_ms = (time.perf_counter() - call_started) * 1000
-            tool_calls = message.get("tool_calls") or []
+            # Tools were not offered on the last step; a call made anyway is
+            # not run.
+            tool_calls = [] if last else (message.get("tool_calls") or [])
+            # A last step that wrote nothing (it asked for a tool anyway) ends
+            # like any exhausted run: with the findings in plain sentences.
+            if last and not (message.get("content") or "").strip():
+                break
 
             if not tool_calls:
                 answer = (message.get("content") or "").strip()
@@ -897,7 +1083,11 @@ async def run_agent(
                 # invented a share count and an EPS that appeared nowhere in
                 # the turn. See agent/grounding.py.
                 unverified = unsupported_figures(answer, steps) if answer else []
-                if unverified and grounding_retries < MAX_GROUNDING_RETRIES:
+                # Not on the last step: it has no tools and no step after it,
+                # so a retry could only end the run in the step-limit message
+                # and throw a readable answer away for one figure. The answer
+                # goes to the caveat below instead: banner and inline marks.
+                if unverified and grounding_retries < MAX_GROUNDING_RETRIES and not last:
                     grounding_retries += 1
                     # Recorded as a failed step, not dropped: the discarded
                     # answer is the evidence that the guard fired, and a trace
@@ -949,6 +1139,10 @@ async def run_agent(
                 # be verified, and `completed` is False so a caller can tell
                 # this apart from a clean answer without reading the text.
                 if unverified:
+                    # Re-read on the text the user will see (with_a_sentence
+                    # may have put a sentence first), then marked where each
+                    # figure stands, then the banner.
+                    answer = mark_unverified(answer, unsupported_figures(answer, steps))
                     answer = UNVERIFIED_CAVEAT.format(
                         figures=", ".join(f.text for f in unverified[:6]),
                     ) + answer
@@ -1034,7 +1228,7 @@ async def run_agent(
                     total_ms=(time.perf_counter() - started) * 1000,
                     prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
                     usage_measured=usage_measured,
-                    cached_prompt_tokens=cached_prompt_tokens, call_usage=call_usage,
+                    cached_prompt_tokens=cached_prompt_tokens, call_usage=call_usage, request_sizes=request_sizes,
                 )
 
             # The assistant's tool-call message has to go into the history
@@ -1121,15 +1315,19 @@ async def run_agent(
                          iteration, step.tool, step.ok, step.latency_ms,
                          _one_line(step.arguments, 120))
 
+                call_id = call.get("id") or f"call_{uuid.uuid4().hex[:8]}"
+                compact = compact_for_model(name, outcome)
+                if isinstance(compact, dict):
+                    tool_results[call_id] = (name, compact)
                 messages.append({
                     "role": "tool",
-                    "tool_call_id": call.get("id") or f"call_{uuid.uuid4().hex[:8]}",
+                    "tool_call_id": call_id,
                     "name": name,
                     # Enclosed rather than pasted in raw. A filing excerpt or a
                     # news headline is written by someone who is not operating
                     # this agent, and arrives in the same conversation as the
                     # system prompt. See agent/untrusted.py.
-                    "content": wrap_tool_result(name, compact_for_model(name, outcome)),
+                    "content": wrap_tool_result(name, compact),
                 })
 
             if over_budget:
@@ -1172,7 +1370,7 @@ async def run_agent(
                     total_ms=(time.perf_counter() - started) * 1000,
                     prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
                     usage_measured=usage_measured,
-                    cached_prompt_tokens=cached_prompt_tokens, call_usage=call_usage,
+                    cached_prompt_tokens=cached_prompt_tokens, call_usage=call_usage, request_sizes=request_sizes,
                 )
 
         # Budget exhausted with tool calls still outstanding.
@@ -1195,7 +1393,7 @@ async def run_agent(
             total_ms=(time.perf_counter() - started) * 1000,
             prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
             usage_measured=usage_measured,
-                    cached_prompt_tokens=cached_prompt_tokens, call_usage=call_usage,
+                    cached_prompt_tokens=cached_prompt_tokens, call_usage=call_usage, request_sizes=request_sizes,
         )
     finally:
         if owns_client:

@@ -244,6 +244,47 @@ PATTERNS: tuple[tuple[str, str], ...] = (
     ("forecast",
      r"\b(?:price\s+target|target\s+price|fair\s+value\s+is|"
      r"my\s+(?:estimate|projection)\s+for\s+the\s+(?:price|stock))\b"),
+
+    # ── 3b. predictions as they are actually phrased ────────────────────────
+    # Added 2026-11-17. The forecasts above need a pronoun or "the stock" and
+    # will/should + rise/fall; these did not match: a ticker or the price as
+    # subject ("SBIN could reach 1,200"), poised for a move, stated upside,
+    # further gains ahead, a bullish outlook, and the signal described as a
+    # prediction (it is a vote of rules on past prices). Each still needs a
+    # forward-looking word, so "SBIN rose 1.66%" and "profits if the stock rises
+    # above the breakeven" stay clear (tests/test_advice_prediction.py).
+    ("forecast",
+     rf"\b(?:{_SECURITY}|(?-i:[A-Z]{{2,10}}\.NS)|(?:the|its)\s+price)\s+"
+     r"(?:will|would|could|may|might|should|"
+     r"is\s+(?:likely|poised|set|expected|due|going)\s+to)\s+"
+     r"(?:likely\s+|probably\s+|soon\s+|eventually\s+)?"
+     r"(?:rise|climb|go\s+(?:up|down|higher|lower)|fall|drop|decline|slide|rally|"
+     r"rebound|bounce(?:\s+back)?|recover|gain|reach|hit|test|break\s+(?:out|down)|"
+     r"soar|surge|tank|crash|double|trend\s+(?:higher|lower))\b"),
+    ("forecast",
+     r"\b(?:poised|primed|set|due|headed|heading|on\s+track)\s+(?:for|to)\s+"
+     r"(?:a\s+|an\s+|further\s+|more\s+)?"
+     r"(?:rally|rebound|breakout|bounce|gains?|rise|climb|decline|fall|drop|"
+     r"correction|sell-?off|higher|lower|new\s+highs?)\b"),
+    ("forecast",
+     r"\b(?:upside|downside)\s+(?:potential\s+)?(?:of|to)\s+"
+     r"(?:about\s+|around\s+|roughly\s+|nearly\s+|up\s+to\s+)?[₹$€£]?\d"),
+    ("forecast",
+     r"\b(?:further|more|additional)\s+(?:gains|upside|downside|losses|declines)\s+"
+     r"(?:ahead|are\s+likely|is\s+likely|to\s+come|are\s+expected|is\s+expected)\b"),
+    ("forecast",
+     r"\b(?:bullish|bearish)\s+(?:outlook|view|case|for\s+the\s+(?:next|coming))\b"),
+    ("forecast",
+     r"\boutlook\s+(?:for|on)\s+(?:the\s+)?(?:stock|shares?|price|(?-i:[A-Z]{2,10}(?:\.NS)?))"
+     r"\s+is\s+(?:bullish|bearish|positive|negative)\b"),
+    ("forecast",
+     r"\bthe\s+signal\s+(?:predicts|forecasts|projects|"
+     r"(?:suggests|indicates|implies|means)\s+(?:that\s+)?(?:the\s+)?"
+     r"(?:price|stock|shares?|it)\s+will)\b"),
+    ("forecast",
+     r"(?:^|[.!?]\s+)\s*expect\s+(?:the\s+stock|the\s+price|the\s+shares?|it|"
+     r"(?-i:[A-Z]{2,10}(?:\.NS)?))\s+to\s+"
+     r"(?:rise|climb|fall|drop|rally|rebound|recover|go\s+(?:up|down))\b"),
 )
 
 _COMPILED = tuple((kind, re.compile(pattern, re.I | re.M))

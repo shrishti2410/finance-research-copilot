@@ -393,29 +393,25 @@ async def fiscal_year_end(ticker: str, fiscal_year) -> str | None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def get_financial_fact(ticker: str, fact: FactName, fiscal_year: int | str) -> dict[str, Any]:
-    """Get one reported financial figure for a company and fiscal year.
+    """Get one reported financial figure for a company and fiscal year: an
+    exact lookup in SEC's XBRL data, citing the filing.
 
-    Use this first for any reported number for a named fiscal year: revenue,
-    net income, EPS, share counts, tax expense, operating income, cash flow,
-    balance-sheet totals. It is an exact lookup in SEC's XBRL data, and the
-    result cites the filing it came from. For a ratio, use calculate_ratio.
-
-    Every figure is for the whole company and the whole fiscal year. It has no
-    segment or product argument. Use search_filings instead for segment and
-    product figures (Apple's Services net sales, NVIDIA's Data Center
-    revenue), for dividends and share repurchases, for anything announced
-    on a date, and for anything a company said in words.
+    Use this first for any reported number for a fiscal year (revenue, net
+    income, EPS, share counts, tax expense, operating income, cash flow,
+    balance-sheet totals). For a ratio, use calculate_ratio. Figures are for
+    the whole company and year, with no segment or product argument: for
+    segment or product figures, dividends and share repurchases, dated
+    announcements or anything said in words, use search_filings.
 
     Args:
-        ticker: Stock ticker symbol, e.g. "NVDA" or "AAPL".
-        fact: Which figure. "pretax_income" is income before income taxes;
-            "shares_basic" and "shares_diluted" are the weighted-average share
-            counts used for EPS; balance-sheet figures are at fiscal year end.
-        fiscal_year: The company's own fiscal year, e.g. 2026, or "latest" for
-            its most recent reported fiscal year. Use "latest" when the question
-            names no year; it is resolved per company, and companies' fiscal
-            years end in different months (NVIDIA's in January, Apple's in
-            September), so two companies' latest years can differ.
+        ticker: Stock ticker, e.g. "NVDA".
+        fact: "pretax_income" is income before taxes; "shares_basic" and
+            "shares_diluted" are the weighted-average counts used for EPS;
+            balance-sheet figures are at fiscal year end.
+        fiscal_year: The company's own fiscal year (e.g. 2026), or "latest"
+            when the question names no year. "latest" is resolved per
+            company: fiscal years end in different months (NVIDIA's January,
+            Apple's September), so call once per company.
 
     Returns:
         On success, a dict with "ok": True and:

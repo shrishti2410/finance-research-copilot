@@ -1,0 +1,479 @@
+{
+ "_comment": "Real outputs of every agent tool, captured 2026-11-17 from the local data by the unit audit (lists cut to two items, long text to 300 characters). tests/test_tool_units.py checks every numeric field in them has a declared unit. get_company_snapshot added 2026-11-18 (NVDA from SEC XBRL, DIXON.NS from Yahoo Finance), uncut.",
+ "outputs": [
+  {
+   "tool": "get_financial_fact",
+   "arguments": {
+    "ticker": "NVDA",
+    "fact": "revenue",
+    "fiscal_year": 2026
+   },
+   "result": {
+    "ok": true,
+    "ticker": "NVDA",
+    "fact": "revenue",
+    "description": "Total revenue (net sales)",
+    "scope": "Whole company, whole fiscal year. Not a segment, product or quarter: those are in the filing text, via search_filings.",
+    "fiscal_year": 2026,
+    "value": 215938000000,
+    "unit": "USD",
+    "formatted": "$215.938 billion",
+    "period_start": "2025-01-27",
+    "period_end": "2026-01-25",
+    "concept": "us-gaap:Revenues",
+    "accession": "0001045810-26-000021",
+    "form": "10-K",
+    "filed": "2026-02-25",
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581026000021/"
+   }
+  },
+  {
+   "tool": "calculate_ratio",
+   "arguments": {
+    "ticker": "NVDA",
+    "ratio_name": "gross_margin",
+    "period": "annual"
+   },
+   "result": {
+    "ok": true,
+    "ticker": "NVDA",
+    "ratio": "gross_margin",
+    "period": "annual",
+    "period_end": "2026-01-31",
+    "balance_sheet_date": null,
+    "value": 0.710681,
+    "formatted": "71.07%",
+    "formula": "gross_profit / revenue",
+    "inputs": {
+     "gross_profit": 153463000000.0,
+     "revenue": 215938000000.0
+    },
+    "currency": "USD",
+    "source": "yfinance annual income_stmt / balance_sheet"
+   }
+  },
+  {
+   "tool": "calculate_ratio",
+   "arguments": {
+    "ticker": "AAPL",
+    "ratio_name": "net_margin",
+    "period": "annual"
+   },
+   "result": {
+    "ok": true,
+    "ticker": "AAPL",
+    "ratio": "net_margin",
+    "period": "annual",
+    "period_end": "2026-09-30",
+    "balance_sheet_date": null,
+    "value": 0.276035,
+    "formatted": "27.60%",
+    "formula": "net_income / revenue",
+    "inputs": {
+     "net_income": 132175000000.0,
+     "revenue": 478834000000.0
+    },
+    "currency": "USD",
+    "source": "yfinance annual income_stmt / balance_sheet"
+   }
+  },
+  {
+   "tool": "calculate",
+   "arguments": {
+    "operation": "percent_of",
+    "a": "NVDA:gross_profit:2026",
+    "b": "NVDA:revenue:2026"
+   },
+   "result": {
+    "ok": true,
+    "operation": "percent_of",
+    "value": 71.068084,
+    "formatted": "71.07%",
+    "unit": "percent",
+    "formula": "153,463,000,000 / 215,938,000,000 * 100 = 71.068084%",
+    "inputs": {
+     "a": {
+      "label": "NVDA fiscal 2026 gross_profit",
+      "value": 153463000000,
+      "unit": "USD",
+      "source": "get_financial_fact",
+      "reference": "NVDA:gross_profit:2026",
+      "accession": "0001045810-26-000021",
+      "period_end": "2026-01-25"
+     },
+     "b": {
+      "label": "NVDA fiscal 2026 revenue",
+      "value": 215938000000,
+      "unit": "USD",
+      "source": "get_financial_fact",
+      "reference": "NVDA:revenue:2026",
+      "accession": "0001045810-26-000021",
+      "period_end": "2026-01-25"
+     }
+    },
+    "rounded": {
+     "2dp": "71.07%",
+     "1dp": "71.1%",
+     "0dp": "71%"
+    },
+    "source": "calculate"
+   }
+  },
+  {
+   "tool": "get_stock_price",
+   "arguments": {
+    "ticker": "SBIN.NS",
+    "start_date": "2026-10-01",
+    "end_date": "2026-11-13"
+   },
+   "result": {
+    "ok": true,
+    "ticker": "SBIN.NS",
+    "currency": "INR",
+    "start_date": "2026-10-01",
+    "end_date": "2026-11-13",
+    "trading_days": 29,
+    "first": {
+     "date": "2026-10-01",
+     "close": 954.1
+    },
+    "last": {
+     "date": "2026-11-13",
+     "close": 1080.0
+    },
+    "high": {
+     "date": "2026-11-12",
+     "close": 1086.5
+    },
+    "low": {
+     "date": "2026-10-08",
+     "close": 940.0
+    },
+    "change": 125.9,
+    "change_pct": 13.1957,
+    "prices": [
+     {
+      "date": "2026-10-01",
+      "open": 953.1,
+      "high": 965.4,
+      "low": 945.8,
+      "close": 954.1,
+      "volume": 7390452
+     },
+     {
+      "date": "2026-10-05",
+      "open": 959.0,
+      "high": 969.45,
+      "low": 956.0,
+      "close": 958.0,
+      "volume": 8165087
+     }
+    ],
+    "series_truncated": false
+   }
+  },
+  {
+   "tool": "get_price_analytics",
+   "arguments": {
+    "ticker": "NVDA",
+    "start_date": "2025-11-13",
+    "end_date": "2026-11-13"
+   },
+   "result": {
+    "ok": true,
+    "ticker": "NVDA",
+    "exchange": "US",
+    "currency": "USD",
+    "currency_symbol": "$",
+    "benchmark": "SPY",
+    "provider": "yfinance",
+    "start": "2025-11-13",
+    "end": "2026-11-13",
+    "trading_days": 252,
+    "total_return": -0.126404,
+    "annualised_return": -0.126874,
+    "annualised_volatility": 0.386631,
+    "sharpe_ratio": -0.328153,
+    "risk_free_rate": 0.0,
+    "best_day": 0.08738,
+    "worst_day": -0.09259,
+    "max_drawdown": -0.319303,
+    "peak_day": "2026-10-06",
+    "trough_day": "2026-11-13",
+    "price_basis": "dividend-adjusted close",
+    "beta": 1.776601,
+    "correlation": 0.626468,
+    "overlapping_return_days": 251
+   }
+  },
+  {
+   "tool": "get_trading_signal",
+   "arguments": {
+    "ticker": "SBIN.NS"
+   },
+   "result": {
+    "ok": true,
+    "ticker": "SBIN.NS",
+    "as_of": "2026-11-17",
+    "currency": "INR",
+    "signal": "BUY",
+    "score": 0.4371,
+    "confidence": 0.4371,
+    "coverage": "12 of 16 rules carry weight; the other 4 had no positive Sharpe ratio in training and count for nothing",
+    "regime": {
+     "label": "trending_down",
+     "adx": 44.83,
+     "plus_di": 39.99,
+     "minus_di": 5.36
+    },
+    "votes": [
+     {
+      "strategy": "ADX trend strength",
+      "position": "in",
+      "share_of_vote": 0.2355
+     },
+     {
+      "strategy": "Moving-average alignment",
+      "position": "out",
+      "share_of_vote": 0.1496
+     }
+    ],
+    "backtest": {
+     "verdict": "no_edge",
+     "statement": "The 4.9-year backtest shows no edge for SBIN.NS: the signal returned -5.2% a year against 19.8% for buy-and-hold, with a Sharpe ratio of -0.21 against 0.86, and beat 0% of 200 random re-timings of its own trades (95% would be needed to rule out luck).",
+     "window": "2021-11-17 to 2026-11-17"
+    },
+    "cards": [
+     {
+      "section": "ADX trend strength: Summary",
+      "text": "Welles Wilder's ADX measures how strongly a price is trending, from 0 to 100, without saying which way. The +DI and -DI lines say which way. The strategy holds while ADX shows a strong trend and +DI shows it is up.",
+      "source": "docs/strategies/adx_trend.md"
+     },
+     {
+      "section": "ADX trend strength: When it fails",
+      "text": "ADX is slow and peaks late. By the time it is above 25 a good part of the move may be over, and it often stays high into the first part of a reversal.",
+      "source": "docs/strategies/adx_trend.md"
+     }
+    ],
+    "cards_note": null,
+    "warnings": [],
+    "disclaimer": "Educational project, not investment advice."
+   }
+  },
+  {
+   "tool": "search_filings",
+   "arguments": {
+    "query": "gross margin",
+    "company": "NVDA",
+    "k": 2
+   },
+   "result": {
+    "ok": true,
+    "query": "gross margin",
+    "count": 2,
+    "results": [
+     {
+      "company": "NVIDIA CORP",
+      "ticker": "NVDA",
+      "fiscal_period": "FY2025",
+      "section": "Item 7 - Management's Discussion and Analysis of Financial Condition and Results of Operations",
+      "content_type": "text",
+      "score": 0.7996,
+      "excerpt": "Revenue from sales to customers outside of the United States accounted for 53% and 56% of total revenue for fiscal years 2025 and 2024, respectively.\n\nGross Profit and Gross Margin\n\nGross profit consists of total net revenue less cost of revenue. Cost of revenue consists primarily of the cost of sem",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581025000023/nvda-20250126.htm"
+     },
+     {
+      "company": "NVIDIA CORP",
+      "ticker": "NVDA",
+      "fiscal_period": "FY2024",
+      "section": "Item 7 - Management's Discussion and Analysis of Financial Condition and Results of Operations",
+      "content_type": "text",
+      "score": 0.7976,
+      "excerpt": "Our estimated Compute & Networking demand is expected to remain concentrated.\n\nThere were no customers with 10% or more of total revenue for fiscal years 2023 and 2022.\n\nGross Profit and Gross Margin\n\nGross profit consists of total revenue, net of allowances, less cost of revenue. Cost of revenue co",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581024000029/nvda-20240128.htm"
+     }
+    ]
+   }
+  },
+  {
+   "tool": "show_price_chart",
+   "arguments": {
+    "ticker": "SBIN.NS",
+    "start_date": "2026-09-01",
+    "end_date": "2026-11-13",
+    "indicators": [
+     "rsi14"
+    ]
+   },
+   "result": {
+    "ok": true,
+    "ticker": "SBIN.NS",
+    "chart": {
+     "kind": "price_chart",
+     "ticker": "SBIN.NS",
+     "start": "2026-09-01",
+     "end": "2026-11-13",
+     "indicators": [
+      "rsi14"
+     ]
+    },
+    "bars": 50,
+    "last_day": "2026-11-13",
+    "last_close": 1080.0,
+    "latest": {
+     "rsi14": 72.279497
+    }
+   }
+  },
+  {
+   "tool": "get_company_snapshot",
+   "arguments": {
+    "ticker": "NVDA"
+   },
+   "result": {
+    "ok": true,
+    "ticker": "NVDA",
+    "financials": {
+     "source": "SEC 10-K filings (XBRL)",
+     "currency": "USD",
+     "years": [
+      {
+       "fiscal_year": 2024,
+       "revenue": 60922000000,
+       "period_end": "2024-01-28",
+       "accession": "0001045810-26-000021",
+       "gross_profit": 44301000000,
+       "operating_income": 32972000000,
+       "net_income": 29760000000,
+       "eps_diluted": 1.19,
+       "gross_margin": 0.727176,
+       "operating_margin": 0.541217,
+       "net_margin": 0.488493,
+       "revenue_growth": 1.258545,
+       "net_income_growth": 5.813187
+      },
+      {
+       "fiscal_year": 2025,
+       "revenue": 130497000000,
+       "period_end": "2025-01-26",
+       "accession": "0001045810-26-000021",
+       "gross_profit": 97858000000,
+       "operating_income": 81453000000,
+       "net_income": 72880000000,
+       "eps_diluted": 2.94,
+       "gross_margin": 0.749887,
+       "operating_margin": 0.624175,
+       "net_margin": 0.55848,
+       "revenue_growth": 1.142034,
+       "net_income_growth": 1.448925
+      },
+      {
+       "fiscal_year": 2026,
+       "revenue": 215938000000,
+       "period_end": "2026-01-25",
+       "accession": "0001045810-26-000021",
+       "gross_profit": 153463000000,
+       "operating_income": 130387000000,
+       "net_income": 120067000000,
+       "eps_diluted": 4.9,
+       "gross_margin": 0.710681,
+       "operating_margin": 0.603817,
+       "net_margin": 0.556025,
+       "revenue_growth": 0.654735,
+       "net_income_growth": 0.647462
+      }
+     ]
+    },
+    "performance": {
+     "start": "2025-11-18",
+     "end": "2026-11-17",
+     "trading_days": 251,
+     "total_return": -0.140756,
+     "annualised_volatility": 0.387737,
+     "max_drawdown": -0.350192,
+     "currency": "USD"
+    },
+    "signal": {
+     "signal": "BUY",
+     "as_of": "2026-11-17",
+     "coverage": "9 of 16 rules",
+     "backtest_verdict": "no_edge",
+     "backtest_statement": "The 4.98-year backtest shows no edge for NVDA: the signal returned 12.3% a year against 37.2% for buy-and-hold, with a Sharpe ratio of 0.51 against 0.87, and beat 46.5% of 200 random re-timings of its own trades (95% would be needed to rule out luck).",
+     "note": "A mechanical vote of textbook rules on past prices; not a forecast or a recommendation."
+    }
+   }
+  },
+  {
+   "tool": "get_company_snapshot",
+   "arguments": {
+    "ticker": "DIXON.NS"
+   },
+   "result": {
+    "ok": true,
+    "ticker": "DIXON.NS",
+    "financials": {
+     "source": "Yahoo Finance annual statements, not a filing",
+     "currency": "INR",
+     "years": [
+      {
+       "period_end": "2024-03-31",
+       "revenue": 176139100000,
+       "gross_profit": 15213200000,
+       "operating_income": 5421400000,
+       "net_income": 3677500000,
+       "eps_diluted": 61.2686,
+       "gross_margin": 0.08637,
+       "operating_margin": 0.030779,
+       "net_margin": 0.020878,
+       "revenue_growth": 0.446924,
+       "net_income_growth": 0.439222
+      },
+      {
+       "period_end": "2025-03-31",
+       "revenue": 385932900000,
+       "gross_profit": 26316200000,
+       "operating_income": 12675400000,
+       "net_income": 10955400000,
+       "eps_diluted": 180.0556,
+       "gross_margin": 0.068189,
+       "operating_margin": 0.032844,
+       "net_margin": 0.028387,
+       "revenue_growth": 1.191069,
+       "net_income_growth": 1.979035
+      },
+      {
+       "period_end": "2026-03-31",
+       "revenue": 485373900000,
+       "gross_profit": 30935000000,
+       "operating_income": 14743900000,
+       "net_income": 14386400000,
+       "eps_diluted": 235.6707,
+       "gross_margin": 0.063734,
+       "operating_margin": 0.030376,
+       "net_margin": 0.02964,
+       "revenue_growth": 0.257664,
+       "net_income_growth": 0.313179
+      }
+     ]
+    },
+    "performance": {
+     "start": "2025-11-18",
+     "end": "2026-11-16",
+     "trading_days": 246,
+     "total_return": -0.178192,
+     "annualised_volatility": 0.412978,
+     "max_drawdown": -0.383768,
+     "currency": "INR"
+    },
+    "signal": {
+     "signal": "BUY",
+     "as_of": "2026-11-16",
+     "coverage": "6 of 15 rules",
+     "backtest_verdict": "no_edge",
+     "backtest_statement": "The 4.9-year backtest shows no edge for DIXON.NS: the signal returned 27.3% a year against 19.1% for buy-and-hold, with a Sharpe ratio of 1.10 against 0.65, and beat 89% of 200 random re-timings of its own trades (95% would be needed to rule out luck).",
+     "note": "A mechanical vote of textbook rules on past prices; not a forecast or a recommendation."
+    }
+   }
+  }
+ ]
+}
