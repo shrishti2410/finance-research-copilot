@@ -57,6 +57,7 @@ from agent.advice import (
 )
 from agent.grounding import ungrounded_operands, unsupported_figures
 from agent.budget import fit_to_budget
+from agent.router import route
 from agent.untrusted import wrap_tool_result
 from agent.tools import build_registry, compact_for_model
 from core.config import settings
@@ -328,6 +329,39 @@ def _merge_tool_call_delta(acc: dict[int, dict], delta: dict) -> None:
         slot["function"]["name"] = function["name"]
     if function.get("arguments"):
         slot["function"]["arguments"] += function["arguments"]
+
+
+# A model call that times out (httpx's read or connect timeout) is tried once
+# more after this pause, then the user is told the AI is busy (2026-11-18:
+# ReadTimeouts on news questions). Module-level so tests can set it to 0.
+MODEL_RETRY_BACKOFF_S = 5.0
+
+MODEL_BUSY = ("The AI is busy right now, so this question could not be answered. "
+              "Please try again in a minute.")
+
+
+class ModelBusy(Exception):
+    """A model call timed out twice: once, and once more after a backoff."""
+
+    def __init__(self, cause: Exception):
+        super().__init__(f"{type(cause).__name__}: {cause}")
+        self.cause = cause
+
+
+async def _retrying_timeout(make_call, label: str):
+    """Run `make_call()` (a coroutine factory); on an httpx timeout, log it,
+    wait MODEL_RETRY_BACKOFF_S and try once more; a second timeout raises
+    ModelBusy. Other failures pass through untouched. The per-call deadline is
+    not retried: a call that ran 900 s should not get another 900."""
+    for attempt in (1, 2):
+        try:
+            return await make_call()
+        except httpx.TimeoutException as exc:
+            log.warning("agent: %s timed out (attempt %d of 2): %s: %s", label, attempt,
+                        type(exc).__name__, exc)
+            if attempt == 2:
+                raise ModelBusy(exc) from exc
+            await asyncio.sleep(MODEL_RETRY_BACKOFF_S)
 
 
 class InferenceDeadlineExceeded(Exception):
@@ -927,8 +961,10 @@ async def run_agent(
         new call with a new clock, so a turn of several legitimate calls is never
         cut short by the sum of them.
         """
-        return await _within_deadline(_one_call(call_model, cap, stream, with_tools),
-                                      settings.inference_call_deadline)
+        return await _retrying_timeout(
+            lambda: _within_deadline(_one_call(call_model, cap, stream, with_tools),
+                                     settings.inference_call_deadline),
+            f"model call to {call_model}")
 
     # Which provider the proxy should use for each model. A header per call
     # rather than on the client, because the two models can be on different
@@ -976,8 +1012,43 @@ async def run_agent(
                                "completion_tokens": written})
         return ((body.get("choices") or [{}])[0]).get("message") or {}
 
+    # The query router (agent/router.py): a plain news, price or reported-figure
+    # lookup about one covered company runs its tool here, and the loop starts
+    # at its last, tool-free step to write the answer -- one model call instead
+    # of several. Only for a fresh question: a follow-up's subject comes from
+    # the conversation, which is the agent's to read.
+    first_iteration = 1
+    routed_call = route(question, today=today or date.today()) if not history else None
+    if routed_call is not None and routed_call[0] not in registry:
+        routed_call = None               # this registry does not offer that tool
+    if routed_call is not None:
+        name, arguments = routed_call
+        call_id = "routed_1"
+        messages.append({"role": "assistant", "content": "", "tool_calls": [{
+            "id": call_id, "type": "function",
+            "function": {"name": name, "arguments": json.dumps(arguments)}}]})
+        await _emit(on_event, {"type": "tool_start", "iteration": 1, "tools": [name]})
+        called = await registry.call(name, arguments)
+        step = Step(iteration=1, tool=name, arguments=arguments, result=called.result,
+                    latency_ms=called.latency_ms, model_latency_ms=0.0, ok=called.ok)
+        steps.append(step)
+        await _emit(on_event, {"type": "tool_result", "iteration": 1, "tool": name,
+                               "arguments": arguments, "ok": step.ok,
+                               "latency_ms": round(step.latency_ms, 1),
+                               "result": _one_line(step.result, 400)})
+        log.info("agent: routed to %s ok=%s latency=%.0fms args=%s", name, step.ok,
+                 step.latency_ms, _one_line(arguments, 120))
+        compact = compact_for_model(name, called.result)
+        if isinstance(compact, dict):
+            tool_results[call_id] = (name, compact)
+        messages.append({"role": "tool", "tool_call_id": call_id, "name": name,
+                         "content": wrap_tool_result(name, compact)})
+        # A routed lookup that worked needs only the answer; one that failed
+        # leaves the agent the rest of its steps to recover.
+        first_iteration = max_iterations if step.ok else 2
+
     try:
-        for iteration in range(1, max_iterations + 1):
+        for iteration in range(first_iteration, max_iterations + 1):
             # The router handles tool selection; agent_model writes the answer.
             # Two things take routing away from it. A tool call that failed last
             # iteration needs recovery, which the small model measurably cannot
@@ -1000,11 +1071,12 @@ async def run_agent(
             try:
                 if use_router:
                     router_calls += 1
-                    routed = await _within_deadline(_router_message(client, {
+                    routed = await _retrying_timeout(lambda: _within_deadline(_router_message(client, {
                         "model": router_model, "messages": within_budget(router_model),
                         "tools": registry.schemas(), "temperature": temperature,
                         "max_tokens": router_max_tokens,
-                    }, router_headers, waits), settings.inference_call_deadline)
+                    }, router_headers, waits), settings.inference_call_deadline),
+                        f"router call to {router_model}")
                     if routed is not None:
                         message = routed
                     else:
@@ -1041,6 +1113,27 @@ async def run_agent(
                         answer=answer,
                         steps=steps, iterations=iteration, completed=False,
                         stop_reason="last_step_failed", model=model,
+                        router_model=router_model, router_calls=router_calls,
+                        provider=provider, router_provider=router_provider,
+                        rate_limit_wait_ms=sum(waits),
+                        total_ms=(time.perf_counter() - started) * 1000,
+                        prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+                        usage_measured=usage_measured,
+                        cached_prompt_tokens=cached_prompt_tokens, call_usage=call_usage,
+                        request_sizes=request_sizes,
+                    )
+                if isinstance(exc, ModelBusy):
+                    log.error("agent: the model timed out twice on iteration %d; "
+                              "answering that the AI is busy: %s", iteration, exc)
+                    steps.append(Step(
+                        iteration=iteration, tool="final_answer", arguments={},
+                        result=f"model busy: {exc}", latency_ms=model_ms,
+                        model_latency_ms=model_ms, ok=False,
+                    ))
+                    return AgentResult(
+                        answer=MODEL_BUSY,
+                        steps=steps, iterations=iteration, completed=False,
+                        stop_reason="model_busy", model=model,
                         router_model=router_model, router_calls=router_calls,
                         provider=provider, router_provider=router_provider,
                         rate_limit_wait_ms=sum(waits),
