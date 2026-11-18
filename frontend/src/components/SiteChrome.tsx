@@ -25,7 +25,6 @@ function GitHubMark({ className }: { className?: string }) {
 const NAV = [
   { href: "/research", label: "Research" },
   { href: "/dashboard", label: "Signals" },
-  { href: "/methodology", label: "Methodology" },
 ];
 
 export function SiteHeader() {
@@ -134,7 +133,6 @@ const FOOTER_LINKS: { title: string; links: { label: string; href: string; exter
       { label: "Research", href: "/research" },
       { label: "Signals", href: "/dashboard" },
       { label: "Backtests", href: "/backtest" },
-      { label: "Methodology", href: "/methodology" },
       { label: "About", href: "/about" },
     ],
   },
