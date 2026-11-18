@@ -477,7 +477,7 @@ def test_the_guard_fires_at_most_once(registry):
 
     assert [s.tool for s in result.steps] == ["ungrounded_answer", "final_answer"]
     assert result.answer.startswith("[Unverified:")
-    assert "Still 38.03%." in result.answer
+    assert "Still 38.03% [unverified]." in result.answer   # marked where it stands (2026-11-18)
     assert result.completed is False
     assert result.stop_reason == "unverified_figures"
     assert result.iterations == 2

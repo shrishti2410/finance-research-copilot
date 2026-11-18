@@ -263,6 +263,35 @@ def with_a_sentence(answer: str) -> str:
     return FIGURE_ONLY_ANSWER.format(figure=figure) + "\n" + answer
 
 
+# Put after each figure the grounding guard could not trace, where it stands.
+# The banner names the figures; this marks them in the text, so a reader who
+# skims past the banner still sees which numbers are unconfirmed.
+UNVERIFIED_MARK = " [unverified]"
+
+
+def mark_unverified(answer: str, figures) -> str:
+    """`answer` with UNVERIFIED_MARK after every occurrence of each of
+    `figures` (as returned by unsupported_figures).
+
+    By the figure's text, not its position: the guard reports each distinct
+    figure once, and a figure the answer repeats is just as unconfirmed the
+    second time. Bounded so that 4.9 is not found inside 4.90 or 14.9.
+
+    Not inside a "Final figure:" line: split_final_figure cuts that line before
+    the user reads the answer, and its value is what the eval scores, which
+    must reach the grader as the model wrote it.
+    """
+    lines = [(m.start(), m.end()) for m in _FINAL_FIGURE.finditer(answer)]
+    ends: set[int] = set()
+    for text in {f.text for f in figures}:
+        for m in re.finditer(r"(?<![\d.,])" + re.escape(text) + r"(?![\d%])", answer):
+            if not any(a <= m.start() < b for a, b in lines):
+                ends.add(m.end())
+    for end in sorted(ends, reverse=True):
+        answer = answer[:end] + UNVERIFIED_MARK + answer[end:]
+    return answer
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Streaming the model call
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1010,7 +1039,11 @@ async def run_agent(
                 # invented a share count and an EPS that appeared nowhere in
                 # the turn. See agent/grounding.py.
                 unverified = unsupported_figures(answer, steps) if answer else []
-                if unverified and grounding_retries < MAX_GROUNDING_RETRIES:
+                # Not on the last step: it has no tools and no step after it,
+                # so a retry could only end the run in the step-limit message
+                # and throw a readable answer away for one figure. The answer
+                # goes to the caveat below instead: banner and inline marks.
+                if unverified and grounding_retries < MAX_GROUNDING_RETRIES and not last:
                     grounding_retries += 1
                     # Recorded as a failed step, not dropped: the discarded
                     # answer is the evidence that the guard fired, and a trace
@@ -1062,6 +1095,10 @@ async def run_agent(
                 # be verified, and `completed` is False so a caller can tell
                 # this apart from a clean answer without reading the text.
                 if unverified:
+                    # Re-read on the text the user will see (with_a_sentence
+                    # may have put a sentence first), then marked where each
+                    # figure stands, then the banner.
+                    answer = mark_unverified(answer, unsupported_figures(answer, steps))
                     answer = UNVERIFIED_CAVEAT.format(
                         figures=", ".join(f.text for f in unverified[:6]),
                     ) + answer

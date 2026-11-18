@@ -233,7 +233,10 @@ def test_an_invented_figure_alone_on_the_line_is_still_flagged():
     result = _drive(["Final figure: 64.2%", "Final figure: 64.2%"])
     assert result.stop_reason == "unverified_figures" and result.completed is False
     assert result.answer.startswith("[Unverified:") and "64.2%" in result.answer.split("]")[0]
-    assert result.answer.endswith("The answer is 64.2%.")
+    # Marked where it stands as well (2026-11-18); the line itself, cut before
+    # the user reads it, still carries the figure as written.
+    assert result.answer.endswith("The answer is 64.2% [unverified].")
+    assert result.final_figure == "64.2%"
     assert [s.tool for s in result.steps].count("ungrounded_answer") == 1
 
 
