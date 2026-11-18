@@ -154,3 +154,83 @@ def correlation(returns: dict[str, np.ndarray]) -> tuple[list[str], np.ndarray]:
     with np.errstate(invalid="ignore", divide="ignore"):
         c = np.corrcoef(m)
     return keys, c
+
+
+# --- the double vote (benchmarks/RULE_DEDUP_RULES.md) ---------------------------------
+
+def rule_return_series(bars, wf: WalkForward, model: CostModel) -> dict[str, np.ndarray]:
+    """Each candidate rule's daily net returns over the whole history, aligned
+    with `bars` (the series the walk-forward weights are fitted on)."""
+    out = {}
+    for key in wf.candidates:
+        eq = np.asarray(run_backtest(bars, STRATEGIES[key], initial_cash=NOTIONAL,
+                                     slippage_bps=SLIPPAGE_BPS, cost_model=model).equity)
+        r = np.zeros(len(eq))
+        r[1:] = eq[1:] / eq[:-1] - 1.0
+        out[key] = r
+    return out
+
+
+def clusters_at(weights: dict[str, dict], t: int, train_days: int,
+                returns: dict[str, np.ndarray], threshold: float = 0.80) -> dict[str, str]:
+    """Each eligible rule's cluster leader at a refit on bar t, from the rules'
+    returns over that refit's own training window only.
+
+    Rules in descending order of trailing Sharpe; each unassigned rule leads a
+    new cluster and takes in every unassigned rule correlated above `threshold`
+    with it. A rule whose returns never vary is its own cluster."""
+    order = sorted(weights, key=lambda k: (-weights[k]["train_sharpe"], k))
+    lo = max(0, t - train_days + 1)
+    window = {k: returns[k][lo:t + 1] for k in order}
+    leader: dict[str, str] = {}
+    for k in order:
+        if k in leader:
+            continue
+        leader[k] = k
+        a = window[k]
+        if np.std(a) == 0:
+            continue
+        for j in order:
+            if j in leader or np.std(window[j]) == 0:
+                continue
+            if float(np.corrcoef(a, window[j])[0, 1]) > threshold:
+                leader[j] = k
+    return leader
+
+
+def variant_positions(wf: WalkForward, market: Market, exclude: frozenset = frozenset(),
+                      returns: dict[str, np.ndarray] | None = None,
+                      threshold: float = 0.80) -> np.ndarray:
+    """The production (regime-weighted) signal with rules in `exclude` taking no
+    part, and, when `returns` is given, one vote per correlated cluster (the
+    leader's weight; the other members weigh 0). With neither, it is the
+    production signal."""
+    n = len(wf.days)
+    pos = np.zeros(n)
+    held = 0.0
+    cache: dict[int, dict[str, str]] = {}
+    for t in range(wf.first, n):
+        fit = wf.fits[t - wf.first]
+        weights = {k: f for k, f in fit.weights.items() if k not in exclude}
+        if returns is not None:
+            key = id(fit)
+            if key not in cache:
+                cache[key] = clusters_at(weights, fit.bars - 1, fit.train_days, returns, threshold)
+            lead = cache[key]
+        else:
+            lead = {k: k for k in weights}
+        mult = FIT.get(wf.regime[t], {})
+        num = den = 0.0
+        for k, f in weights.items():
+            w = (f["weight"] if lead.get(k) == k else 0.0) * mult.get(STYLE[k], 1.0)
+            num += w * _vote(wf.targets[k][t], k, market)
+            den += w
+        held = _threshold(num / den if den > 0 else 0.0, held)
+        pos[t] = held
+    return pos
+
+
+def agreement(a, b) -> float:
+    """Share of days on which two position series are the same."""
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    return float(np.mean((a > 0) == (b > 0))) if len(a) else 1.0

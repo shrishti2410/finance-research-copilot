@@ -180,7 +180,9 @@ it.
    Label everything as an estimate: there is no live NSE futures data. Reuse
    the options pricing and payoff code.
 
-Facts to keep straight: the signal has **16 voting rules**. The **26 strategy
+Facts to keep straight: the signal has **15 voting rules** on an NSE stock and 16
+on a US one (`zscore_reversion` stopped voting on 2026-11-18: it is Bollinger
+reversion under another name, `benchmarks/RULE_DEDUP.md`). The **26 strategy
 cards** are handbook cards, 8 of them for options.
 
 **Out of scope for now:** Celery, a full Grafana stack, a portfolio engine,

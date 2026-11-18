@@ -137,13 +137,14 @@ A research engine for daily signals on a watchlist:
 It is built to show what a signal is worth, not to recommend trades.
 
 **What is in it.**
-- **Signals.** 16 technical rules (trend, breakout, mean reversion, momentum).
+- **Signals.** 15 technical rules on an NSE stock, 16 on a US one, which can also
+  go short (trend, breakout, mean reversion, momentum).
   - Weights are refitted walk-forward on the first trading day of each month,
     from each rule's trailing Sharpe ratio.
   - The market regime (ADX, the slope of the 50-day average, volatility
     percentile) halves the weight of rules whose style does not fit it.
   - BUY at a score of +0.25 or more, SELL at −0.25 or less.
-  - Each signal states its coverage ("12 of 16 rules"), and its confidence is
+  - Each signal states its coverage ("12 of 15 rules"), and its confidence is
     capped at that fraction.
   - Design: [docs/SIGNALS.md](docs/SIGNALS.md).
 - **Backtests that can say "no".** Every signal is tested against:
@@ -205,7 +206,7 @@ flowchart LR
     yahoo[Yahoo Finance<br/>daily bars] --> cache[(price cache)]
 
     subgraph quant [Quant engine: deterministic, no language model]
-        cache --> rules[16 rules] --> wf[walk-forward weights<br/>+ regime + drift flag]
+        cache --> rules[15 rules] --> wf[walk-forward weights<br/>+ regime + drift flag]
         wf --> sig[signal, coverage,<br/>confidence]
         sig --> bt[backtest vs buy-and-hold,<br/>index, 200 random timings]
         bt --> verdict[verdict: edge / no edge]

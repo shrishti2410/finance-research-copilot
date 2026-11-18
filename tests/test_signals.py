@@ -341,3 +341,25 @@ def test_a_us_stock_gets_sell_signals_when_its_rules_are_out():
     decided = [d for d in wf.decision[wf.first:] if d]
     assert decided.count("SELL") > 0
     assert wf.position[wf.first:].min() == 0.0                   # it does get out
+
+
+# --- one rule, one vote (benchmarks/RULE_DEDUP.md) -----------------------------------
+
+def test_zscore_reversion_does_not_vote_because_it_is_bollinger_reversion():
+    """The two took the same position on 100% of days over five years on 15
+    stocks: a 20-day z-score below -2 is a close below the lower Bollinger band,
+    and both exit at the mean. Counting both voted that view twice."""
+    from market.markets import NSE, US
+    from market.signals import _candidates
+
+    for market in (NSE, US):
+        keys, excluded = _candidates(market)
+        assert "zscore_reversion" not in keys and "bollinger_reversion" in keys
+        assert "RULE_DEDUP" in excluded["zscore_reversion"]
+    assert len(_candidates(NSE)[0]) == 15       # was 16
+    assert len(_candidates(US)[0]) == 16        # was 17: the US also votes the long-short cross
+
+
+def test_zscore_reversion_is_still_a_strategy_of_its_own_in_the_backtester():
+    from market.strategies import STRATEGIES
+    assert "zscore_reversion" in STRATEGIES

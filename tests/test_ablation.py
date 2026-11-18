@@ -119,6 +119,53 @@ def test_full_metrics_has_every_preregistered_field_and_cost_drag_is_never_negat
 def test_rule_correlation_is_symmetric_with_ones_on_the_diagonal(setup):
     bars, model, wf = setup
     keys, c = correlation(rule_returns(bars, wf, wf.first, model))
-    assert keys == sorted(wf.candidates) and len(keys) == 16
+    assert keys == sorted(wf.candidates) and len(keys) == 15
     ok = ~np.isnan(np.diag(c))
     assert np.allclose(np.diag(c)[ok], 1.0) and np.allclose(c, c.T, equal_nan=True)
+
+
+# --- the double vote ------------------------------------------------------------------
+
+from market.ablation import agreement, clusters_at, rule_return_series, variant_positions  # noqa: E402
+
+
+def test_with_no_exclusion_and_no_clusters_the_variant_is_production(setup):
+    _, _, wf = setup
+    assert np.array_equal(variant_positions(wf, NSE), wf.position)
+
+
+def test_clusters_above_one_never_form_so_the_variant_is_production(setup):
+    bars, model, wf = setup
+    returns = rule_return_series(bars, wf, model)
+    assert np.array_equal(variant_positions(wf, NSE, returns=returns, threshold=1.01), wf.position)
+
+
+def test_excluding_a_rule_changes_only_the_vote_it_was_in(setup):
+    _, _, wf = setup
+    dropped = variant_positions(wf, NSE, exclude=frozenset({"zscore_reversion"}))
+    assert set(np.unique(dropped)) <= {0.0, 1.0} and not dropped[: wf.first].any()
+
+
+def test_identical_rules_cluster_together_under_the_higher_sharpe_leader():
+    rng = np.random.default_rng(1)
+    base = rng.normal(0, 0.01, 300)
+    returns = {"a": base, "b": base.copy(), "c": rng.normal(0, 0.01, 300)}
+    weights = {"a": {"train_sharpe": 0.5, "weight": 0.5}, "b": {"train_sharpe": 0.9, "weight": 0.9},
+               "c": {"train_sharpe": 0.1, "weight": 0.1}}
+    lead = clusters_at(weights, 299, 300, returns)
+    assert lead == {"b": "b", "a": "b", "c": "c"}
+
+
+def test_clusters_use_only_the_training_window():
+    # Identical before bar 200, unrelated after: a refit at bar 199 clusters them.
+    rng = np.random.default_rng(2)
+    a = rng.normal(0, 0.01, 400)
+    b = a.copy()
+    b[200:] = rng.normal(0, 0.01, 200)
+    w = {"a": {"train_sharpe": 1.0, "weight": 1.0}, "b": {"train_sharpe": 0.5, "weight": 0.5}}
+    assert clusters_at(w, 199, 200, {"a": a, "b": b})["b"] == "a"
+    assert clusters_at(w, 399, 200, {"a": a, "b": b})["b"] == "b"
+
+
+def test_agreement_is_the_share_of_matching_days():
+    assert agreement([0, 1, 1, 0], [0, 1, 0, 0]) == 0.75
