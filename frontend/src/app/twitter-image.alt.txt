@@ -1,1 +1,1 @@
-Finance Research Copilot: research companies and test trading strategies, with every number checked. Shows the signals dashboard.
+Finance Research Copilot: research public companies from their filings, with a strategy audit alongside. Shows the signals dashboard.

@@ -55,8 +55,8 @@ const STEPS = [
   },
   {
     icon: Bot,
-    title: "AI explains, a checker verifies",
-    body: "A language model explains what the tools returned. A checker flags any figure no tool produced, and replaces any advice to buy or sell.",
+    title: "AI explains, every figure is traced",
+    body: "A language model explains what the tools returned. Any figure that no tool returned is flagged, and any advice to buy or sell is replaced.",
   },
 ];
 
@@ -90,13 +90,13 @@ export default async function Landing() {
       <section className="mx-auto grid max-w-6xl items-center gap-10 px-4 pb-12 pt-12 sm:px-6 sm:pt-20 lg:grid-cols-[1fr_1.15fr]">
         <div className="fade-up flex flex-col gap-6">
           <h1 className="text-4xl font-semibold leading-[1.1] tracking-tight text-fg sm:text-5xl">
-            Research public companies from their filings, with every number checked
+            Research public companies from their filings, with every figure traced to its source
           </h1>
           <p className="max-w-xl text-lg text-fg-muted">
             Ask about 15 US companies and get answers from their annual reports, with the passages cited. A
             strategy audit alongside shows what classic trading rules say about Indian and US stocks, and
-            whether they have actually worked. Python does the maths, the AI explains it, and a checker
-            verifies each figure.
+            whether they have actually worked. Python does the maths, the AI explains it, and every figure
+            is traced to its source.
           </p>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
             <DemoButton />

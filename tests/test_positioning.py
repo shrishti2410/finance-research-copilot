@@ -56,3 +56,16 @@ def test_the_demo_opens_research_where_the_example_questions_are():
     assert 'router.replace("/research")' in demo_block
     assert "EXAMPLES.map" in (SRC / "app" / "research" / "page.tsx").read_text(encoding="utf-8")
     assert "opens Research" in LANDING
+
+
+def test_the_site_claims_provenance_not_verification():
+    # 2026-11-18: the guard enforces that every figure traces to a tool result
+    # (provenance); claim-level verification is in progress. The site says so.
+    import re as _re
+    texts = {p: p.read_text(encoding="utf-8")
+             for p in SRC.rglob("*") if p.suffix in (".tsx", ".ts", ".txt") and p.is_file()}
+    bad = _re.compile(r"checker|verifies (each|every) figure|every (number|figure)[^.\n]*\bchecked\b"
+                      r"|is checked against", _re.I)
+    hits = [(str(p.relative_to(SRC)), m.group(0)) for p, t in texts.items() for m in bad.finditer(t)]
+    assert hits == []
+    assert "traced to its source" in LANDING

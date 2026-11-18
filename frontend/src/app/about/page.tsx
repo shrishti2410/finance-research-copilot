@@ -151,7 +151,7 @@ export default function About() {
 
       <Section id="principles" title="Principles">
         <ul className="list-disc space-y-2 pl-5">
-          <li>Numbers come from the data, not from guesswork. If a figure can&apos;t be checked, it is marked.</li>
+          <li>Numbers come from the data, not from guesswork. If a figure can&apos;t be traced to its source, it is marked.</li>
           <li>
             Trading signals are shown with their real track record, including when they have no edge over simply
             holding the stock.
