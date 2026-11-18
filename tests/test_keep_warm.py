@@ -1,8 +1,8 @@
-"""The keep-warm workflow: manual only until the user enables its schedule.
+"""The keep-warm workflow: 02:30 to 18:30 UTC, /health only.
 
-Enabling it is a decision about Render's free instance hours (750 per workspace
-a month) and terms; see the comment at the top of the workflow. These tests
-keep it from starting to ping by accident, and pin what it may touch. Read as
+Enabled 2026-11-18 by the user (the API is the workspace's only Render service;
+the hours arithmetic is in the workflow's header and CLAUDE.md). These tests
+pin the window, the gap between pings and what the workflow may touch. Read as
 text, so the suite needs no YAML parser.
 """
 
@@ -12,19 +12,46 @@ import re
 from pathlib import Path
 
 WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "keep-warm.yml"
-LINES = WORKFLOW.read_text(encoding="utf-8").splitlines()
-LIVE = [line for line in LINES if line.strip() and not line.lstrip().startswith("#")]
+LIVE = [line for line in WORKFLOW.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")]
 
 
-def test_it_runs_only_by_hand_until_the_schedule_is_enabled():
-    assert any(re.match(r"^\s+workflow_dispatch:\s*$", line) for line in LIVE)
-    assert not any(re.match(r"^\s*(schedule|- cron):", line.strip() + ":") or "cron:" in line
-                   for line in LIVE), (
-        "the keep-warm schedule is a decision for the user (Render's free hours and terms); "
-        "update this test in the same commit that enables it")
+def _expand(field: str, lo: int, hi: int) -> list[int]:
+    out = []
+    for part in field.split(","):
+        if part.startswith("*/"):
+            out += list(range(lo, hi + 1, int(part[2:])))
+        elif "-" in part:
+            a, b = map(int, part.split("-"))
+            out += list(range(a, b + 1))
+        else:
+            out.append(int(part))
+    return out
 
 
-def test_it_pings_only_health_and_holds_no_permissions():
+def _pings() -> list[int]:
+    """Minutes after midnight UTC of every scheduled run."""
+    times = []
+    for line in LIVE:
+        m = re.search(r'cron:\s*"([^"]+)"', line)
+        if m:
+            minute, hour, *rest = m.group(1).split()
+            assert rest == ["*", "*", "*"], "every day of the month, month and week"
+            times += [h * 60 + mi for h in _expand(hour, 0, 23) for mi in _expand(minute, 0, 59)]
+    return sorted(times)
+
+
+def test_it_pings_from_0230_to_1830_utc_never_more_than_14_minutes_apart():
+    t = _pings()
+    assert t[0] == 2 * 60 + 30 and 18 * 60 + 15 <= t[-1] <= 18 * 60 + 30
+    assert max(b - a for a, b in zip(t, t[1:])) <= 14
+    awake_hours = (t[-1] + 15 - t[0]) / 60
+    assert awake_hours * 31 <= 750 - 200, "leave room in Render's 750 free hours a month"
+
+
+def test_it_pings_only_health_never_readiness_and_holds_no_permissions():
     assert "permissions: {}" in LIVE
     text = "\n".join(LIVE)
-    assert '"$API/health"' in text and "/ask" not in text and "/market" not in text
+    assert '"$API/health"' in text
+    for path in ("/health/ready", "/health/db", "/ask", "/market"):
+        assert path not in text

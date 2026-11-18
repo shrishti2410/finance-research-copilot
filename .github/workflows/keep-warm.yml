@@ -1,27 +1,33 @@
-# Keep the free Render API awake, so a visitor does not wait for a cold start.
+# Keep the free Render API awake from 02:30 to 18:30 UTC (08:00 to midnight in
+# India), so a visitor in that window does not wait for a cold start.
 #
-# NOT SCHEDULED YET. The schedule below stays commented out until the user has
-# confirmed two things (checked 2026-11-18, https://render.com/docs/free):
-#   - Render grants 750 free instance hours per WORKSPACE per calendar month, and
-#     suspends every free service in the workspace when they run out. One service
-#     kept up all month uses 744 hours in a 31-day month, so this fits only if
-#     the API is the workspace's only free web service.
-#   - The docs say nothing for or against keep-alive pings. The acceptable use
-#     policy and terms (render.com/acceptable-use, render.com/terms) could not be
-#     read when this was written; the user is to read them before enabling.
-# A free service spins down after 15 minutes without inbound traffic, so a ping
-# every 14 minutes keeps it up. GitHub may start scheduled runs late under load,
-# and disables schedules in a repository with no activity for 60 days.
+# Enabled 2026-11-18 by the user, who confirmed the API is the workspace's only
+# Render service. Per https://render.com/docs/free (read 2026-11-18): 750 free
+# instance hours per workspace per calendar month; running out suspends every
+# free service until the next month; a free service spins down after 15 minutes
+# without inbound traffic.
 #
-# Free for this public repository: GitHub Actions minutes are not billed for
-# public repositories. Each run is one small curl.
+# The hours: 80 pings a day, 02:30 to 18:24 UTC, never more than 14 minutes
+# apart, keep the service up until about 18:39, 16.15 hours a day: 501 hours in
+# a 31-day month, 484 in a 30-day one. That leaves about 249 hours for visits
+# outside the window (each keeps it up at least 15 minutes).
+#
+# Only /health, which touches no database, so Neon's compute can still suspend;
+# never /health/ready. GitHub may start a scheduled run late under load (a late
+# run only means a short cold period), and disables schedules in a repository
+# with no activity for 60 days. Free: Actions minutes are not billed for public
+# repositories.
 
 name: keep-warm
 
 on:
   workflow_dispatch:
-  # schedule:
-  #   - cron: "*/14 * * * *"
+  schedule:
+    # GitHub cron is UTC. "*/14" restarts every hour (:00 :14 :28 :42 :56), so
+    # the window's two ends are listed by hand.
+    - cron: "30,44,58 2 * * *"
+    - cron: "*/14 3-17 * * *"
+    - cron: "10,24 18 * * *"
 
 permissions: {}
 
